@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+*.tx
+.github_ssh_key
+.deploy_key
+.claude/
+public/editor.bundle.js
