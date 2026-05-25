@@ -392,7 +392,7 @@ const editorTheme = EditorView.theme(
     ".cm-hr-widget": {
       display: "block",
       height: "1px",
-      background: "#333",
+      background: "#555",
       margin: "8px 0",
       width: "100%",
     },
@@ -421,7 +421,7 @@ const editorTheme = EditorView.theme(
     ".cm-cb-done": { textDecoration: "line-through", color: "#666" },
     // Scrollbar
     ".cm-scroller::-webkit-scrollbar": { width: "6px" },
-    ".cm-scroller::-webkit-scrollbar-thumb": { background: "#333", borderRadius: "3px" },
+    ".cm-scroller::-webkit-scrollbar-thumb": { background: "#555", borderRadius: "3px" },
     // Tables
     ".cm-table-wrap": { margin: "6px 0", overflowX: "auto", cursor: "text", borderRadius: "3px" },
     ".cm-table-wrap:hover": { outline: "1px solid #2a2a2a" },

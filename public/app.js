@@ -650,7 +650,7 @@ function renderEditor(note) {
     await idbDelete('notes', id); currentNoteId = null;
     WEditor.destroy(noteEditor); noteEditor = null;
     renderNotesList(); renderTagsBar();
-    area.innerHTML = '<div style="color:#333;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
+    area.innerHTML = '<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
     try { await apiCall('DELETE', '/notes/'+id); } catch(e) {}
   });
 }
@@ -697,7 +697,7 @@ async function deleteCurrentNote() {
   WEditor.destroy(noteEditor); noteEditor = null;
   renderNotesList(); renderTagsBar();
   const area = document.getElementById('note-editor-area');
-  if (area) area.innerHTML = '<div style="color:#333;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
+  if (area) area.innerHTML = '<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
   try { await apiCall('DELETE', '/notes/'+id); } catch(e) {}
 }
 
