@@ -581,17 +581,29 @@ function fmtAmount(a) {
 }
 
 const EXPENSE_COL_DEFS = {
-  date:     { label: 'Date',     width: '88px' },
-  category: { label: 'Category', width: '110px' },
-  payee:    { label: 'Payee',    width: '1fr' },
-  note:     { label: 'Note',     width: '1fr' },
-  source:   { label: 'Source',   width: '72px' },
-  amount:   { label: 'Amount',   width: '80px' },
+  date:      { label: 'Date',      width: '88px' },
+  category:  { label: 'Category',  width: '110px' },
+  payee:     { label: 'Payee',     width: '1fr' },
+  note:      { label: 'Note',      width: '1fr' },
+  source:    { label: 'Source',    width: '72px' },
+  frequency: { label: 'Frequency', width: '90px' },
+  amount:    { label: 'Amount',    width: '80px' },
 };
-const EXPENSE_COL_DEFAULT = ['date','category','payee','note','source','amount'];
+const EXPENSE_COL_DEFAULT = ['date','category','payee','note','source','frequency','amount'];
 let expenseColOrder = (() => {
-  try { const s = localStorage.getItem('expense-col-order'); return s ? JSON.parse(s) : [...EXPENSE_COL_DEFAULT]; }
-  catch(e) { return [...EXPENSE_COL_DEFAULT]; }
+  try {
+    const s = localStorage.getItem('expense-col-order');
+    if (!s) return [...EXPENSE_COL_DEFAULT];
+    const saved = JSON.parse(s);
+    // inject any new columns not yet in saved order (insert before 'amount')
+    for (const col of EXPENSE_COL_DEFAULT) {
+      if (!saved.includes(col)) {
+        const amtIdx = saved.indexOf('amount');
+        saved.splice(amtIdx === -1 ? saved.length : amtIdx, 0, col);
+      }
+    }
+    return saved;
+  } catch(e) { return [...EXPENSE_COL_DEFAULT]; }
 })();
 let expenseDragCol = null;
 
@@ -607,8 +619,9 @@ function expenseEntryCell(e, key) {
     case 'category': return `<span class="expense-entry-cat">${e.category ? escHtml(e.category) : ''}</span>`;
     case 'payee':    return `<span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>`;
     case 'note':     return `<span class="expense-entry-note">${escHtml(e.note || '')}</span>`;
-    case 'source':   return `<span class="expense-entry-source">${escHtml(e.source || '')}</span>`;
-    case 'amount':   return `<span class="expense-entry-amount">${escHtml(fmtAmount(e.amount))}</span>`;
+    case 'source':    return `<span class="expense-entry-source">${escHtml(e.source || '')}</span>`;
+    case 'frequency': return `<span class="expense-entry-frequency">${escHtml(e.frequency || '')}</span>`;
+    case 'amount':    return `<span class="expense-entry-amount">${escHtml(fmtAmount(e.amount))}</span>`;
     default: return '';
   }
 }

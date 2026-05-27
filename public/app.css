@@ -540,6 +540,7 @@ header {
 .expense-entry-payee { font-size: 13px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-note { font-size: 12px; color: #4a4a4a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-source { font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expense-entry-frequency { font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-amount { font-size: 13px; font-weight: 500; color: #e0e0e0; text-align: right; }
 
 /* Expense left panel */
@@ -644,8 +645,8 @@ header {
 }
 
 @media (max-width: 640px) {
-  .expense-entry-cat, .expense-entry-note, .expense-entry-source { display: none; }
-  .exp-hdr[data-col="category"], .exp-hdr[data-col="note"], .exp-hdr[data-col="source"] { display: none; }
+  .expense-entry-cat, .expense-entry-note, .expense-entry-source, .expense-entry-frequency { display: none; }
+  .exp-hdr[data-col="category"], .exp-hdr[data-col="note"], .exp-hdr[data-col="source"], .exp-hdr[data-col="frequency"] { display: none; }
   .expense-modal-box { width: 100vw; max-width: 100vw; border-radius: 0; }
 }
 
