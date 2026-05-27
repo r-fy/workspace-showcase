@@ -469,11 +469,25 @@ function dpToIso(d) {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 function dpFromIso(s) {
-  if (!s) return null;
-  const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d);
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y,m,d] = s.split('-').map(Number);
+  const dt = new Date(y, m-1, d);
+  return isNaN(dt.getTime()) ? null : dt;
 }
-function dpFmt(d) {
-  return d ? d.toLocaleDateString([], { year:'numeric', month:'short', day:'numeric' }) : 'Select date';
+function isoToMdy(s) {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return s || '';
+  const [y, m, d] = s.split('-');
+  return `${m}/${d}/${y}`;
+}
+function mdyToIso(s) {
+  if (!s || !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return '';
+  const [m, d, y] = s.split('/');
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+function dpFromMdy(s) {
+  if (!s) return null;
+  const iso = mdyToIso(s);
+  return dpFromIso(iso);
 }
 
 function dpInit(iso) {
@@ -487,7 +501,7 @@ function dpRender() {
   const input = document.getElementById('exp-date');
   if (!cal || !input) return;
   const today = dpToIso(new Date());
-  const sel = input.value;
+  const sel = mdyToIso(input.value);
   const first = new Date(dpYear, dpMonth, 1);
   const startDow = first.getDay();
   const daysInMonth = new Date(dpYear, dpMonth+1, 0).getDate();
@@ -527,7 +541,7 @@ function dpRender() {
   cal.querySelectorAll('.dp-day').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      if (input) input.value = btn.dataset.iso;
+      if (input) input.value = isoToMdy(btn.dataset.iso);
       cal.classList.add('hidden');
     });
   });
@@ -537,7 +551,7 @@ document.getElementById('exp-date-trigger').addEventListener('click', e => {
   e.stopPropagation();
   const cal = document.getElementById('exp-date-cal');
   if (cal.classList.contains('hidden')) {
-    const typed = dpFromIso(document.getElementById('exp-date')?.value);
+    const typed = dpFromMdy(document.getElementById('exp-date')?.value);
     if (typed) { dpYear = typed.getFullYear(); dpMonth = typed.getMonth(); }
     dpRender(); cal.classList.remove('hidden');
   } else cal.classList.add('hidden');
@@ -615,7 +629,7 @@ function updateExpenseGrid() {
 
 function expenseEntryCell(e, key) {
   switch(key) {
-    case 'date':     return `<span class="expense-entry-date">${escHtml(e.date)}</span>`;
+    case 'date':     return `<span class="expense-entry-date">${escHtml(isoToMdy(e.date))}</span>`;
     case 'category': return `<span class="expense-entry-cat">${e.category ? escHtml(e.category) : ''}</span>`;
     case 'payee':    return `<span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>`;
     case 'note':     return `<span class="expense-entry-note">${escHtml(e.note || '')}</span>`;
@@ -764,8 +778,8 @@ function openExpenseModal(expense = null) {
   document.getElementById('expense-modal-delete').style.display = expense ? '' : 'none';
   const today = new Date().toISOString().slice(0, 10);
   const dateVal = expense?.date || today;
-  document.getElementById('exp-date').value = dateVal;
-  dpInit(dateVal); // sync picker view month
+  document.getElementById('exp-date').value = isoToMdy(dateVal);
+  dpInit(dateVal);
   document.getElementById('exp-amount').value = expense ? expense.amount : '';
   document.getElementById('exp-category').value = expense?.category || '';
   document.getElementById('exp-payee').value = expense?.payee || '';
@@ -791,7 +805,8 @@ async function saveExpense() {
   const source = document.getElementById('exp-source').value.trim();
   const frequency = document.getElementById('exp-frequency').value.trim();
   const note = document.getElementById('exp-note').value.trim();
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast('Date must be YYYY-MM-DD'); return; }
+  if (!date || !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(date)) { toast('Date must be MM/DD/YYYY'); return; }
+  const isoDate = mdyToIso(date);
   if (isNaN(amount) || amount < 0) { toast('Valid amount required'); return; }
   const isEdit = !!currentExpenseId;
   if (category && !expenseCategories.find(c => c.name === category)) {
@@ -800,7 +815,7 @@ async function saveExpense() {
       expenseCategories.push(cat);
     } catch(e) {}
   }
-  const body = { amount, date, category, payee, source, frequency, note };
+  const body = { amount, date: isoDate, category, payee, source, frequency, note };
   try {
     if (isEdit) {
       const updated = await apiCall('PUT', '/expenses/' + currentExpenseId, body);
