@@ -750,12 +750,15 @@ function renderExpensesList() {
   document.getElementById('expense-add-inline-btn')?.addEventListener('click', () => openExpenseModal());
 
   area.querySelectorAll('.exp-col-resize').forEach(handle => {
-    handle.addEventListener('dragstart', e => e.preventDefault());
+    const hdr = handle.parentElement;
+    handle.addEventListener('mouseenter', () => { hdr.draggable = false; });
+    handle.addEventListener('mouseleave', () => { hdr.draggable = true; });
     handle.addEventListener('mousedown', e => {
       e.stopPropagation();
       e.preventDefault();
+      hdr.draggable = false;
       const col = handle.dataset.col;
-      const startWidth = handle.parentElement.getBoundingClientRect().width;
+      const startWidth = hdr.getBoundingClientRect().width;
       const startX = e.clientX;
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
@@ -764,6 +767,7 @@ function renderExpensesList() {
         updateExpenseGrid();
       };
       const onUp = () => {
+        hdr.draggable = true;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         document.removeEventListener('mousemove', onMove);
