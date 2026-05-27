@@ -489,7 +489,7 @@ app.post('/api/expenses/import', auth, (req, res) => {
   const [dateIdx, amountIdx, categoryIdx, payeeIdx, sourceIdx, frequencyIdx, noteIdx] =
     ['date','amount','category','payee','source','frequency','note'].map(k => header.indexOf(k));
   if (dateIdx < 0 || amountIdx < 0) return res.status(400).json({ error: 'CSV must have date and amount columns' });
-  const ins = db.prepare('INSERT INTO expenses (id, user_id, amount, date, category, payee, note, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const ins = db.prepare('INSERT INTO expenses (id, user_id, amount, date, category, payee, note, source, frequency, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const t = now(); let imported = 0;
   db.transaction(() => {
     for (let i = 1; i < lines.length; i++) {
