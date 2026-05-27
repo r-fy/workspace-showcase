@@ -1076,6 +1076,7 @@ function mdyToIsoDate(mdy) {
 }
 
 function parseChaseCSV(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) return { format: 'unknown', rows: [] };
   function parseLine(line) {
@@ -1176,6 +1177,21 @@ async function importChaseCSV(file) {
   if (format === 'unknown') { toast('Unrecognized Chase CSV format'); return; }
   if (!rows.length) { toast('No May 2026 transactions found'); return; }
   openChaseImportPreview(rows, format);
+}
+
+async function handleExpenseImport(file) {
+  const text = await file.text();
+  const { format, rows } = parseChaseCSV(text);
+  if (format !== 'unknown') {
+    if (!rows.length) { toast('No May 2026 transactions found in this file'); return; }
+    openChaseImportPreview(rows, format);
+  } else {
+    try {
+      const r = await apiCall('POST', '/expenses/import', { csv: text });
+      toast(`Imported ${r.imported} expenses`);
+      await loadExpenses();
+    } catch(e) { toast('Import failed'); }
+  }
 }
 
 // ── Note editor ────────────────────────────────────────────────
@@ -2263,8 +2279,7 @@ document.getElementById('expense-modal-save').addEventListener('click', saveExpe
 document.getElementById('expense-modal-delete').addEventListener('click', deleteExpense);
 document.getElementById('expense-modal').addEventListener('click', e => { if (e.target === document.getElementById('expense-modal')) closeExpenseModal(); });
 document.getElementById('export-csv-btn').addEventListener('click', exportExpensesCsv);
-document.getElementById('import-csv-input').addEventListener('change', e => { if (e.target.files.length) { importExpensesCsv(e.target.files[0]); e.target.value = ''; } });
-document.getElementById('import-chase-input')?.addEventListener('change', e => { if (e.target.files.length) { importChaseCSV(e.target.files[0]); e.target.value = ''; } });
+document.getElementById('import-csv-input').addEventListener('change', e => { if (e.target.files.length) { handleExpenseImport(e.target.files[0]); e.target.value = ''; } });
 document.getElementById('chase-import-close')?.addEventListener('click', () => { document.getElementById('chase-import-modal').classList.add('hidden'); chaseImportPending = null; });
 document.getElementById('chase-import-cancel')?.addEventListener('click', () => { document.getElementById('chase-import-modal').classList.add('hidden'); chaseImportPending = null; });
 document.getElementById('chase-import-confirm')?.addEventListener('click', confirmChaseImport);
