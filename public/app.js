@@ -17,6 +17,7 @@ let activeExpenseCat = null;
 let currentExpenseId = null;
 let expenseSortCol = 'date';
 let expenseSortDir = 'desc';
+const selectedExpenses = new Set();
 
 let boards = [];
 let currentBoardId = null;
@@ -255,6 +256,7 @@ function switchTab(tab) {
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
+  if (tab !== 'expenses') selectedExpenses.clear();
 }
 
 // ── Tags helpers ───────────────────────────────────────────────
@@ -668,7 +670,12 @@ function renderExpensesList() {
 
   const total = filtered.reduce((s, e) => s + e.amount, 0);
 
+  const allFilteredIds = filtered.map(e => e.id);
+  const allSelected = allFilteredIds.length > 0 && allFilteredIds.every(id => selectedExpenses.has(id));
+  const anySelected = selectedExpenses.size > 0;
+
   const headerRow = `<div class="expense-header-row">
+    <input type="checkbox" class="exp-select-all" ${allSelected ? 'checked' : ''} ${anySelected && !allSelected ? 'data-indeterminate="1"' : ''} title="Select all">
     ${expenseColOrder.map(key => {
       const isActive = key === expenseSortCol;
       const arrow = isActive ? (expenseSortDir === 'asc' ? '↑' : '↓') : '';
@@ -677,6 +684,11 @@ function renderExpensesList() {
   </div>`;
 
   area.innerHTML = `
+    <div class="exp-bulk-bar${anySelected ? '' : ' hidden'}">
+      <span class="exp-bulk-count">${selectedExpenses.size} selected</span>
+      <button class="exp-bulk-delete">Delete selected</button>
+      <button class="exp-bulk-clear">Clear</button>
+    </div>
     <div class="expense-list-header">
       <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
       <span class="expense-list-header-right">
@@ -688,7 +700,8 @@ function renderExpensesList() {
       ${headerRow}
       <div class="expense-entries">
         ${filtered.map(e => `
-          <div class="expense-entry" data-id="${e.id}">
+          <div class="expense-entry${selectedExpenses.has(e.id) ? ' exp-selected' : ''}" data-id="${e.id}">
+            <input type="checkbox" class="exp-row-check" data-id="${e.id}" ${selectedExpenses.has(e.id) ? 'checked' : ''}>
             ${expenseColOrder.map(key => expenseEntryCell(e, key)).join('')}
             <button class="expense-entry-del" data-id="${e.id}" title="Delete">✕</button>
           </div>
@@ -698,11 +711,53 @@ function renderExpensesList() {
 
   updateExpenseGrid();
 
-  area.querySelectorAll('.expense-entry').forEach(el => {
-    el.addEventListener('click', () => {
-      const exp = expenses.find(e => e.id === el.dataset.id);
-      if (exp) openExpenseModal(exp);
+  // Select-all checkbox
+  const selectAllCb = area.querySelector('.exp-select-all');
+  if (selectAllCb) {
+    selectAllCb.indeterminate = anySelected && !allSelected;
+    selectAllCb.addEventListener('change', () => {
+      if (selectAllCb.checked) allFilteredIds.forEach(id => selectedExpenses.add(id));
+      else allFilteredIds.forEach(id => selectedExpenses.delete(id));
+      renderExpensesList();
     });
+  }
+
+  // Per-row checkboxes
+  area.querySelectorAll('.exp-row-check').forEach(cb => {
+    cb.addEventListener('change', e => {
+      e.stopPropagation();
+      if (cb.checked) selectedExpenses.add(cb.dataset.id);
+      else selectedExpenses.delete(cb.dataset.id);
+      renderExpensesList();
+    });
+  });
+
+  // Row click — open modal when nothing selected, toggle selection otherwise
+  area.querySelectorAll('.expense-entry').forEach(el => {
+    el.addEventListener('click', e => {
+      if (e.target.classList.contains('exp-row-check') || e.target.classList.contains('expense-entry-del')) return;
+      if (selectedExpenses.size > 0) {
+        const id = el.dataset.id;
+        if (selectedExpenses.has(id)) selectedExpenses.delete(id); else selectedExpenses.add(id);
+        renderExpensesList();
+      } else {
+        const exp = expenses.find(e => e.id === el.dataset.id);
+        if (exp) openExpenseModal(exp);
+      }
+    });
+  });
+
+  // Bulk bar actions
+  area.querySelector('.exp-bulk-delete')?.addEventListener('click', async () => {
+    const ids = [...selectedExpenses];
+    if (!confirm(`Delete ${ids.length} expense${ids.length !== 1 ? 's' : ''}?`)) return;
+    expenses = expenses.filter(e => !selectedExpenses.has(e.id));
+    selectedExpenses.clear();
+    renderExpensesCatBar(); renderExpensesList();
+    try { await Promise.all(ids.map(id => apiCall('DELETE', '/expenses/' + id))); } catch(e) { toast('Some deletes failed'); }
+  });
+  area.querySelector('.exp-bulk-clear')?.addEventListener('click', () => {
+    selectedExpenses.clear(); renderExpensesList();
   });
 
   area.querySelectorAll('.exp-hdr').forEach(el => {

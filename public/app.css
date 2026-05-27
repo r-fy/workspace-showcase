@@ -656,6 +656,37 @@ header {
   padding: 12px 16px; border-top: 1px solid #1e1e1e;
 }
 
+/* Expense bulk actions bar */
+.exp-bulk-bar {
+  display: flex; align-items: center; gap: 10px; padding: 7px 20px;
+  background: #111; border-bottom: 1px solid #2a2a2a; flex-shrink: 0;
+}
+.exp-bulk-count { font-size: 12px; color: #888; flex: 1; }
+.exp-bulk-delete {
+  font-size: 12px; padding: 4px 12px; border-radius: 4px;
+  background: #3a1010; color: #f87171; border: 1px solid #5a2020; cursor: pointer;
+}
+.exp-bulk-delete:hover { background: #4a1818; border-color: #7a3030; }
+.exp-bulk-clear {
+  font-size: 12px; padding: 4px 10px; border-radius: 4px;
+  background: none; color: #555; border: 1px solid #2a2a2a; cursor: pointer;
+}
+.exp-bulk-clear:hover { color: #aaa; border-color: #444; }
+
+/* Row checkboxes */
+.exp-select-all, .exp-row-check {
+  position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
+  width: 13px; height: 13px; margin: 0; cursor: pointer;
+  accent-color: #5fc83b; opacity: 0; transition: opacity 0.1s; flex-shrink: 0;
+}
+.expense-header-row:hover .exp-select-all,
+.exp-select-all:checked,
+.exp-select-all[data-indeterminate] { opacity: 1; }
+.expense-entry:hover .exp-row-check,
+.exp-row-check:checked { opacity: 1; }
+.exp-selected { background: #0d1a0a !important; }
+.exp-selected:hover { background: #111f0d !important; }
+
 /* Expense row inline delete */
 .expense-entry { position: relative; }
 .expense-entry-del {
