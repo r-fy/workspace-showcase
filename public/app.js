@@ -678,6 +678,7 @@ function renderExpensesList() {
         ${filtered.map(e => `
           <div class="expense-entry" data-id="${e.id}">
             ${expenseColOrder.map(key => expenseEntryCell(e, key)).join('')}
+            <button class="expense-entry-del" data-id="${e.id}" title="Delete">✕</button>
           </div>
         `).join('')}
       </div>` : `<div class="expense-list-empty">No expenses yet.</div>`}
@@ -735,6 +736,17 @@ function renderExpensesList() {
   });
 
   document.getElementById('expense-add-inline-btn')?.addEventListener('click', () => openExpenseModal());
+
+  area.querySelectorAll('.expense-entry-del').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!confirm('Delete this expense?')) return;
+      expenses = expenses.filter(exp => exp.id !== id);
+      renderExpensesCatBar(); renderExpensesList();
+      try { await apiCall('DELETE', '/expenses/' + id); } catch(err) {}
+    });
+  });
 }
 
 function renderExpenseCatsList() {
@@ -861,6 +873,309 @@ async function importExpensesCsv(file) {
     toast(`Imported ${r.imported} expenses`);
     await loadExpenses();
   } catch(e) { toast('Import failed'); }
+}
+
+// ── Chase CSV Import ───────────────────────────────────────────
+
+function toTitleCase(str) {
+  const minors = new Set(['a','an','the','and','but','or','for','nor','on','at','to','by','in','of']);
+  return str.toLowerCase().replace(/\w+/g, (w, i) =>
+    (i === 0 || !minors.has(w)) ? w[0].toUpperCase() + w.slice(1) : w
+  );
+}
+
+function cleanChaseCheckingPayee(desc) {
+  const d = desc.trim();
+  const merchants = [
+    [/^(POS DEBIT\s+)?SMART AND FINAL/i, 'Smart and Final'],
+    [/^(POS DEBIT\s+)?HYE MARKET/i, 'Hye Market'],
+    [/^COSTCO WHSE/i, 'Costco'],
+    [/^COSTCO GAS/i, 'Costco Gas'],
+    [/^TRADER JOE/i, "Trader Joe's"],
+    [/^JONS MARKETPLACE|^JONS MARKET #/i, "Jon's Marketplace"],
+    [/^SUPER KING MKT/i, 'Super King Market'],
+    [/^TACO BELL/i, 'Taco Bell'],
+    [/^COFFEE BEAN/i, 'Coffee Bean & Tea'],
+    [/^STARBUCKS/i, 'Starbucks'],
+    [/^KRISPY KREME/i, 'Krispy Kreme'],
+    [/^RALPHS/i, 'Ralphs'],
+    [/^VONS/i, 'Vons'],
+    [/^WHOLEFDS|^WHOLE FOODS/i, 'Whole Foods'],
+    [/^LOTTE MARKET/i, 'Lotte Market'],
+    [/^GOLDEN FARMS/i, 'Golden Farms Market'],
+    [/^PACIFIC COAST G/i, 'Pacific Coast Grocer'],
+    [/^OCEAN WHOLESALE/i, 'Ocean Wholesale Grocery'],
+    [/^CONTINENTAL GOURMET/i, 'Continental Gourmet'],
+    [/^TARGET\s/i, 'Target'],
+    [/^MARSHALLS/i, 'Marshalls'],
+    [/^ROSS STORES/i, 'Ross'],
+    [/^MACY'?S/i, "Macy's"],
+    [/^WAL.MART|^WALMART/i, 'Walmart'],
+    [/^DOLLAR KING/i, 'Dollar King'],
+    [/^WESTLAKE HARDWARE/i, 'Westlake Hardware'],
+    [/^LOWE'?S/i, "Lowe's"],
+    [/^THE HOME DEPOT/i, 'Home Depot'],
+    [/^WALGREENS/i, 'Walgreens'],
+    [/^PLANET FITNESS/i, 'Planet Fitness'],
+    [/^COSTLESS/i, 'Costless Liquidation'],
+    [/^ARCO\s/i, 'Arco'],
+    [/^ATM WITHDRAWAL/i, 'ATM Withdrawal'],
+    [/^NON-CHASE ATM FEE/i, 'Non-Chase ATM Fee'],
+    [/^NON-CHASE ATM WITHDRAW/i, 'Non-Chase ATM Withdrawal'],
+    [/^AMZ\*/i, 'Amazon'],
+    [/^AMAZON MKTPL/i, 'Amazon'],
+    [/^AMAZON MKTPLACE/i, 'Amazon'],
+    [/^Amazon(\.com)?\*/i, 'Amazon'],
+    [/^PAYPAL \*ETSY/i, 'Etsy'],
+    [/^PAYPAL \*(E ?BAY|EBAY)/i, 'eBay'],
+    [/^PAYPAL \*GOG/i, 'GOG'],
+    [/^OPENAI/i, 'OpenAI'],
+    [/^Close CRM/i, 'Close CRM'],
+    [/^SoCalGas/i, 'SoCalGas'],
+    [/^CITY OF GLENDALE/i, 'City of Glendale'],
+    [/^GLENDALE.+GWP/i, 'Glendale Water & Power'],
+    [/^Kemper Auto/i, 'Kemper Auto Insurance'],
+    [/^ACI HMF|^HMF\s/i, 'HMF Car Payment'],
+    [/^UNITRW\.CO/i, 'UnitRW Health'],
+    [/^SQ \*SAINT MARY/i, "Saint Mary's Parking"],
+    [/^WITHDRAWAL\s/i, 'Cash Withdrawal'],
+    [/^USPS\s/i, 'USPS'],
+    [/^HABIT\s/i, 'The Habit Burger'],
+    [/^WHY NOT KABOB/i, 'Why Not Kabob'],
+    [/^BROADWAY BURGER/i, 'Broadway Burger'],
+    [/^SQ \*ARM GHARS|^ARM GHARS/i, 'Arm Ghars'],
+    [/^PARADISE PASTRY/i, 'Paradise Pastry'],
+    [/^UPTOWN COFFEE/i, 'Uptown Coffee'],
+    [/^SLASH PIZZA/i, 'Slash Pizza'],
+    [/^KISSAN INDIAN/i, 'Kissan Indian Cuisine'],
+    [/^VAN NUYS AM STAR/i, 'AM Star Market'],
+    [/^WestfieldFashion/i, 'Westfield Fashion Square'],
+    [/^TABACCO WORLD|^TOBACCO WORLD/i, 'Tobacco World'],
+    [/^CASTLE LIQUOR/i, 'Castle Liquor'],
+    [/^EXPRESS CAR WASH/i, 'Express Car Wash'],
+    [/^(PP\*)?GUSSWORLDFAMOUS/i, "Guss' World Famous"],
+    [/^SPO\*CLUCK/i, 'Cluck & Smash'],
+    [/^PY \*EPICURUS/i, 'Epicurus Gourmet'],
+    [/^REMOTE ONLINE DEPOSIT/i, 'Remote Deposit'],
+    [/^MINT MOBILE/i, 'Mint Mobile'],
+    [/^NORTH HOLLYWOOD/i, 'North Hollywood Market'],
+    [/^COSTCO/i, 'Costco'],
+    [/^SPORTING GOODS/i, 'Sporting Goods'],
+  ];
+  for (const [re, label] of merchants) {
+    if (re.test(d)) return label;
+  }
+  if (/^Zelle payment to (.+?) JPM/i.test(d)) {
+    const m = d.match(/^Zelle payment to (.+?) JPM/i);
+    return `Zelle to ${toTitleCase(m[1])}`;
+  }
+  if (/^Payment to Chase card ending in (\d+)/i.test(d)) {
+    const m = d.match(/ending in (\d+)/i);
+    return `Chase Credit Card ...${m[1]}`;
+  }
+  if (/^Online Payment \d+ To ALS/i.test(d)) return 'ALS Loan Payment';
+  if (/^CHECK (\d+)/i.test(d)) {
+    const m = d.match(/^CHECK (\d+)/i);
+    return `Check #${m[1].trim()}`;
+  }
+  if (/^PAYPAL \*/i.test(d)) {
+    const m = d.match(/^PAYPAL \*([A-Z0-9]+)/i);
+    return m ? `PayPal - ${m[1]}` : 'PayPal';
+  }
+  if (/^SQ \*/i.test(d)) {
+    const m = d.match(/^SQ \*([A-Z'?][A-Z\s'?]+?)(?:\s{2,}|\s[A-Z]+\s+CA|$)/i);
+    return m ? toTitleCase(m[1].trim()) : 'Square Purchase';
+  }
+  let clean = d
+    .replace(/^POS DEBIT\s+/i, '')
+    .replace(/\s+\d{2}\/\d{2}\s*.*$/, '')
+    .replace(/\s+Purchase\s+\$[\d.]+.*$/i, '')
+    .replace(/\s+(?:PPD|WEB|TEL|ACH)\s+ID:.*$/i, '')
+    .replace(/\s{3,}[A-Z\s]{3,}\s{2,}[A-Z]{2}\s*$/, '')
+    .replace(/\s+[A-Z]+\s+[A-Z]{2}\s*$/, '')
+    .replace(/\s+#\d{4,}\s*$/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return toTitleCase(clean);
+}
+
+function autoCheckingCategory(desc, type) {
+  const d = desc.toUpperCase();
+  if (/SMART AND FINAL|HYE MARKET|COSTCO WHSE|TRADER JOE|JONS MARKETPLACE|JONS MARKET #|SUPER KING|RALPHS|VONS|WHOLEFDS|LOTTE MARKET|GOLDEN FARMS|OCEAN WHOLESALE|PACIFIC COAST G|CONTINENTAL GOURMET|NORTH HOLLYWOOD MARKET/.test(d)) return 'Groceries';
+  if (/TACO BELL|COFFEE BEAN|STARBUCKS|KRISPY KREME|SLASH PIZZA|BROADWAY BURGER|HABIT |ARM GHARS|WHY NOT KABOB|PARADISE PASTRY|UPTOWN COFFEE|KISSAN INDIAN|GUSS WORLD|CLUCK.SMASH|EPICURUS|SPO\*CLUCK/.test(d)) return 'Dining';
+  if (/COSTCO GAS|ARCO /.test(d)) return 'Gas';
+  if (/ATM WITHDRAWAL|NON-CHASE ATM|WITHDRAWAL /.test(d)) return 'Cash / ATM';
+  if (/PAYMENT TO CHASE CARD/.test(d)) return 'Credit Card Payment';
+  if (/ONLINE PAYMENT.*ALS/.test(d)) return 'Loan Payment';
+  if (/(ACI )?HMF\s/.test(d) || /HMFUSA/.test(d)) return 'Car Payment';
+  if (/KEMPER AUTO/.test(d)) return 'Auto Insurance';
+  if (/SOCALGAS|CITY OF GLENDALE|GLENDALE.GWP/.test(d)) return 'Utilities';
+  if (/OPENAI|CLOSE CRM/.test(d)) return 'Software';
+  if (/PLANET FITNESS/.test(d)) return 'Fitness';
+  if (/WALGREENS|UNITRW/.test(d)) return 'Health';
+  if (type === 'CHECK_PAID') return 'Check';
+  if (/TABACCO|TOBACCO|CASTLE LIQUOR/.test(d)) return 'Personal';
+  if (/PARKING|SAINT MARY.S PARKIN/.test(d)) return 'Parking';
+  if (/USPS/.test(d)) return 'Postage';
+  if (/MINT MOBILE/.test(d)) return 'Phone';
+  if (/CAR WASH/.test(d)) return 'Auto';
+  if (/SPORTING GOODS/.test(d)) return 'Shopping';
+  if (/TARGET|MARSHALLS|ROSS STORES|MACY|WAL.MART|WALMART|DOLLAR KING|WESTLAKE HARDWARE|LOWE.S|HOME DEPOT|AMAZON|PAYPAL|AMZ\*|COSTLESS|EBAY/.test(d)) return 'Shopping';
+  return '';
+}
+
+function cleanChaseCreditPayee(desc) {
+  const d = desc.trim();
+  if (/^Amazon(\.com)?\*/i.test(d)) return 'Amazon';
+  if (/^AMAZON/i.test(d)) return 'Amazon';
+  if (/^TST\*/i.test(d)) return d.replace(/^TST\*/i, '').trim();
+  if (/^SP /i.test(d)) return d.replace(/^SP /i, '').trim();
+  if (/^FP \*/i.test(d)) return d.replace(/^FP \*/i, '').trim();
+  if (/^AMZ\*/i.test(d)) return 'Amazon';
+  if (/^LINODE \. AKAMAI/i.test(d)) return 'Linode / Akamai';
+  if (/^PURCHASE INTEREST CHARGE/i.test(d)) return 'Chase Interest Charge';
+  if (/^FOREIGN TRANSACTION FEE/i.test(d)) return 'Foreign Transaction Fee';
+  if (/^GOOGLE \*/i.test(d)) { const m = d.match(/^GOOGLE \*(.+?)(?:_|\s|$)/i); return m ? `Google - ${m[1]}` : 'Google'; }
+  if (/^ANTHROPIC$/i.test(d)) return 'Anthropic';
+  if (/^CLOUDFLARE$/i.test(d)) return 'Cloudflare';
+  if (/^INSTANTLY$/i.test(d)) return 'Instantly';
+  if (/^Spectrum$/i.test(d)) return 'Spectrum';
+  if (/^MINT MOBILE/i.test(d)) return 'Mint Mobile';
+  if (/^Tesla Insurance/i.test(d)) return 'Tesla Insurance';
+  if (/^CCV\*/i.test(d)) return d.replace(/^CCV\*/i, '').trim();
+  if (/^OUTSCRAPER/i.test(d)) return 'Outscraper';
+  if (/^PROFRESULTS/i.test(d)) return 'ProResults';
+  if (/^KLM AIRLINE/i.test(d)) return 'KLM Airlines';
+  if (/^MS\* BILDERBERG/i.test(d)) return 'Bilderberg Hotel';
+  if (/^EXPEDIA/i.test(d)) return 'Expedia';
+  if (/^VIRGINATLAIR/i.test(d)) return 'Virgin Atlantic';
+  if (/^NLOV/i.test(d)) return 'Travel Purchase';
+  return d;
+}
+
+function mapChaseCreditCategory(cat) {
+  return { 'Food & Drink': 'Dining', 'Groceries': 'Groceries', 'Shopping': 'Shopping',
+    'Bills & Utilities': 'Utilities', 'Travel': 'Travel', 'Professional Services': 'Professional',
+    'Fees & Adjustments': 'Fees', 'Personal': 'Personal', 'Health & Wellness': 'Health' }[cat] || cat || '';
+}
+
+function autoCreditCategory(desc, cat) {
+  const d = desc.toUpperCase();
+  const mapped = mapChaseCreditCategory(cat);
+  if (/ANTHROPIC|CLOUDFLARE|OPENAI|LINODE|GOOGLE \*WORKSPACE|INSTANTLY/.test(d)) return 'Software';
+  if (/TESLA INSURANCE/.test(d)) return 'Auto Insurance';
+  if (/MINT MOBILE/.test(d)) return 'Phone';
+  if (/PURCHASE INTEREST CHARGE|FOREIGN TRANSACTION FEE/.test(d)) return 'Fees';
+  return mapped;
+}
+
+function mdyToIsoDate(mdy) {
+  const [m, d, y] = mdy.split('/');
+  if (!m || !d || !y) return '';
+  return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+}
+
+function parseChaseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return { format: 'unknown', rows: [] };
+  function parseLine(line) {
+    const fields = []; let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') { if (inQ && line[i+1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+      else if (line[i] === ',' && !inQ) { fields.push(cur); cur = ''; }
+      else cur += line[i];
+    }
+    fields.push(cur); return fields;
+  }
+  const header = parseLine(lines[0]).map(h => h.trim().toLowerCase());
+  const isCredit   = header[0] === 'transaction date';
+  const isChecking = header[0] === 'details';
+  if (!isCredit && !isChecking) return { format: 'unknown', rows: [] };
+  const format = isCredit ? 'credit' : 'checking';
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const f = parseLine(lines[i]);
+    if (!f.length || !f[0]?.trim()) continue;
+    if (isChecking) {
+      const details  = f[0]?.trim();
+      const postDate = f[1]?.trim();
+      const desc     = f[2]?.trim() || '';
+      const amount   = parseFloat(f[3]);
+      const type     = f[4]?.trim() || '';
+      if (!postDate?.startsWith('05/')) continue;
+      if (type === 'ACCT_XFER') continue;
+      if (details === 'CREDIT' || details === 'DSLIP') continue;
+      if (!postDate || isNaN(amount)) continue;
+      rows.push({ date: mdyToIsoDate(postDate), amount: Math.abs(amount),
+        payee: cleanChaseCheckingPayee(desc), category: autoCheckingCategory(desc, type),
+        source: 'Chase Debit', note: '' });
+    } else {
+      const txDate = f[0]?.trim();
+      const desc   = f[2]?.trim() || '';
+      const chaseCat = f[3]?.trim() || '';
+      const type   = f[4]?.trim() || '';
+      const amount = parseFloat(f[5]);
+      if (!txDate?.startsWith('05/')) continue;
+      if (type === 'Payment') continue;
+      if (!txDate || isNaN(amount)) continue;
+      rows.push({ date: mdyToIsoDate(txDate), amount: Math.abs(amount),
+        payee: cleanChaseCreditPayee(desc), category: autoCreditCategory(desc, chaseCat),
+        source: 'Chase Credit', note: '' });
+    }
+  }
+  return { format, rows };
+}
+
+let chaseImportPending = null;
+
+function openChaseImportPreview(rows, format) {
+  chaseImportPending = rows;
+  const modal   = document.getElementById('chase-import-modal');
+  const label   = document.getElementById('chase-import-label');
+  const preview = document.getElementById('chase-import-preview');
+  const total   = rows.reduce((s, r) => s + r.amount, 0);
+  const byCat   = {};
+  rows.forEach(r => { const k = r.category || 'Uncategorized'; byCat[k] = (byCat[k] || 0) + r.amount; });
+  const catRows = Object.entries(byCat).sort((a, b) => b[1] - a[1])
+    .map(([cat, amt]) => `<div class="chase-preview-cat"><span>${escHtml(cat)}</span><span>${escHtml(fmtAmount(amt))}</span></div>`)
+    .join('');
+  label.textContent = `Import: ${format === 'credit' ? 'Chase Credit Card' : 'Chase Checking'}`;
+  preview.innerHTML = `
+    <div class="chase-preview-meta">
+      <span>${rows.length} May transactions</span>
+      <span class="chase-preview-total">${escHtml(fmtAmount(total))}</span>
+    </div>
+    <div class="chase-preview-cats">${catRows}</div>`;
+  modal.classList.remove('hidden');
+}
+
+async function confirmChaseImport() {
+  if (!chaseImportPending?.length) return;
+  const rows = chaseImportPending;
+  chaseImportPending = null;
+  document.getElementById('chase-import-modal').classList.add('hidden');
+  const csvField = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const lines = ['date,amount,category,payee,source,note'];
+  for (const r of rows) lines.push([r.date, r.amount, r.category, r.payee, r.source, r.note].map(csvField).join(','));
+  try {
+    const result = await apiCall('POST', '/expenses/import', { csv: lines.join('\n') });
+    const newCats = [...new Set(rows.map(r => r.category).filter(Boolean))];
+    for (const name of newCats) {
+      if (!expenseCategories.find(c => c.name === name)) {
+        try { const cat = await apiCall('POST', '/expense-categories', { name }); expenseCategories.push(cat); } catch(e) {}
+      }
+    }
+    toast(`Imported ${result.imported} expenses from Chase`);
+    await loadExpenses();
+  } catch(e) { toast('Import failed'); }
+}
+
+async function importChaseCSV(file) {
+  const text = await file.text();
+  const { format, rows } = parseChaseCSV(text);
+  if (format === 'unknown') { toast('Unrecognized Chase CSV format'); return; }
+  if (!rows.length) { toast('No May 2026 transactions found'); return; }
+  openChaseImportPreview(rows, format);
 }
 
 // ── Note editor ────────────────────────────────────────────────
@@ -1949,6 +2264,11 @@ document.getElementById('expense-modal-delete').addEventListener('click', delete
 document.getElementById('expense-modal').addEventListener('click', e => { if (e.target === document.getElementById('expense-modal')) closeExpenseModal(); });
 document.getElementById('export-csv-btn').addEventListener('click', exportExpensesCsv);
 document.getElementById('import-csv-input').addEventListener('change', e => { if (e.target.files.length) { importExpensesCsv(e.target.files[0]); e.target.value = ''; } });
+document.getElementById('import-chase-input')?.addEventListener('change', e => { if (e.target.files.length) { importChaseCSV(e.target.files[0]); e.target.value = ''; } });
+document.getElementById('chase-import-close')?.addEventListener('click', () => { document.getElementById('chase-import-modal').classList.add('hidden'); chaseImportPending = null; });
+document.getElementById('chase-import-cancel')?.addEventListener('click', () => { document.getElementById('chase-import-modal').classList.add('hidden'); chaseImportPending = null; });
+document.getElementById('chase-import-confirm')?.addEventListener('click', confirmChaseImport);
+document.getElementById('chase-import-modal')?.addEventListener('click', e => { if (e.target === document.getElementById('chase-import-modal')) { chaseImportPending = null; e.target.classList.add('hidden'); } });
 document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTasks);
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);

@@ -644,6 +644,35 @@ header {
   padding: 12px 16px; border-top: 1px solid #1e1e1e;
 }
 
+/* Expense row inline delete */
+.expense-entry { position: relative; }
+.expense-entry-del {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: none; background: none; border: none; color: #444;
+  cursor: pointer; font-size: 11px; padding: 3px 5px; line-height: 1; border-radius: 3px;
+}
+.expense-entry:hover .expense-entry-del { display: block; }
+.expense-entry-del:hover { color: #f87171; background: #2a1010; }
+
+/* Chase import preview modal */
+#chase-import-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center; z-index: 500;
+}
+.chase-import-preview { padding: 16px; }
+.chase-preview-meta {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 14px; font-size: 13px; color: #666;
+}
+.chase-preview-total { font-size: 16px; font-weight: 600; color: #5fc83b; }
+.chase-preview-cats { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+.chase-preview-cat {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12px; padding: 5px 0; border-bottom: 1px solid #1a1a1a; color: #aaa;
+}
+.chase-preview-cat:last-child { border-bottom: none; }
+.chase-preview-cat span:last-child { color: #e0e0e0; font-weight: 500; min-width: 60px; text-align: right; }
+
 @media (max-width: 640px) {
   .expense-entry-cat, .expense-entry-note, .expense-entry-source, .expense-entry-frequency { display: none; }
   .exp-hdr[data-col="category"], .exp-hdr[data-col="note"], .exp-hdr[data-col="source"], .exp-hdr[data-col="frequency"] { display: none; }

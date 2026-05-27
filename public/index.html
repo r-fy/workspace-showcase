@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=87">
+<link rel="stylesheet" href="/app.css?v=88">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -96,6 +96,7 @@
         <div class="expense-actions">
           <button id="export-csv-btn">↓ Export</button>
           <label>⬆ Import<input type="file" id="import-csv-input" accept=".csv" style="display:none"></label>
+          <label>Chase<input type="file" id="import-chase-input" accept=".csv,.CSV" style="display:none"></label>
         </div>
       </div>
       <div class="left-panel-footer">
@@ -143,6 +144,24 @@
         <button class="cancel-sel-btn" id="cancel-sel-btn">Cancel</button>
       </div>
       <div id="kanban-area" style="flex:1;overflow:hidden;display:flex;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Chase Import Preview Modal -->
+<div id="chase-import-modal" class="hidden">
+  <div class="expense-modal-box">
+    <div class="expense-modal-header">
+      <span id="chase-import-label">Chase Import</span>
+      <button class="modal-close-btn" id="chase-import-close">✕</button>
+    </div>
+    <div id="chase-import-preview" class="chase-import-preview"></div>
+    <div class="expense-modal-footer">
+      <div></div>
+      <div style="display:flex;gap:8px;">
+        <button class="cancel-sel-btn" id="chase-import-cancel">Cancel</button>
+        <button class="save-btn" id="chase-import-confirm">Import</button>
+      </div>
     </div>
   </div>
 </div>
@@ -245,6 +264,6 @@
 
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=52"></script>
-<script src="/app.js?v=89"></script>
+<script src="/app.js?v=90"></script>
 </body>
 </html>
