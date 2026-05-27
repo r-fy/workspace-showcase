@@ -457,6 +457,92 @@ async function loadTrash() {
   }
 }
 
+// ── Date picker ────────────────────────────────────────────────
+const DP_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const DP_DAYS   = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+let dpYear = new Date().getFullYear();
+let dpMonth = new Date().getMonth();
+
+function dpToIso(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function dpFromIso(s) {
+  if (!s) return null;
+  const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d);
+}
+function dpFmt(d) {
+  return d ? d.toLocaleDateString([], { year:'numeric', month:'short', day:'numeric' }) : 'Select date';
+}
+
+function dpInit(iso) {
+  const d = dpFromIso(iso) || new Date();
+  dpYear = d.getFullYear(); dpMonth = d.getMonth();
+  const trigger = document.getElementById('exp-date-trigger');
+  if (trigger) trigger.textContent = dpFmt(dpFromIso(iso));
+  document.getElementById('exp-date-cal')?.classList.add('hidden');
+}
+
+function dpRender() {
+  const cal = document.getElementById('exp-date-cal');
+  const input = document.getElementById('exp-date');
+  if (!cal || !input) return;
+  const today = dpToIso(new Date());
+  const sel = input.value;
+  const first = new Date(dpYear, dpMonth, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(dpYear, dpMonth+1, 0).getDate();
+  let cells = [];
+  for (let i = 0; i < startDow; i++) {
+    const d = new Date(dpYear, dpMonth, 1 - (startDow - i));
+    cells.push({ iso: dpToIso(d), label: d.getDate(), out: true });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dt = new Date(dpYear, dpMonth, d);
+    cells.push({ iso: dpToIso(dt), label: d, out: false });
+  }
+  const rem = 7 - (cells.length % 7);
+  if (rem < 7) for (let d = 1; d <= rem; d++) {
+    const dt = new Date(dpYear, dpMonth+1, d);
+    cells.push({ iso: dpToIso(dt), label: d, out: true });
+  }
+  cal.innerHTML = `
+    <div class="dp-header">
+      <button class="dp-nav" id="dp-prev" type="button">‹</button>
+      <span class="dp-month-label">${DP_MONTHS[dpMonth]} ${dpYear}</span>
+      <button class="dp-nav" id="dp-next" type="button">›</button>
+    </div>
+    <div class="dp-grid">
+      ${DP_DAYS.map(d => `<span class="dp-dow">${d}</span>`).join('')}
+      ${cells.map(c => `<button type="button" class="dp-day${c.out?' dp-out':''}${c.iso===today?' dp-today':''}${c.iso===sel?' dp-sel':''}" data-iso="${c.iso}">${c.label}</button>`).join('')}
+    </div>
+  `;
+  cal.querySelector('#dp-prev').addEventListener('click', e => {
+    e.stopPropagation();
+    dpMonth--; if (dpMonth < 0) { dpMonth = 11; dpYear--; } dpRender();
+  });
+  cal.querySelector('#dp-next').addEventListener('click', e => {
+    e.stopPropagation();
+    dpMonth++; if (dpMonth > 11) { dpMonth = 0; dpYear++; } dpRender();
+  });
+  cal.querySelectorAll('.dp-day').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      input.value = btn.dataset.iso;
+      const trigger = document.getElementById('exp-date-trigger');
+      if (trigger) trigger.textContent = dpFmt(dpFromIso(btn.dataset.iso));
+      cal.classList.add('hidden');
+    });
+  });
+}
+
+document.getElementById('exp-date-trigger').addEventListener('click', e => {
+  e.stopPropagation();
+  const cal = document.getElementById('exp-date-cal');
+  if (cal.classList.contains('hidden')) { dpRender(); cal.classList.remove('hidden'); }
+  else cal.classList.add('hidden');
+});
+document.addEventListener('click', () => document.getElementById('exp-date-cal')?.classList.add('hidden'));
+
 // ── Expenses ───────────────────────────────────────────────────
 async function loadExpenses() {
   try {
@@ -497,27 +583,27 @@ function renderExpensesList() {
   const area = document.getElementById('expenses-list-area');
   if (!area) return;
   const filtered = activeExpenseCat ? expenses.filter(e => e.category === activeExpenseCat) : expenses;
-  if (!filtered.length) {
-    area.innerHTML = `<div class="expense-list-empty">No expenses yet — hit + to add one.</div>`;
-    return;
-  }
   const total = filtered.reduce((s, e) => s + e.amount, 0);
   area.innerHTML = `
     <div class="expense-list-header">
       <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
-      <span class="expense-list-total">${escHtml(fmtAmount(total))}</span>
+      <span class="expense-list-header-right">
+        ${filtered.length ? `<span class="expense-list-total">${escHtml(fmtAmount(total))}</span>` : ''}
+        <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
+      </span>
     </div>
-    <div class="expense-entries">
+    ${filtered.length ? `<div class="expense-entries">
       ${filtered.map(e => `
         <div class="expense-entry" data-id="${e.id}">
           <span class="expense-entry-date">${escHtml(e.date)}</span>
           ${e.category ? `<span class="expense-entry-cat">${escHtml(e.category)}</span>` : '<span class="expense-entry-cat-empty"></span>'}
           <span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>
           <span class="expense-entry-note">${escHtml(e.note || '')}</span>
+          ${e.source ? `<span class="expense-entry-source">${escHtml(e.source)}</span>` : ''}
           <span class="expense-entry-amount">${escHtml(fmtAmount(e.amount))}</span>
         </div>
       `).join('')}
-    </div>
+    </div>` : `<div class="expense-list-empty">No expenses yet.</div>`}
   `;
   area.querySelectorAll('.expense-entry').forEach(el => {
     el.addEventListener('click', () => {
@@ -525,6 +611,7 @@ function renderExpensesList() {
       if (exp) openExpenseModal(exp);
     });
   });
+  document.getElementById('expense-add-inline-btn')?.addEventListener('click', () => openExpenseModal());
 }
 
 function renderExpenseCatsList() {
@@ -567,10 +654,14 @@ function openExpenseModal(expense = null) {
   document.getElementById('expense-modal-label').textContent = expense ? 'Edit Expense' : 'New Expense';
   document.getElementById('expense-modal-delete').style.display = expense ? '' : 'none';
   const today = new Date().toISOString().slice(0, 10);
-  document.getElementById('exp-date').value = expense?.date || today;
+  const dateVal = expense?.date || today;
+  document.getElementById('exp-date').value = dateVal;
+  dpInit(dateVal);
   document.getElementById('exp-amount').value = expense ? expense.amount : '';
   document.getElementById('exp-category').value = expense?.category || '';
   document.getElementById('exp-payee').value = expense?.payee || '';
+  document.getElementById('exp-source').value = expense?.source || '';
+  document.getElementById('exp-frequency').value = expense?.frequency || '';
   document.getElementById('exp-note').value = expense?.note || '';
   const datalist = document.getElementById('exp-cat-list');
   if (datalist) datalist.innerHTML = expenseCategories.map(c => `<option value="${escHtml(c.name)}">`).join('');
@@ -588,6 +679,8 @@ async function saveExpense() {
   const amount = parseFloat(document.getElementById('exp-amount').value);
   const category = document.getElementById('exp-category').value.trim();
   const payee = document.getElementById('exp-payee').value.trim();
+  const source = document.getElementById('exp-source').value.trim();
+  const frequency = document.getElementById('exp-frequency').value.trim();
   const note = document.getElementById('exp-note').value.trim();
   if (!date) { toast('Date required'); return; }
   if (isNaN(amount) || amount < 0) { toast('Valid amount required'); return; }
@@ -598,7 +691,7 @@ async function saveExpense() {
       expenseCategories.push(cat);
     } catch(e) {}
   }
-  const body = { amount, date, category, payee, note };
+  const body = { amount, date, category, payee, source, frequency, note };
   try {
     if (isEdit) {
       const updated = await apiCall('PUT', '/expenses/' + currentExpenseId, body);

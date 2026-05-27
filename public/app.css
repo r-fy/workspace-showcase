@@ -498,10 +498,17 @@ header {
 .expense-list-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #555; font-size: 13px; }
 .expense-list-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 20px; border-bottom: 1px solid #1e1e1e; flex-shrink: 0;
+  padding: 10px 20px; border-bottom: 1px solid #1e1e1e; flex-shrink: 0;
 }
 .expense-list-label { font-size: 13px; color: #555; }
+.expense-list-header-right { display: flex; align-items: center; gap: 14px; }
 .expense-list-total { font-size: 15px; font-weight: 600; color: #e0e0e0; }
+.expense-add-btn {
+  padding: 5px 14px; font-size: 13px; background: #1a3a13; color: #8ce870;
+  border: 1px solid #2a5a20; border-radius: 5px; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.expense-add-btn:hover { background: #22501a; border-color: #3a7a2a; }
 .expense-entries { flex: 1; }
 .expense-entry {
   display: flex; align-items: center; gap: 10px;
@@ -517,6 +524,7 @@ header {
 .expense-entry-cat-empty { width: 0; flex-shrink: 0; }
 .expense-entry-payee { font-size: 13px; color: #aaa; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-note { font-size: 12px; color: #4a4a4a; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expense-entry-source { font-size: 11px; color: #555; flex-shrink: 0; white-space: nowrap; }
 .expense-entry-amount { font-size: 13px; font-weight: 500; color: #e0e0e0; flex-shrink: 0; text-align: right; min-width: 72px; }
 
 /* Expense left panel */
@@ -547,6 +555,39 @@ header {
   transition: color 0.12s, border-color 0.12s; display: block;
 }
 .expense-actions button:hover, .expense-actions label:hover { color: #ccc; border-color: #444; }
+
+/* Date picker */
+.dp-wrap { position: relative; flex: 1; }
+.dp-trigger {
+  width: 100%; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 6px 10px; font-size: 13px; color: #e0e0e0; text-align: left; cursor: pointer;
+  font-family: inherit; transition: border-color 0.12s;
+}
+.dp-trigger:hover { border-color: #3a3a3a; }
+.dp-cal {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 600;
+  background: #161616; border: 1px solid #2a2a2a; border-radius: 8px;
+  padding: 12px; box-shadow: 0 8px 28px rgba(0,0,0,0.8); min-width: 244px;
+}
+.dp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.dp-month-label { font-size: 13px; font-weight: 600; color: #e0e0e0; }
+.dp-nav {
+  width: 26px; height: 26px; border-radius: 4px; font-size: 18px; line-height: 1;
+  color: #555; display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.dp-nav:hover { background: #2a2a2a; color: #ccc; }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.dp-dow { font-size: 10px; color: #444; text-align: center; padding: 4px 0; font-weight: 600; letter-spacing: 0.04em; }
+.dp-day {
+  font-size: 12px; color: #999; padding: 5px 0; text-align: center; border-radius: 4px;
+  cursor: pointer; transition: background 0.1s, color 0.1s; font-family: inherit;
+}
+.dp-day:hover:not(.dp-sel) { background: #222; color: #e0e0e0; }
+.dp-out { color: #333; }
+.dp-out:hover:not(.dp-sel) { color: #555; background: #1a1a1a; }
+.dp-today { color: #5fc83b; font-weight: 600; }
+.dp-sel { background: #1a3a13 !important; color: #8ce870 !important; }
 
 /* Expense modal */
 #expense-modal {
