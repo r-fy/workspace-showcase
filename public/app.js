@@ -15,9 +15,9 @@ let expenses = [];
 let expenseCategories = [];
 let activeExpenseCat = null;
 let currentExpenseId = null;
-let expenseSortCol = 'date';
-let expenseSortDir = 'desc';
+let expenseSortCols = [];
 const selectedExpenses = new Set();
+let lastClickedExpenseId = null;
 
 let boards = [];
 let currentBoardId = null;
@@ -256,7 +256,7 @@ function switchTab(tab) {
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
-  if (tab !== 'expenses') selectedExpenses.clear();
+  if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
 
 // ── Tags helpers ───────────────────────────────────────────────
@@ -660,15 +660,31 @@ function renderExpensesList() {
   let filtered = activeExpenseCat ? expenses.filter(e => e.category === activeExpenseCat) : expenses;
 
   filtered = [...filtered].sort((a, b) => {
-    let av = a[expenseSortCol] ?? '', bv = b[expenseSortCol] ?? '';
-    if (expenseSortCol === 'amount') { av = parseFloat(av) || 0; bv = parseFloat(bv) || 0; }
-    else { av = String(av).toLowerCase(); bv = String(bv).toLowerCase(); }
-    if (av < bv) return expenseSortDir === 'asc' ? -1 : 1;
-    if (av > bv) return expenseSortDir === 'asc' ? 1 : -1;
+    for (const key of expenseColOrder) {
+      const s = expenseSortCols.find(x => x.col === key);
+      if (!s) continue;
+      let av = a[key] ?? '', bv = b[key] ?? '';
+      if (key === 'amount') { av = parseFloat(av) || 0; bv = parseFloat(bv) || 0; }
+      else { av = String(av).toLowerCase(); bv = String(bv).toLowerCase(); }
+      if (av < bv) return s.dir === 'asc' ? -1 : 1;
+      if (av > bv) return s.dir === 'asc' ? 1 : -1;
+    }
     return 0;
   });
 
-  const total = filtered.reduce((s, e) => s + e.amount, 0);
+  const sourceTotals = {};
+  let grandTotal = 0;
+  for (const e of filtered) {
+    const src = e.source || 'Unknown';
+    sourceTotals[src] = (sourceTotals[src] || 0) + e.amount;
+    grandTotal += e.amount;
+  }
+  const sourceSummary = [
+    ...Object.entries(sourceTotals)
+      .sort((a, b) => b[1] - a[1])
+      .map(([src, amt]) => `<span class="exp-source-total"><span class="exp-source-name">${escHtml(src)}</span><span class="exp-source-amt">${escHtml(fmtAmount(amt))}</span></span>`),
+    `<span class="exp-source-divider"></span><span class="exp-source-total exp-source-grand"><span class="exp-source-name">Total</span><span class="exp-source-amt">${escHtml(fmtAmount(grandTotal))}</span></span>`
+  ].join('');
 
   const allFilteredIds = filtered.map(e => e.id);
   const allSelected = allFilteredIds.length > 0 && allFilteredIds.every(id => selectedExpenses.has(id));
@@ -677,27 +693,30 @@ function renderExpensesList() {
   const headerRow = `<div class="expense-header-row">
     <input type="checkbox" class="exp-select-all" ${allSelected ? 'checked' : ''} ${anySelected && !allSelected ? 'data-indeterminate="1"' : ''} title="Select all">
     ${expenseColOrder.map(key => {
-      const isActive = key === expenseSortCol;
-      const arrow = isActive ? (expenseSortDir === 'asc' ? '↑' : '↓') : '';
-      return `<span class="exp-hdr${isActive ? ' active' : ''}" data-col="${key}" draggable="true">${EXPENSE_COL_DEFS[key].label}${arrow ? ` <span class="sort-arrow">${arrow}</span>` : ''}<span class="exp-col-resize" data-col="${key}"></span></span>`;
+      const sortEntry = expenseSortCols.find(s => s.col === key);
+      const isActive = !!sortEntry;
+      const badge = sortEntry ? (sortEntry.dir === 'asc' ? '↑' : '↓') : '';
+      return `<span class="exp-hdr${isActive ? ' active' : ''}" data-col="${key}" draggable="true">${EXPENSE_COL_DEFS[key].label}${badge ? ` <span class="sort-arrow">${badge}</span>` : ''}<span class="exp-col-resize" data-col="${key}"></span></span>`;
     }).join('')}
   </div>`;
 
   area.innerHTML = `
-    <div class="exp-bulk-bar${anySelected ? '' : ' hidden'}">
-      <span class="exp-bulk-count">${selectedExpenses.size} selected</span>
-      <button class="exp-bulk-delete">Delete selected</button>
-      <button class="exp-bulk-clear">Clear</button>
-    </div>
-    <div class="expense-list-header">
-      <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
-      <span class="expense-list-header-right">
-        ${filtered.length ? `<span class="expense-list-total">${escHtml(fmtAmount(total))}</span>` : ''}
-        <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
-      </span>
+    <div class="exp-sticky-header">
+      <div class="exp-bulk-bar${anySelected ? '' : ' hidden'}">
+        <span class="exp-bulk-count">${selectedExpenses.size} selected</span>
+        <button class="exp-bulk-delete">Delete selected</button>
+        <button class="exp-bulk-clear">Clear</button>
+      </div>
+      <div class="expense-list-header">
+        <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
+        <span class="expense-list-header-right">
+          ${filtered.length ? `<span class="exp-source-totals">${sourceSummary}</span>` : ''}
+          <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
+        </span>
+      </div>
+      ${filtered.length ? headerRow : ''}
     </div>
     ${filtered.length ? `
-      ${headerRow}
       <div class="expense-entries">
         ${filtered.map(e => `
           <div class="expense-entry${selectedExpenses.has(e.id) ? ' exp-selected' : ''}" data-id="${e.id}">
@@ -723,25 +742,47 @@ function renderExpensesList() {
   }
 
   // Per-row checkboxes
-  area.querySelectorAll('.exp-row-check').forEach(cb => {
+  area.querySelectorAll('.exp-row-check').forEach((cb, idx) => {
     cb.addEventListener('change', e => {
       e.stopPropagation();
-      if (cb.checked) selectedExpenses.add(cb.dataset.id);
-      else selectedExpenses.delete(cb.dataset.id);
+      const id = cb.dataset.id;
+      if (e.shiftKey && lastClickedExpenseId) {
+        const lastIdx = filtered.findIndex(x => x.id === lastClickedExpenseId);
+        if (lastIdx !== -1) {
+          const lo = Math.min(idx, lastIdx), hi = Math.max(idx, lastIdx);
+          for (let i = lo; i <= hi; i++) selectedExpenses.add(filtered[i].id);
+          lastClickedExpenseId = id;
+          renderExpensesList();
+          return;
+        }
+      }
+      lastClickedExpenseId = id;
+      if (cb.checked) selectedExpenses.add(id);
+      else selectedExpenses.delete(id);
       renderExpensesList();
     });
   });
 
-  // Row click — open modal when nothing selected, toggle selection otherwise
-  area.querySelectorAll('.expense-entry').forEach(el => {
+  // Row click — open modal when nothing selected, toggle selection otherwise; shift-click range-selects
+  area.querySelectorAll('.expense-entry').forEach((el, idx) => {
     el.addEventListener('click', e => {
       if (e.target.classList.contains('exp-row-check') || e.target.classList.contains('expense-entry-del')) return;
+      const id = el.dataset.id;
+      if (e.shiftKey && lastClickedExpenseId) {
+        const lastIdx = filtered.findIndex(x => x.id === lastClickedExpenseId);
+        if (lastIdx !== -1) {
+          const lo = Math.min(idx, lastIdx), hi = Math.max(idx, lastIdx);
+          for (let i = lo; i <= hi; i++) selectedExpenses.add(filtered[i].id);
+          renderExpensesList();
+          return;
+        }
+      }
+      lastClickedExpenseId = id;
       if (selectedExpenses.size > 0) {
-        const id = el.dataset.id;
         if (selectedExpenses.has(id)) selectedExpenses.delete(id); else selectedExpenses.add(id);
         renderExpensesList();
       } else {
-        const exp = expenses.find(e => e.id === el.dataset.id);
+        const exp = expenses.find(ex => ex.id === id);
         if (exp) openExpenseModal(exp);
       }
     });
@@ -757,15 +798,21 @@ function renderExpensesList() {
     try { await Promise.all(ids.map(id => apiCall('DELETE', '/expenses/' + id))); } catch(e) { toast('Some deletes failed'); }
   });
   area.querySelector('.exp-bulk-clear')?.addEventListener('click', () => {
-    selectedExpenses.clear(); renderExpensesList();
+    selectedExpenses.clear(); lastClickedExpenseId = null; renderExpensesList();
   });
 
   area.querySelectorAll('.exp-hdr').forEach(el => {
-    // Click to sort
-    el.addEventListener('click', () => {
+    // Click cycles: unsorted → asc → desc → off (removed from chain)
+    el.addEventListener('click', e => {
       const col = el.dataset.col;
-      if (expenseSortCol === col) expenseSortDir = expenseSortDir === 'asc' ? 'desc' : 'asc';
-      else { expenseSortCol = col; expenseSortDir = col === 'amount' ? 'desc' : 'asc'; }
+      const existing = expenseSortCols.findIndex(s => s.col === col);
+      if (existing === -1) {
+        expenseSortCols.push({ col, dir: col === 'amount' ? 'desc' : 'asc' });
+      } else if (expenseSortCols[existing].dir === (col === 'amount' ? 'desc' : 'asc')) {
+        expenseSortCols[existing].dir = col === 'amount' ? 'asc' : 'desc';
+      } else {
+        expenseSortCols.splice(existing, 1);
+      }
       renderExpensesList();
     });
     // Drag to reorder
@@ -862,9 +909,10 @@ function renderExpensesList() {
 function renderExpenseCatsList() {
   const list = document.getElementById('expense-cats-list');
   if (!list) return;
+  const sortedCats = [...expenseCategories].sort((a, b) => a.name.localeCompare(b.name));
   const datalist = document.getElementById('exp-cat-list');
-  if (datalist) datalist.innerHTML = expenseCategories.map(c => `<option value="${escHtml(c.name)}">`).join('');
-  list.innerHTML = expenseCategories.map(c => `
+  if (datalist) datalist.innerHTML = sortedCats.map(c => `<option value="${escHtml(c.name)}">`).join('');
+  list.innerHTML = sortedCats.map(c => `
     <div class="expense-cat-item">
       <span class="expense-cat-name">${escHtml(c.name)}</span>
       <button class="expense-cat-del" data-name="${escHtml(c.name)}">✕</button>
@@ -909,7 +957,7 @@ function openExpenseModal(expense = null) {
   document.getElementById('exp-frequency').value = expense?.frequency || '';
   document.getElementById('exp-note').value = expense?.note || '';
   const datalist = document.getElementById('exp-cat-list');
-  if (datalist) datalist.innerHTML = expenseCategories.map(c => `<option value="${escHtml(c.name)}">`).join('');
+  if (datalist) datalist.innerHTML = [...expenseCategories].sort((a, b) => a.name.localeCompare(b.name)).map(c => `<option value="${escHtml(c.name)}">`).join('');
   document.getElementById('expense-modal').classList.remove('hidden');
   setTimeout(() => document.getElementById('exp-amount').focus(), 30);
 }
