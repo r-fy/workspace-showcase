@@ -11,6 +11,11 @@ let currentNoteId = null;
 let saveNoteTimer = null;
 let activeTag = null;
 
+let expenses = [];
+let expenseCategories = [];
+let activeExpenseCat = null;
+let currentExpenseId = null;
+
 let boards = [];
 let currentBoardId = null;
 let currentBoardData = [];
@@ -240,11 +245,14 @@ function switchTab(tab) {
   document.querySelectorAll('.nav-menu-item').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.getElementById('notes-view').classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-view').classList.toggle('hidden', tab !== 'tasks');
+  document.getElementById('expenses-view')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
+  document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
+  if (tab === 'expenses') loadExpenses();
 }
 
 // ── Tags helpers ───────────────────────────────────────────────
@@ -447,6 +455,195 @@ async function loadTrash() {
   } catch(e) {
     if (content) content.innerHTML = '<div class="trash-empty">Could not load trash — check connection</div>';
   }
+}
+
+// ── Expenses ───────────────────────────────────────────────────
+async function loadExpenses() {
+  try {
+    [expenses, expenseCategories] = await Promise.all([
+      apiFetch('GET', '/expenses'),
+      apiFetch('GET', '/expense-categories'),
+    ]);
+  } catch(e) {}
+  renderExpensesCatBar();
+  renderExpensesList();
+  renderExpenseCatsList();
+}
+
+function renderExpensesCatBar() {
+  const bar = document.getElementById('expense-cat-bar');
+  if (!bar) return;
+  const cats = [...new Set(expenses.map(e => e.category).filter(Boolean))].sort();
+  if (!cats.length) { bar.innerHTML = ''; bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  bar.innerHTML =
+    `<span class="tag-filter-pill${!activeExpenseCat ? ' active' : ''}" data-cat="" style="--tag-c:#5fc83b">All</span>` +
+    cats.map(c =>
+      `<span class="tag-filter-pill${c === activeExpenseCat ? ' active' : ''}" data-cat="${escHtml(c)}" style="--tag-c:#5fc83b">${escHtml(c)}</span>`
+    ).join('');
+  bar.querySelectorAll('.tag-filter-pill').forEach(el => {
+    el.addEventListener('click', () => {
+      activeExpenseCat = el.dataset.cat || null;
+      renderExpensesCatBar(); renderExpensesList();
+    });
+  });
+}
+
+function fmtAmount(a) {
+  return '$' + Number(a).toFixed(2);
+}
+
+function renderExpensesList() {
+  const area = document.getElementById('expenses-list-area');
+  if (!area) return;
+  const filtered = activeExpenseCat ? expenses.filter(e => e.category === activeExpenseCat) : expenses;
+  if (!filtered.length) {
+    area.innerHTML = `<div class="expense-list-empty">No expenses yet — hit + to add one.</div>`;
+    return;
+  }
+  const total = filtered.reduce((s, e) => s + e.amount, 0);
+  area.innerHTML = `
+    <div class="expense-list-header">
+      <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
+      <span class="expense-list-total">${escHtml(fmtAmount(total))}</span>
+    </div>
+    <div class="expense-entries">
+      ${filtered.map(e => `
+        <div class="expense-entry" data-id="${e.id}">
+          <span class="expense-entry-date">${escHtml(e.date)}</span>
+          ${e.category ? `<span class="expense-entry-cat">${escHtml(e.category)}</span>` : '<span class="expense-entry-cat-empty"></span>'}
+          <span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>
+          <span class="expense-entry-note">${escHtml(e.note || '')}</span>
+          <span class="expense-entry-amount">${escHtml(fmtAmount(e.amount))}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  area.querySelectorAll('.expense-entry').forEach(el => {
+    el.addEventListener('click', () => {
+      const exp = expenses.find(e => e.id === el.dataset.id);
+      if (exp) openExpenseModal(exp);
+    });
+  });
+}
+
+function renderExpenseCatsList() {
+  const list = document.getElementById('expense-cats-list');
+  if (!list) return;
+  const datalist = document.getElementById('exp-cat-list');
+  if (datalist) datalist.innerHTML = expenseCategories.map(c => `<option value="${escHtml(c.name)}">`).join('');
+  list.innerHTML = expenseCategories.map(c => `
+    <div class="expense-cat-item">
+      <span class="expense-cat-name">${escHtml(c.name)}</span>
+      <button class="expense-cat-del" data-name="${escHtml(c.name)}">✕</button>
+    </div>
+  `).join('') + `<div class="expense-cat-add">
+    <input class="expense-cat-input" id="expense-cat-input" placeholder="New category…" autocomplete="off">
+  </div>`;
+  list.querySelectorAll('.expense-cat-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const name = btn.dataset.name;
+      expenseCategories = expenseCategories.filter(c => c.name !== name);
+      renderExpenseCatsList();
+      try { await apiCall('DELETE', '/expense-categories/' + encodeURIComponent(name)); } catch(e) {}
+    });
+  });
+  document.getElementById('expense-cat-input')?.addEventListener('keydown', async e => {
+    if (e.key === 'Enter') {
+      const name = e.target.value.trim();
+      if (!name) return;
+      e.target.value = '';
+      try {
+        const cat = await apiCall('POST', '/expense-categories', { name });
+        if (!expenseCategories.find(c => c.name === cat.name)) expenseCategories.push(cat);
+        renderExpenseCatsList();
+      } catch(err) { toast('Could not add category'); }
+    }
+  });
+}
+
+function openExpenseModal(expense = null) {
+  currentExpenseId = expense?.id || null;
+  document.getElementById('expense-modal-label').textContent = expense ? 'Edit Expense' : 'New Expense';
+  document.getElementById('expense-modal-delete').style.display = expense ? '' : 'none';
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('exp-date').value = expense?.date || today;
+  document.getElementById('exp-amount').value = expense ? expense.amount : '';
+  document.getElementById('exp-category').value = expense?.category || '';
+  document.getElementById('exp-payee').value = expense?.payee || '';
+  document.getElementById('exp-note').value = expense?.note || '';
+  const datalist = document.getElementById('exp-cat-list');
+  if (datalist) datalist.innerHTML = expenseCategories.map(c => `<option value="${escHtml(c.name)}">`).join('');
+  document.getElementById('expense-modal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('exp-amount').focus(), 30);
+}
+
+function closeExpenseModal() {
+  document.getElementById('expense-modal').classList.add('hidden');
+  currentExpenseId = null;
+}
+
+async function saveExpense() {
+  const date = document.getElementById('exp-date').value;
+  const amount = parseFloat(document.getElementById('exp-amount').value);
+  const category = document.getElementById('exp-category').value.trim();
+  const payee = document.getElementById('exp-payee').value.trim();
+  const note = document.getElementById('exp-note').value.trim();
+  if (!date) { toast('Date required'); return; }
+  if (isNaN(amount) || amount < 0) { toast('Valid amount required'); return; }
+  const isEdit = !!currentExpenseId;
+  if (category && !expenseCategories.find(c => c.name === category)) {
+    try {
+      const cat = await apiCall('POST', '/expense-categories', { name: category });
+      expenseCategories.push(cat);
+    } catch(e) {}
+  }
+  const body = { amount, date, category, payee, note };
+  try {
+    if (isEdit) {
+      const updated = await apiCall('PUT', '/expenses/' + currentExpenseId, body);
+      const idx = expenses.findIndex(e => e.id === currentExpenseId);
+      if (idx >= 0) expenses[idx] = updated;
+    } else {
+      const created = await apiCall('POST', '/expenses', body);
+      expenses.unshift(created);
+    }
+    expenses.sort((a, b) => b.date !== a.date ? b.date.localeCompare(a.date) : b.created_at - a.created_at);
+    closeExpenseModal();
+    renderExpensesCatBar(); renderExpensesList(); renderExpenseCatsList();
+    toast(isEdit ? 'Expense updated' : 'Expense added');
+  } catch(e) { toast('Could not save — check connection'); }
+}
+
+async function deleteExpense() {
+  if (!currentExpenseId) return;
+  if (!confirm('Delete this expense?')) return;
+  const id = currentExpenseId;
+  expenses = expenses.filter(e => e.id !== id);
+  closeExpenseModal();
+  renderExpensesCatBar(); renderExpensesList();
+  try { await apiCall('DELETE', '/expenses/' + id); } catch(e) {}
+}
+
+async function exportExpensesCsv() {
+  try {
+    const res = await fetch('/api/expenses/export.csv', { headers: { 'Authorization': authHeader } });
+    if (!res.ok) throw new Error();
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'expenses.csv'; a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { toast('Export failed'); }
+}
+
+async function importExpensesCsv(file) {
+  const text = await file.text();
+  try {
+    const r = await apiCall('POST', '/expenses/import', { csv: text });
+    toast(`Imported ${r.imported} expenses`);
+    await loadExpenses();
+  } catch(e) { toast('Import failed'); }
 }
 
 // ── Note editor ────────────────────────────────────────────────
@@ -735,6 +932,9 @@ const COMMANDS = [
   { label: 'Delete Current Board', icon: '🗑', action: deleteCurrentBoard },
   { label: 'Switch to Notes',      icon: '📄', action: () => switchTab('notes') },
   { label: 'Switch to Tasks',      icon: '✓',  action: () => switchTab('tasks') },
+  { label: 'Switch to Expenses',   icon: '$',  action: () => switchTab('expenses') },
+  { label: 'New Expense',          icon: '$',  action: () => { switchTab('expenses'); openExpenseModal(); } },
+  { label: 'Export Expenses CSV',  icon: '↓',  action: exportExpensesCsv },
   { label: 'Open Trash',           icon: '🗑', action: () => switchTab('trash') },
 ];
 
@@ -1449,6 +1649,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape') {
     if (dropdownOpen) { closeSearch(); return; }
+    if (!document.getElementById('expense-modal').classList.contains('hidden')) { closeExpenseModal(); return; }
     if (!document.getElementById('task-modal').classList.contains('hidden')) { closeTaskModal(); return; }
   }
   if (dropdownOpen) {
@@ -1523,6 +1724,14 @@ document.getElementById('empty-trash-btn')?.addEventListener('click', async () =
 document.getElementById('new-note-btn').addEventListener('click',newNote);
 document.getElementById('import-btn').addEventListener('click',()=>document.getElementById('import-input').click());
 document.getElementById('import-input').addEventListener('change',e=>{if(e.target.files.length){importMdFiles(Array.from(e.target.files));e.target.value='';}});
+document.getElementById('add-expense-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('expenses'); openExpenseModal(); });
+document.getElementById('expense-modal-close').addEventListener('click', closeExpenseModal);
+document.getElementById('expense-modal-cancel').addEventListener('click', closeExpenseModal);
+document.getElementById('expense-modal-save').addEventListener('click', saveExpense);
+document.getElementById('expense-modal-delete').addEventListener('click', deleteExpense);
+document.getElementById('expense-modal').addEventListener('click', e => { if (e.target === document.getElementById('expense-modal')) closeExpenseModal(); });
+document.getElementById('export-csv-btn').addEventListener('click', exportExpensesCsv);
+document.getElementById('import-csv-input').addEventListener('change', e => { if (e.target.files.length) { importExpensesCsv(e.target.files[0]); e.target.value = ''; } });
 document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTasks);
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);
