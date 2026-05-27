@@ -15,6 +15,8 @@ let expenses = [];
 let expenseCategories = [];
 let activeExpenseCat = null;
 let currentExpenseId = null;
+let expenseSortCol = 'date';
+let expenseSortDir = 'desc';
 
 let boards = [];
 let currentBoardId = null;
@@ -477,8 +479,6 @@ function dpFmt(d) {
 function dpInit(iso) {
   const d = dpFromIso(iso) || new Date();
   dpYear = d.getFullYear(); dpMonth = d.getMonth();
-  const trigger = document.getElementById('exp-date-trigger');
-  if (trigger) trigger.textContent = dpFmt(dpFromIso(iso));
   document.getElementById('exp-date-cal')?.classList.add('hidden');
 }
 
@@ -527,9 +527,7 @@ function dpRender() {
   cal.querySelectorAll('.dp-day').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      input.value = btn.dataset.iso;
-      const trigger = document.getElementById('exp-date-trigger');
-      if (trigger) trigger.textContent = dpFmt(dpFromIso(btn.dataset.iso));
+      if (input) input.value = btn.dataset.iso;
       cal.classList.add('hidden');
     });
   });
@@ -538,8 +536,11 @@ function dpRender() {
 document.getElementById('exp-date-trigger').addEventListener('click', e => {
   e.stopPropagation();
   const cal = document.getElementById('exp-date-cal');
-  if (cal.classList.contains('hidden')) { dpRender(); cal.classList.remove('hidden'); }
-  else cal.classList.add('hidden');
+  if (cal.classList.contains('hidden')) {
+    const typed = dpFromIso(document.getElementById('exp-date')?.value);
+    if (typed) { dpYear = typed.getFullYear(); dpMonth = typed.getMonth(); }
+    dpRender(); cal.classList.remove('hidden');
+  } else cal.classList.add('hidden');
 });
 document.addEventListener('click', () => document.getElementById('exp-date-cal')?.classList.add('hidden'));
 
@@ -579,11 +580,63 @@ function fmtAmount(a) {
   return '$' + Number(a).toFixed(2);
 }
 
+const EXPENSE_COL_DEFS = {
+  date:     { label: 'Date',     width: '88px' },
+  category: { label: 'Category', width: '110px' },
+  payee:    { label: 'Payee',    width: '1fr' },
+  note:     { label: 'Note',     width: '1fr' },
+  source:   { label: 'Source',   width: '72px' },
+  amount:   { label: 'Amount',   width: '80px' },
+};
+const EXPENSE_COL_DEFAULT = ['date','category','payee','note','source','amount'];
+let expenseColOrder = (() => {
+  try { const s = localStorage.getItem('expense-col-order'); return s ? JSON.parse(s) : [...EXPENSE_COL_DEFAULT]; }
+  catch(e) { return [...EXPENSE_COL_DEFAULT]; }
+})();
+let expenseDragCol = null;
+
+function updateExpenseGrid() {
+  const area = document.getElementById('expenses-list-area');
+  if (!area) return;
+  area.style.setProperty('--exp-grid', expenseColOrder.map(k => EXPENSE_COL_DEFS[k].width).join(' '));
+}
+
+function expenseEntryCell(e, key) {
+  switch(key) {
+    case 'date':     return `<span class="expense-entry-date">${escHtml(e.date)}</span>`;
+    case 'category': return `<span class="expense-entry-cat">${e.category ? escHtml(e.category) : ''}</span>`;
+    case 'payee':    return `<span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>`;
+    case 'note':     return `<span class="expense-entry-note">${escHtml(e.note || '')}</span>`;
+    case 'source':   return `<span class="expense-entry-source">${escHtml(e.source || '')}</span>`;
+    case 'amount':   return `<span class="expense-entry-amount">${escHtml(fmtAmount(e.amount))}</span>`;
+    default: return '';
+  }
+}
+
 function renderExpensesList() {
   const area = document.getElementById('expenses-list-area');
   if (!area) return;
-  const filtered = activeExpenseCat ? expenses.filter(e => e.category === activeExpenseCat) : expenses;
+  let filtered = activeExpenseCat ? expenses.filter(e => e.category === activeExpenseCat) : expenses;
+
+  filtered = [...filtered].sort((a, b) => {
+    let av = a[expenseSortCol] ?? '', bv = b[expenseSortCol] ?? '';
+    if (expenseSortCol === 'amount') { av = parseFloat(av) || 0; bv = parseFloat(bv) || 0; }
+    else { av = String(av).toLowerCase(); bv = String(bv).toLowerCase(); }
+    if (av < bv) return expenseSortDir === 'asc' ? -1 : 1;
+    if (av > bv) return expenseSortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
   const total = filtered.reduce((s, e) => s + e.amount, 0);
+
+  const headerRow = `<div class="expense-header-row">
+    ${expenseColOrder.map(key => {
+      const isActive = key === expenseSortCol;
+      const arrow = isActive ? (expenseSortDir === 'asc' ? '↑' : '↓') : '';
+      return `<span class="exp-hdr${isActive ? ' active' : ''}" data-col="${key}" draggable="true">${EXPENSE_COL_DEFS[key].label}${arrow ? ` <span class="sort-arrow">${arrow}</span>` : ''}</span>`;
+    }).join('')}
+  </div>`;
+
   area.innerHTML = `
     <div class="expense-list-header">
       <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
@@ -592,25 +645,68 @@ function renderExpensesList() {
         <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
       </span>
     </div>
-    ${filtered.length ? `<div class="expense-entries">
-      ${filtered.map(e => `
-        <div class="expense-entry" data-id="${e.id}">
-          <span class="expense-entry-date">${escHtml(e.date)}</span>
-          ${e.category ? `<span class="expense-entry-cat">${escHtml(e.category)}</span>` : '<span class="expense-entry-cat-empty"></span>'}
-          <span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>
-          <span class="expense-entry-note">${escHtml(e.note || '')}</span>
-          ${e.source ? `<span class="expense-entry-source">${escHtml(e.source)}</span>` : ''}
-          <span class="expense-entry-amount">${escHtml(fmtAmount(e.amount))}</span>
-        </div>
-      `).join('')}
-    </div>` : `<div class="expense-list-empty">No expenses yet.</div>`}
+    ${filtered.length ? `
+      ${headerRow}
+      <div class="expense-entries">
+        ${filtered.map(e => `
+          <div class="expense-entry" data-id="${e.id}">
+            ${expenseColOrder.map(key => expenseEntryCell(e, key)).join('')}
+          </div>
+        `).join('')}
+      </div>` : `<div class="expense-list-empty">No expenses yet.</div>`}
   `;
+
+  updateExpenseGrid();
+
   area.querySelectorAll('.expense-entry').forEach(el => {
     el.addEventListener('click', () => {
       const exp = expenses.find(e => e.id === el.dataset.id);
       if (exp) openExpenseModal(exp);
     });
   });
+
+  area.querySelectorAll('.exp-hdr').forEach(el => {
+    // Click to sort
+    el.addEventListener('click', () => {
+      const col = el.dataset.col;
+      if (expenseSortCol === col) expenseSortDir = expenseSortDir === 'asc' ? 'desc' : 'asc';
+      else { expenseSortCol = col; expenseSortDir = col === 'amount' ? 'desc' : 'asc'; }
+      renderExpensesList();
+    });
+    // Drag to reorder
+    el.addEventListener('dragstart', e => {
+      expenseDragCol = el.dataset.col;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => el.classList.add('exp-hdr-dragging'), 0);
+    });
+    el.addEventListener('dragend', () => {
+      el.classList.remove('exp-hdr-dragging', 'exp-hdr-drop-left', 'exp-hdr-drop-right');
+      expenseDragCol = null;
+    });
+    el.addEventListener('dragover', e => {
+      if (!expenseDragCol || expenseDragCol === el.dataset.col) return;
+      e.preventDefault();
+      const mid = el.getBoundingClientRect().left + el.offsetWidth / 2;
+      el.classList.toggle('exp-hdr-drop-left',  e.clientX < mid);
+      el.classList.toggle('exp-hdr-drop-right', e.clientX >= mid);
+    });
+    el.addEventListener('dragleave', () => el.classList.remove('exp-hdr-drop-left', 'exp-hdr-drop-right'));
+    el.addEventListener('drop', e => {
+      e.preventDefault();
+      const toKey = el.dataset.col;
+      el.classList.remove('exp-hdr-drop-left', 'exp-hdr-drop-right');
+      if (!expenseDragCol || expenseDragCol === toKey) return;
+      const insertBefore = e.clientX < el.getBoundingClientRect().left + el.offsetWidth / 2;
+      const fromIdx = expenseColOrder.indexOf(expenseDragCol);
+      expenseColOrder.splice(fromIdx, 1);
+      const toIdx = expenseColOrder.indexOf(toKey);
+      expenseColOrder.splice(insertBefore ? toIdx : toIdx + 1, 0, expenseDragCol);
+      expenseDragCol = null;
+      localStorage.setItem('expense-col-order', JSON.stringify(expenseColOrder));
+      renderExpensesList();
+    });
+  });
+
   document.getElementById('expense-add-inline-btn')?.addEventListener('click', () => openExpenseModal());
 }
 
@@ -656,7 +752,7 @@ function openExpenseModal(expense = null) {
   const today = new Date().toISOString().slice(0, 10);
   const dateVal = expense?.date || today;
   document.getElementById('exp-date').value = dateVal;
-  dpInit(dateVal);
+  dpInit(dateVal); // sync picker view month
   document.getElementById('exp-amount').value = expense ? expense.amount : '';
   document.getElementById('exp-category').value = expense?.category || '';
   document.getElementById('exp-payee').value = expense?.payee || '';
@@ -682,7 +778,7 @@ async function saveExpense() {
   const source = document.getElementById('exp-source').value.trim();
   const frequency = document.getElementById('exp-frequency').value.trim();
   const note = document.getElementById('exp-note').value.trim();
-  if (!date) { toast('Date required'); return; }
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast('Date must be YYYY-MM-DD'); return; }
   if (isNaN(amount) || amount < 0) { toast('Valid amount required'); return; }
   const isEdit = !!currentExpenseId;
   if (category && !expenseCategories.find(c => c.name === category)) {

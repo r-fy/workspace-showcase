@@ -1,5 +1,5 @@
-const CACHE = 'workspace-v74';
-const SHELL = ['/', '/index.html', '/manifest.json', '/app.css?v=84', '/app.js?v=85', '/editor.bundle.js?v=52'];
+const CACHE = 'workspace-v76';
+const SHELL = ['/', '/index.html', '/manifest.json', '/app.css?v=86', '/app.js?v=87', '/editor.bundle.js?v=52'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
