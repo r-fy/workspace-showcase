@@ -523,11 +523,23 @@ header {
 .exp-hdr {
   font-size: 10px; color: #444; text-transform: uppercase; letter-spacing: 0.07em;
   cursor: pointer; user-select: none; white-space: nowrap; transition: color 0.12s;
+  position: relative; overflow: visible;
 }
 .exp-hdr:hover { color: #777; }
 .exp-hdr.active { color: #5fc83b; }
 .exp-hdr:last-child { text-align: right; }
 .sort-arrow { font-size: 9px; margin-left: 2px; }
+.exp-col-resize {
+  position: absolute; right: -4px; top: 0; width: 8px; height: 100%;
+  cursor: col-resize; z-index: 3;
+}
+.exp-col-resize::after {
+  content: ''; position: absolute; right: 3px; top: 20%; width: 2px; height: 60%;
+  background: transparent; border-radius: 1px; transition: background 0.15s;
+}
+.exp-hdr:hover .exp-col-resize::after,
+.exp-col-resize:hover::after { background: #333; }
+.exp-col-resize:active::after { background: #5fc83b; }
 .exp-hdr-dragging { opacity: 0.35; }
 .exp-hdr-drop-left  { border-left:  2px solid #5fc83b; padding-left:  4px; }
 .exp-hdr-drop-right { border-right: 2px solid #5fc83b; padding-right: 4px; }

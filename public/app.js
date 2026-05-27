@@ -609,7 +609,6 @@ let expenseColOrder = (() => {
     const s = localStorage.getItem('expense-col-order');
     if (!s) return [...EXPENSE_COL_DEFAULT];
     const saved = JSON.parse(s);
-    // inject any new columns not yet in saved order (insert before 'amount')
     for (const col of EXPENSE_COL_DEFAULT) {
       if (!saved.includes(col)) {
         const amtIdx = saved.indexOf('amount');
@@ -619,12 +618,25 @@ let expenseColOrder = (() => {
     return saved;
   } catch(e) { return [...EXPENSE_COL_DEFAULT]; }
 })();
+let expenseColWidths = (() => {
+  try { return JSON.parse(localStorage.getItem('expense-col-widths') || '{}'); } catch(e) { return {}; }
+})();
 let expenseDragCol = null;
+
+const COL_CELL_CLASS = {
+  date: 'expense-entry-date', category: 'expense-entry-cat', payee: 'expense-entry-payee',
+  note: 'expense-entry-note', source: 'expense-entry-source', frequency: 'expense-entry-frequency',
+  amount: 'expense-entry-amount',
+};
+
+function getColWidth(key) {
+  return expenseColWidths[key] != null ? `${expenseColWidths[key]}px` : EXPENSE_COL_DEFS[key].width;
+}
 
 function updateExpenseGrid() {
   const area = document.getElementById('expenses-list-area');
   if (!area) return;
-  area.style.setProperty('--exp-grid', expenseColOrder.map(k => EXPENSE_COL_DEFS[k].width).join(' '));
+  area.style.setProperty('--exp-grid', expenseColOrder.map(k => getColWidth(k)).join(' '));
 }
 
 function expenseEntryCell(e, key) {
@@ -660,7 +672,7 @@ function renderExpensesList() {
     ${expenseColOrder.map(key => {
       const isActive = key === expenseSortCol;
       const arrow = isActive ? (expenseSortDir === 'asc' ? '↑' : '↓') : '';
-      return `<span class="exp-hdr${isActive ? ' active' : ''}" data-col="${key}" draggable="true">${EXPENSE_COL_DEFS[key].label}${arrow ? ` <span class="sort-arrow">${arrow}</span>` : ''}</span>`;
+      return `<span class="exp-hdr${isActive ? ' active' : ''}" data-col="${key}" draggable="true">${EXPENSE_COL_DEFS[key].label}${arrow ? ` <span class="sort-arrow">${arrow}</span>` : ''}<span class="exp-col-resize" data-col="${key}"></span></span>`;
     }).join('')}
   </div>`;
 
@@ -736,6 +748,45 @@ function renderExpensesList() {
   });
 
   document.getElementById('expense-add-inline-btn')?.addEventListener('click', () => openExpenseModal());
+
+  area.querySelectorAll('.exp-col-resize').forEach(handle => {
+    handle.addEventListener('dragstart', e => e.preventDefault());
+    handle.addEventListener('mousedown', e => {
+      e.stopPropagation();
+      e.preventDefault();
+      const col = handle.dataset.col;
+      const startWidth = handle.parentElement.getBoundingClientRect().width;
+      const startX = e.clientX;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      const onMove = ev => {
+        expenseColWidths[col] = Math.max(40, Math.round(startWidth + ev.clientX - startX));
+        updateExpenseGrid();
+      };
+      const onUp = () => {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        localStorage.setItem('expense-col-widths', JSON.stringify(expenseColWidths));
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    handle.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      const col = handle.dataset.col;
+      const cellClass = COL_CELL_CLASS[col];
+      if (!cellClass) return;
+      let maxW = 0;
+      area.querySelectorAll('.' + cellClass).forEach(cell => { maxW = Math.max(maxW, cell.scrollWidth); });
+      const labelW = handle.parentElement.querySelector(':not(.exp-col-resize)')?.scrollWidth || 0;
+      maxW = Math.max(maxW, labelW + 16);
+      expenseColWidths[col] = maxW + 24;
+      updateExpenseGrid();
+      localStorage.setItem('expense-col-widths', JSON.stringify(expenseColWidths));
+    });
+  });
 
   area.querySelectorAll('.expense-entry-del').forEach(btn => {
     btn.addEventListener('click', async e => {
