@@ -1450,6 +1450,24 @@ async function renameTagGlobally(oldName, newName) {
   });
 }
 
+function allTagNames() {
+  const all = new Set();
+  notes.forEach(n => { const f = notesFullCache[n.id] || n; noteTags(f).forEach(t => all.add(t)); });
+  return [...all].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+function addTagToNote(val) {
+  val = (val || '').replace(/,/g, '').trim();
+  if (!val) return false;
+  const n = notesFullCache[currentNoteId];
+  if (!n) return false;
+  const tags = noteTags(n);
+  if (tags.includes(val)) return false;
+  n.tags = [...tags, val].join(',');
+  renderTagEditor(); saveNoteDebounced(); renderTagsBar(); renderNotesList();
+  return true;
+}
+
 function renderTagEditor() {
   const el = document.getElementById('tag-editor');
   if (!el || !currentNoteId) return;
@@ -1458,7 +1476,7 @@ function renderTagEditor() {
   el.innerHTML = tags.map(t => {
     const c = tagColor(t);
     return `<span class="note-tag editable" style="--tag-c:${c}"><span class="tag-color-dot" data-tag="${escHtml(t)}" style="background:${c}" title="Change color"></span><span class="tag-name" data-tag="${escHtml(t)}" title="Double-click to rename">${escHtml(t)}</span><button class="tag-remove-btn" data-tag="${escHtml(t)}">×</button></span>`;
-  }).join('') + `<input class="tag-input" id="tag-input" placeholder="+ tag" autocomplete="off">`;
+  }).join('') + `<span class="tag-add-wrap" id="tag-add-wrap"><input class="tag-input" id="tag-input" placeholder="tag" autocomplete="off"><button class="tag-add-btn" id="tag-add-btn" title="Pick an existing tag">+</button><div class="tag-dropdown" id="tag-dropdown" hidden></div></span>`;
   el.querySelectorAll('.tag-color-dot').forEach(dot => {
     dot.addEventListener('click', () => {
       const inp = document.createElement('input');
@@ -1497,20 +1515,49 @@ function renderTagEditor() {
       renderTagEditor(); saveNoteDebounced(); renderTagsBar(); renderNotesList();
     });
   });
-  document.getElementById('tag-input')?.addEventListener('keydown', e => {
+  const input = document.getElementById('tag-input');
+  const dropdown = document.getElementById('tag-dropdown');
+  const addBtn = document.getElementById('tag-add-btn');
+
+  // Build/refresh the dropdown of existing tags (filtered by what's typed, excluding ones already on the note).
+  const renderDropdown = () => {
+    if (!dropdown) return;
+    const applied = noteTags(notesFullCache[currentNoteId] || {});
+    const q = (input?.value || '').trim().toLowerCase();
+    const opts = allTagNames().filter(t => !applied.includes(t) && t.toLowerCase().includes(q));
+    if (!opts.length) {
+      dropdown.innerHTML = `<div class="tag-dropdown-empty">${q ? 'No matching tags' : 'No other tags yet'}</div>`;
+      return;
+    }
+    dropdown.innerHTML = opts.map(t =>
+      `<div class="tag-dropdown-item" data-tag="${escHtml(t)}"><span class="tag-color-dot" style="background:${tagColor(t)}"></span>${escHtml(t)}</div>`
+    ).join('');
+    dropdown.querySelectorAll('.tag-dropdown-item').forEach(item => {
+      item.addEventListener('mousedown', e => {  // mousedown beats the input blur
+        e.preventDefault();
+        addTagToNote(item.dataset.tag);
+      });
+    });
+  };
+  const openDropdown = () => { if (dropdown) { renderDropdown(); dropdown.hidden = false; } };
+  const closeDropdown = () => { if (dropdown) dropdown.hidden = true; };
+
+  addBtn?.addEventListener('click', e => {
+    e.stopPropagation();
+    if (dropdown.hidden) { openDropdown(); input?.focus(); } else { closeDropdown(); }
+  });
+  input?.addEventListener('focus', openDropdown);
+  input?.addEventListener('input', () => { if (dropdown?.hidden) openDropdown(); else renderDropdown(); });
+  input?.addEventListener('keydown', e => {
     if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault();
-      const val = e.target.value.replace(/,/g, '').trim();
-      if (!val) return;
-      const n = notesFullCache[currentNoteId];
-      if (!n) return;
-      const tags = noteTags(n);
-      if (!tags.includes(val)) {
-        n.tags = [...tags, val].join(',');
-        renderTagEditor(); saveNoteDebounced(); renderTagsBar(); renderNotesList();
-      } else { e.target.value = ''; }
+      if (addTagToNote(e.target.value)) return;   // re-renders the whole editor
+      e.target.value = '';                         // duplicate/empty: just clear
+    } else if (e.key === 'Escape') {
+      closeDropdown();
     }
   });
+  input?.addEventListener('blur', () => setTimeout(closeDropdown, 120));
 }
 
 function renderEditor(note) {
