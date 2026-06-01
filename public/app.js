@@ -1519,12 +1519,23 @@ function renderTagEditor() {
   const dropdown = document.getElementById('tag-dropdown');
   const addBtn = document.getElementById('tag-add-btn');
 
+  let opts = [];        // current filtered tag names shown in the dropdown
+  let activeIndex = -1; // which dropdown row is keyboard-highlighted (-1 = none, focus on input)
+
+  const highlight = () => {
+    dropdown?.querySelectorAll('.tag-dropdown-item').forEach((item, i) => {
+      item.classList.toggle('active', i === activeIndex);
+    });
+    if (activeIndex >= 0) dropdown?.querySelectorAll('.tag-dropdown-item')[activeIndex]?.scrollIntoView({ block: 'nearest' });
+  };
+
   // Build/refresh the dropdown of existing tags (filtered by what's typed, excluding ones already on the note).
   const renderDropdown = () => {
     if (!dropdown) return;
     const applied = noteTags(notesFullCache[currentNoteId] || {});
     const q = (input?.value || '').trim().toLowerCase();
-    const opts = allTagNames().filter(t => !applied.includes(t) && t.toLowerCase().includes(q));
+    opts = allTagNames().filter(t => !applied.includes(t) && t.toLowerCase().includes(q));
+    activeIndex = -1;
     if (!opts.length) {
       dropdown.innerHTML = `<div class="tag-dropdown-empty">${q ? 'No matching tags' : 'No other tags yet'}</div>`;
       return;
@@ -1532,15 +1543,16 @@ function renderTagEditor() {
     dropdown.innerHTML = opts.map(t =>
       `<div class="tag-dropdown-item" data-tag="${escHtml(t)}"><span class="tag-color-dot" style="background:${tagColor(t)}"></span>${escHtml(t)}</div>`
     ).join('');
-    dropdown.querySelectorAll('.tag-dropdown-item').forEach(item => {
+    dropdown.querySelectorAll('.tag-dropdown-item').forEach((item, i) => {
       item.addEventListener('mousedown', e => {  // mousedown beats the input blur
         e.preventDefault();
         addTagToNote(item.dataset.tag);
       });
+      item.addEventListener('mousemove', () => { activeIndex = i; highlight(); });
     });
   };
   const openDropdown = () => { if (dropdown) { renderDropdown(); dropdown.hidden = false; } };
-  const closeDropdown = () => { if (dropdown) dropdown.hidden = true; };
+  const closeDropdown = () => { if (dropdown) { dropdown.hidden = true; activeIndex = -1; } };
 
   addBtn?.addEventListener('click', e => {
     e.stopPropagation();
@@ -1549,8 +1561,17 @@ function renderTagEditor() {
   input?.addEventListener('focus', openDropdown);
   input?.addEventListener('input', () => { if (dropdown?.hidden) openDropdown(); else renderDropdown(); });
   input?.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ',') {
+    const open = dropdown && !dropdown.hidden;
+    if (e.key === 'ArrowDown') {
       e.preventDefault();
+      if (!open) { openDropdown(); }
+      if (opts.length) { activeIndex = (activeIndex + 1) % opts.length; highlight(); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (open && opts.length) { activeIndex = (activeIndex <= 0 ? opts.length : activeIndex) - 1; highlight(); }
+    } else if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      if (open && activeIndex >= 0 && opts[activeIndex]) { addTagToNote(opts[activeIndex]); return; }
       if (addTagToNote(e.target.value)) return;   // re-renders the whole editor
       e.target.value = '';                         // duplicate/empty: just clear
     } else if (e.key === 'Escape') {

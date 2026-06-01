@@ -127,7 +127,7 @@ header {
   display: flex; align-items: center; gap: 6px; padding: 4px 7px; border-radius: 4px;
   font-size: 12px; color: #ccc; cursor: pointer; white-space: nowrap;
 }
-.tag-dropdown-item:hover { background: #2a2a2a; color: #8ce870; }
+.tag-dropdown-item:hover, .tag-dropdown-item.active { background: #2a2a2a; color: #8ce870; }
 .tag-dropdown-empty { padding: 5px 7px; font-size: 11px; color: #666; }
 
 /* ── Note editor ────────────────────────────────────────────── */
