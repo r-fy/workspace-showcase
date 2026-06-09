@@ -234,6 +234,90 @@ function scanFences(doc) {
 
 // ── ViewPlugin ─────────────────────────────────────────────────────
 
+// Decorate a single line. Throws nothing of its own, but the RangeSetBuilder it
+// writes to will throw if ranges ever arrive out of order — see decorateLine's
+// caller, which isolates that failure to the one offending line.
+function decorateLine(builder, line, fences, view) {
+  const { text, from: lf } = line;
+
+  // ── Fenced code block ─────────────────────────────
+  const fence = fences.get(lf);
+  if (fence?.type === 'open') {
+    builder.add(lf, lf, Decoration.line({ class: 'cm-md-fence-open' }));
+    return;
+  }
+  if (fence?.type === 'close') {
+    builder.add(lf, lf, Decoration.line({ class: 'cm-md-fence-close' }));
+    return;
+  }
+  if (fence?.type === 'body') {
+    builder.add(lf, lf, Decoration.line({ class: 'cm-md-code-line' }));
+    return;
+  }
+
+  // ── Heading ──────────────────────────────────────
+  const hm = text.match(/^(#{1,6}) (.*)/);
+  if (hm) {
+    const lvl = hm[1].length;
+    const plen = lvl + 1;
+    builder.add(lf, lf, Decoration.line({ class: `cm-md-h${lvl}` }));
+    builder.add(lf, lf + plen, Decoration.replace({}));
+    pushInline(builder, lf + plen, collectInline(hm[2]), view);
+    return;
+  }
+
+  // ── Horizontal rule ───────────────────────────────
+  if (text.trim().length >= 3 && /^[-*_]+$/.test(text.trim()) && line.to > lf) {
+    builder.add(lf, lf, Decoration.line({ class: "cm-md-hr" }));
+    builder.add(lf, line.to, Decoration.replace({ widget: new HrWidget() }));
+    return;
+  }
+
+  // ── Blockquote ────────────────────────────────────
+  const bqm = text.match(/^(> ?)(.*)/);
+  if (bqm) {
+    builder.add(lf, lf, Decoration.line({ class: "cm-md-bq" }));
+    builder.add(lf, lf + bqm[1].length, Decoration.replace({}));
+    pushInline(builder, lf + bqm[1].length, collectInline(bqm[2]), view);
+    return;
+  }
+
+  // ── Checkbox ─────────────────────────────────────
+  // [ ] = unchecked, [x] = checked. Bullet prefix optional. Trailing space optional.
+  const cbm = text.match(/^(\s*)(?:[-*] )\[([ xX])\] ?(.*)/);
+  if (cbm) {
+    const checked = cbm[2].toLowerCase() === "x";
+    const indent = cbm[1].length;
+    const widgetEnd = cbm[0].length - cbm[3].length;
+    // Strike-through for done items is applied as a whole-line decoration
+    // (added first, at the line start) rather than an inline mark spanning
+    // the remaining text. An inline mark would start at the same position as
+    // any inline decoration (link/bold/color) at the head of the content,
+    // and the two could be handed to RangeSetBuilder out of startSide order —
+    // which throws and wipes ALL decorations for the entire note.
+    if (checked)
+      builder.add(lf, lf, Decoration.line({ class: "cm-cb-done-line" }));
+    if (lf + indent < lf + widgetEnd) {
+      builder.add(lf + indent, lf + widgetEnd, Decoration.replace({
+        widget: new CheckboxWidget(checked, lf),
+      }));
+    }
+    pushInline(builder, lf + widgetEnd, collectInline(cbm[3]), view);
+    return;
+  }
+
+  // ── Regular line — inline only + hanging indent ──
+  // Wrapped text aligns with content start (Google Docs style)
+  const hm2 = text.match(/^(\s*)([-*]\s|\d+\.\s)?/);
+  const hangTotal = (hm2[1] || '').length + (hm2[2] || '').length;
+  if (hangTotal > 0) {
+    builder.add(lf, lf, Decoration.line({
+      attributes: { style: `padding-left:${hangTotal}ch;text-indent:-${hangTotal}ch` },
+    }));
+  }
+  pushInline(builder, lf, collectInline(text), view);
+}
+
 function buildDecos(view) {
   const builder = new RangeSetBuilder();
   const { doc } = view.state;
@@ -243,93 +327,16 @@ function buildDecos(view) {
     let pos = from;
     while (pos <= to) {
       const line = doc.lineAt(pos);
-      const { text, from: lf } = line;
-
-      // ── Fenced code block ─────────────────────────────
-      const fence = fences.get(lf);
-      if (fence?.type === 'open') {
-        builder.add(lf, lf, Decoration.line({ class: 'cm-md-fence-open' }));
-        pos = line.to + 1;
-        continue;
+      pos = line.to + 1; // advance first, so a thrown line can't loop forever
+      // Per-line safety net: if decorating one line ever throws (e.g. a future
+      // markdown combo feeds RangeSetBuilder ranges out of order), only that
+      // line falls back to plain text — every other line in the note keeps its
+      // formatting. A throw here used to take down the entire note.
+      try {
+        decorateLine(builder, line, fences, view);
+      } catch (e) {
+        console.warn("markdown decorate skipped line", line.number, e);
       }
-      if (fence?.type === 'close') {
-        builder.add(lf, lf, Decoration.line({ class: 'cm-md-fence-close' }));
-        pos = line.to + 1;
-        continue;
-      }
-      if (fence?.type === 'body') {
-        builder.add(lf, lf, Decoration.line({ class: 'cm-md-code-line' }));
-        pos = line.to + 1;
-        continue;
-      }
-
-      // ── Heading ──────────────────────────────────────
-      const hm = text.match(/^(#{1,6}) (.*)/);
-      if (hm) {
-        const lvl = hm[1].length;
-        const plen = lvl + 1;
-        builder.add(lf, lf, Decoration.line({ class: `cm-md-h${lvl}` }));
-        builder.add(lf, lf + plen, Decoration.replace({}));
-        pushInline(builder, lf + plen, collectInline(hm[2]), view);
-        pos = line.to + 1;
-        continue;
-      }
-
-      // ── Horizontal rule ───────────────────────────────
-      if (text.trim().length >= 3 && /^[-*_]+$/.test(text.trim()) && line.to > lf) {
-        builder.add(lf, lf, Decoration.line({ class: "cm-md-hr" }));
-        builder.add(lf, line.to, Decoration.replace({ widget: new HrWidget() }));
-        pos = line.to + 1;
-        continue;
-      }
-
-      // ── Blockquote ────────────────────────────────────
-      const bqm = text.match(/^(> ?)(.*)/);
-      if (bqm) {
-        builder.add(lf, lf, Decoration.line({ class: "cm-md-bq" }));
-        builder.add(lf, lf + bqm[1].length, Decoration.replace({}));
-        pushInline(builder, lf + bqm[1].length, collectInline(bqm[2]), view);
-        pos = line.to + 1;
-        continue;
-      }
-
-      // ── Checkbox ─────────────────────────────────────
-      // [ ] = unchecked, [x] = checked. Bullet prefix optional. Trailing space optional.
-      const cbm = text.match(/^(\s*)(?:[-*] )\[([ xX])\] ?(.*)/);
-      if (cbm) {
-        const checked = cbm[2].toLowerCase() === "x";
-        const indent = cbm[1].length;
-        const widgetEnd = cbm[0].length - cbm[3].length;
-        // Strike-through for done items is applied as a whole-line decoration
-        // (added first, at the line start) rather than an inline mark spanning
-        // the remaining text. An inline mark would start at the same position as
-        // any inline decoration (link/bold/color) at the head of the content,
-        // and the two could be handed to RangeSetBuilder out of startSide order —
-        // which throws and wipes ALL decorations for the entire note.
-        if (checked)
-          builder.add(lf, lf, Decoration.line({ class: "cm-cb-done-line" }));
-        if (lf + indent < lf + widgetEnd) {
-          builder.add(lf + indent, lf + widgetEnd, Decoration.replace({
-            widget: new CheckboxWidget(checked, lf),
-          }));
-        }
-        pushInline(builder, lf + widgetEnd, collectInline(cbm[3]), view);
-        pos = line.to + 1;
-        continue;
-      }
-
-      // ── Regular line — inline only + hanging indent ──
-      // Wrapped text aligns with content start (Google Docs style)
-      const hm2 = text.match(/^(\s*)([-*]\s|\d+\.\s)?/);
-      const hangTotal = (hm2[1] || '').length + (hm2[2] || '').length;
-      if (hangTotal > 0) {
-        builder.add(lf, lf, Decoration.line({
-          attributes: { style: `padding-left:${hangTotal}ch;text-indent:-${hangTotal}ch` },
-        }));
-      }
-      pushInline(builder, lf, collectInline(text), view);
-
-      pos = line.to + 1;
     }
   }
 
