@@ -300,13 +300,19 @@ function buildDecos(view) {
         const checked = cbm[2].toLowerCase() === "x";
         const indent = cbm[1].length;
         const widgetEnd = cbm[0].length - cbm[3].length;
+        // Strike-through for done items is applied as a whole-line decoration
+        // (added first, at the line start) rather than an inline mark spanning
+        // the remaining text. An inline mark would start at the same position as
+        // any inline decoration (link/bold/color) at the head of the content,
+        // and the two could be handed to RangeSetBuilder out of startSide order —
+        // which throws and wipes ALL decorations for the entire note.
+        if (checked)
+          builder.add(lf, lf, Decoration.line({ class: "cm-cb-done-line" }));
         if (lf + indent < lf + widgetEnd) {
           builder.add(lf + indent, lf + widgetEnd, Decoration.replace({
             widget: new CheckboxWidget(checked, lf),
           }));
         }
-        if (checked && lf + widgetEnd < line.to)
-          builder.add(lf + widgetEnd, line.to, Decoration.mark({ class: "cm-cb-done" }));
         pushInline(builder, lf + widgetEnd, collectInline(cbm[3]), view);
         pos = line.to + 1;
         continue;
@@ -418,7 +424,7 @@ const editorTheme = EditorView.theme(
     // Checkbox
     ".cm-cb-wrap": { display: "inline-block", paddingRight: "10px", lineHeight: "1", verticalAlign: "middle" },
     ".cm-cb": { cursor: "pointer", verticalAlign: "middle" },
-    ".cm-cb-done": { textDecoration: "line-through", color: "#666" },
+    ".cm-cb-done-line": { textDecoration: "line-through", color: "#666" },
     // Scrollbar
     ".cm-scroller::-webkit-scrollbar": { width: "6px" },
     ".cm-scroller::-webkit-scrollbar-thumb": { background: "#555", borderRadius: "3px" },
