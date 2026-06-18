@@ -403,7 +403,7 @@ function scanTables(doc, fences) {
 // Decorate a single line. Throws nothing of its own, but the RangeSetBuilder it
 // writes to will throw if ranges ever arrive out of order — see decorateLine's
 // caller, which isolates that failure to the one offending line.
-function decorateLine(builder, line, fences, view) {
+function decorateLine(builder, line, fences, view, numWidths) {
   const { text, from: lf } = line;
 
   // ── Fenced code block ─────────────────────────────
@@ -473,21 +473,59 @@ function decorateLine(builder, line, fences, view) {
   }
 
   // ── Regular line — inline only + hanging indent ──
-  // Wrapped text aligns with content start (Google Docs style)
+  // Wrapped text aligns with content start (Google Docs style). For numbered
+  // items, pad the first line by the run's widest number minus this number, so
+  // shorter numbers right-align and every item's text shares one column.
   const hm2 = text.match(/^(\s*)([-*]\s|\d+\.\s)?/);
   const hangTotal = (hm2[1] || '').length + (hm2[2] || '').length;
   if (hangTotal > 0) {
+    let pad = hangTotal;
+    const numM = text.match(/^(\s*)(\d+)\.\s/);
+    if (numM && numWidths && numWidths.has(lf)) {
+      pad = hangTotal + (numWidths.get(lf) - numM[2].length); // extra = D - d
+    }
     builder.add(lf, lf, Decoration.line({
-      attributes: { style: `padding-left:${hangTotal}ch;text-indent:-${hangTotal}ch` },
+      attributes: { style: `padding-left:${pad}ch;text-indent:-${hangTotal}ch` },
     }));
   }
   pushInline(builder, lf, collectInline(text), view);
+}
+
+// For each numbered-list item, the widest number (digit count) in its run of
+// consecutive same-indent items. Lets shorter numbers be right-aligned so every
+// item's text starts in the same column (e.g. "9." and "10." line up) instead
+// of a two-digit number shoving its text and wrapped lines a column right.
+function numberedListWidths(doc) {
+  const map = new Map(); // line.from -> max digit count in its run
+  let run = [], runIndent = null;
+  const flush = () => {
+    if (run.length) {
+      const D = Math.max(...run.map((r) => r.digits));
+      for (const r of run) map.set(r.from, D);
+    }
+    run = []; runIndent = null;
+  };
+  for (let i = 1; i <= doc.lines; i++) {
+    const line = doc.line(i);
+    const m = line.text.match(/^(\s*)(\d+)\.\s/);
+    if (m) {
+      const indent = m[1].length;
+      if (runIndent !== null && indent !== runIndent) flush();
+      runIndent = indent;
+      run.push({ from: line.from, digits: m[2].length });
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return map;
 }
 
 function buildDecos(view) {
   const builder = new RangeSetBuilder();
   const { doc } = view.state;
   const fences = scanFences(doc);
+  const numWidths = numberedListWidths(doc);
 
   // Skip lines belonging to a collapsed table — those are rendered as a grid
   // widget by `tableField` (a StateField, because block-level decorations that
@@ -511,7 +549,7 @@ function buildDecos(view) {
       // line falls back to plain text — every other line in the note keeps its
       // formatting. A throw here used to take down the entire note.
       try {
-        decorateLine(builder, line, fences, view);
+        decorateLine(builder, line, fences, view, numWidths);
       } catch (e) {
         console.warn("markdown decorate skipped line", line.number, e);
       }
