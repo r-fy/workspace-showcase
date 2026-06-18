@@ -621,7 +621,7 @@ const editorTheme = EditorView.theme(
     // Tables
     ".cm-table-wrap": { margin: "10px 0", overflowX: "auto", cursor: "pointer", borderRadius: "5px", border: "1px solid #262626" },
     ".cm-table-widget": { borderCollapse: "collapse", width: "100%", fontFamily: "IBM Plex Mono, monospace", fontSize: "13px" },
-    ".cm-table-widget th, .cm-table-widget td": { borderBottom: "1px solid #1e1e1e", borderRight: "1px solid #1e1e1e", padding: "8px 16px", textAlign: "left", whiteSpace: "nowrap" },
+    ".cm-table-widget th, .cm-table-widget td": { borderBottom: "1px solid #1e1e1e", borderRight: "1px solid #1e1e1e", padding: "8px 16px", textAlign: "left", verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" },
     ".cm-table-widget th:last-child, .cm-table-widget td:last-child": { borderRight: "none" },
     ".cm-table-widget tbody tr:last-child td": { borderBottom: "none" },
     ".cm-table-widget thead tr": { background: "#161616", color: "#cfcfcf", fontWeight: "700" },
