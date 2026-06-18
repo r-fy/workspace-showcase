@@ -5,7 +5,7 @@ import {
   WidgetType,
   keymap,
 } from "@codemirror/view";
-import { EditorState, RangeSetBuilder } from "@codemirror/state";
+import { EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
 import { history, defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { search, searchKeymap, openSearchPanel } from "@codemirror/search";
 
@@ -455,15 +455,12 @@ function buildDecos(view) {
   const { doc } = view.state;
   const fences = scanFences(doc);
 
-  // Collapse each table whose block the cursor/selection does NOT touch into a
-  // rendered widget. When the cursor is inside, we leave the lines raw so the
-  // pipes can be edited — same "markers hide when not focused" idea as inline.
-  const sel = view.state.selection;
-  const collapsedTable = new Map();
-  for (const b of scanTables(doc, fences)) {
-    const editing = sel.ranges.some((r) => r.from <= b.to && r.to >= b.from);
-    if (!editing) collapsedTable.set(b.from, b);
-  }
+  // Skip lines belonging to a collapsed table — those are rendered as a grid
+  // widget by `tableField` (a StateField, because block-level decorations that
+  // change document height can't come from a view plugin). When the cursor is
+  // inside a table, it isn't collapsed, so we fall through and decorate its
+  // lines normally (raw pipes) for editing.
+  const collapsedTable = collapsedTables(view.state);
 
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
@@ -471,13 +468,7 @@ function buildDecos(view) {
       const line = doc.lineAt(pos);
       const block = collapsedTable.get(line.from);
       if (block) {
-        // Replace the whole multi-line block with one table widget.
-        try {
-          builder.add(block.from, block.to, Decoration.replace({ widget: new TableWidget(block), block: true }));
-        } catch (e) {
-          console.warn("table render skipped", e);
-        }
-        pos = block.to + 1;
+        pos = block.to + 1; // handled by tableField; don't decorate here
         continue;
       }
       pos = line.to + 1; // advance first, so a thrown line can't loop forever
@@ -495,6 +486,45 @@ function buildDecos(view) {
 
   return builder.finish();
 }
+
+// Map of header-line `from` → table block, for every table the cursor/selection
+// does NOT touch (those get collapsed into a grid). Shared by the view plugin
+// (which skips these lines) and the table StateField (which draws the grid), so
+// the two always agree on which tables are collapsed.
+function collapsedTables(state) {
+  const fences = scanFences(state.doc);
+  const sel = state.selection;
+  const map = new Map();
+  for (const b of scanTables(state.doc, fences)) {
+    const editing = sel.ranges.some((r) => r.from <= b.to && r.to >= b.from);
+    if (!editing) map.set(b.from, b);
+  }
+  return map;
+}
+
+// Block-level (height-changing) decorations must be served from a StateField,
+// not a view plugin — CM6 measures document height before running plugins, so
+// plugin-provided block decorations are silently ignored.
+function buildTableDecos(state) {
+  const ranges = [];
+  for (const b of collapsedTables(state).values()) {
+    ranges.push(
+      Decoration.replace({ widget: new TableWidget(b), block: true }).range(b.from, b.to)
+    );
+  }
+  return Decoration.set(ranges, true);
+}
+
+const tableField = StateField.define({
+  create: (state) => buildTableDecos(state),
+  update(value, tr) {
+    // Rebuild when the text changes (table content) or the selection moves
+    // (cursor entering/leaving a table flips it between grid and raw pipes).
+    if (tr.docChanged || tr.selection) return buildTableDecos(tr.state);
+    return value;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 const mdPlugin = ViewPlugin.fromClass(
   class {
@@ -745,6 +775,7 @@ window.WEditor = {
       ]),
       EditorView.lineWrapping,
       search({ top: true }),
+      tableField,
       mdPlugin,
       editorTheme,
       // Android IME doesn't fire keydown reliably — intercept input events instead
