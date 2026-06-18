@@ -161,39 +161,50 @@ class TableWidget extends WidgetType {
   constructor(block) {
     super();
     this.block = block;
-    // Identity for CM6's diff — only rebuild the DOM when the content changes.
-    this.key = JSON.stringify([block.header, block.align, block.rows]);
+    // Identity for CM6's diff — rebuild the DOM when content OR positions change
+    // (positions back the click-to-edit mapping, so stale ones must not survive).
+    this.key = JSON.stringify([
+      block.header, block.align, block.rows,
+      block.from, block.headerPos, block.rowFroms, block.rowPos,
+    ]);
   }
   eq(other) { return this.key === other.key; }
   toDOM() {
+    const b = this.block;
     const wrap = document.createElement("div");
     wrap.className = "cm-table-wrap";
-    wrap.dataset.from = String(this.block.from);
+    wrap.dataset.from = String(b.from);
     const table = document.createElement("table");
     table.className = "cm-table-widget";
 
     const thead = document.createElement("thead");
     const htr = document.createElement("tr");
-    this.block.header.forEach((c, i) => {
+    htr.dataset.pos = String(b.from);
+    b.header.forEach((c, i) => {
       const th = document.createElement("th");
       th.innerHTML = cellHtml(c);
-      if (this.block.align[i]) th.style.textAlign = this.block.align[i];
+      if (b.align[i]) th.style.textAlign = b.align[i];
+      if (b.headerPos[i] != null) th.dataset.pos = String(b.from + b.headerPos[i]);
       htr.appendChild(th);
     });
     thead.appendChild(htr);
     table.appendChild(thead);
 
     const tbody = document.createElement("tbody");
-    for (const row of this.block.rows) {
+    b.rows.forEach((row, k) => {
       const tr = document.createElement("tr");
-      for (let i = 0; i < this.block.header.length; i++) {
+      const rowFrom = b.rowFroms[k];
+      tr.dataset.pos = String(rowFrom);
+      for (let i = 0; i < b.header.length; i++) {
         const td = document.createElement("td");
         td.innerHTML = cellHtml(row[i] || "");
-        if (this.block.align[i]) td.style.textAlign = this.block.align[i];
+        if (b.align[i]) td.style.textAlign = b.align[i];
+        const cp = b.rowPos[k] ? b.rowPos[k][i] : null;
+        if (cp != null) td.dataset.pos = String(rowFrom + cp);
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
-    }
+    });
     table.appendChild(tbody);
     wrap.appendChild(table);
     return wrap;
@@ -309,21 +320,29 @@ function scanFences(doc) {
 // A markdown table = a header row of `| a | b |`, a separator row of
 // `| --- | :--: |` directly below it, then zero+ body rows. We collapse the
 // whole block into one widget when the cursor is outside it.
-function splitRow(row) {
-  const cells = [];
-  let cur = "";
-  const s = row.trim();
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (ch === "\\" && s[i + 1] === "|") { cur += "|"; i++; continue; }
-    if (ch === "|") { cells.push(cur); cur = ""; continue; }
+// Split a raw row into cells, keeping each cell's content offset *within the
+// raw line text* (`pos`) so a click on a rendered cell can map back to the
+// exact spot in the source for editing. Offsets are relative to the line start.
+function parseRow(raw) {
+  const segs = [];
+  let cur = "", start = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "\\" && raw[i + 1] === "|") { cur += "|"; i++; continue; }
+    if (ch === "|") { segs.push({ text: cur, start }); cur = ""; start = i + 1; continue; }
     cur += ch;
   }
-  cells.push(cur);
+  segs.push({ text: cur, start });
   // Drop the empty cells produced by leading/trailing outer pipes.
-  if (cells.length && cells[0].trim() === "") cells.shift();
-  if (cells.length && cells[cells.length - 1].trim() === "") cells.pop();
-  return cells.map((c) => c.trim());
+  if (segs.length && segs[0].text.trim() === "") segs.shift();
+  if (segs.length && segs[segs.length - 1].text.trim() === "") segs.pop();
+  return segs.map((s) => {
+    const lead = s.text.length - s.text.replace(/^\s+/, "").length;
+    return { text: s.text.trim(), pos: s.start + lead };
+  });
+}
+function splitRow(row) {
+  return parseRow(row).map((c) => c.text);
 }
 function isSepRow(text) {
   if (!text.includes("|")) return false;
@@ -344,18 +363,26 @@ function scanTables(doc, fences) {
     const h = doc.line(i);
     const sep = doc.line(i + 1);
     if (!fences.get(h.from) && h.text.includes("|") && isSepRow(sep.text)) {
-      const header = splitRow(h.text);
+      const headerCells = parseRow(h.text);
       const align = splitRow(sep.text).map(alignOf);
-      const rows = [];
+      const rows = [], rowFroms = [], rowPos = [];
       let j = i + 2;
       while (j <= doc.lines) {
         const r = doc.line(j);
         if (fences.get(r.from) || !r.text.includes("|") || r.text.trim() === "") break;
-        rows.push(splitRow(r.text));
+        const cells = parseRow(r.text);
+        rows.push(cells.map((c) => c.text));
+        rowPos.push(cells.map((c) => c.pos));
+        rowFroms.push(r.from);
         j++;
       }
       const last = doc.line(j - 1);
-      blocks.push({ from: h.from, to: last.to, header, align, rows });
+      blocks.push({
+        from: h.from, to: last.to, align,
+        header: headerCells.map((c) => c.text),
+        headerPos: headerCells.map((c) => c.pos),
+        rows, rowFroms, rowPos,
+      });
       i = j;
     } else {
       i++;
@@ -791,8 +818,21 @@ window.WEditor = {
           const wrap = event.target.closest && event.target.closest('.cm-table-wrap');
           if (wrap) {
             if (event.target.closest('a')) return false;
-            const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-            const anchor = pos != null ? pos : parseInt(wrap.dataset.from || '0', 10);
+            // Land the cursor on the cell/row that was actually clicked. A block
+            // widget has no internal layout CM6 can map a click into, so without
+            // this the cursor would snap to the top or bottom of the whole table.
+            const cell = event.target.closest('td, th');
+            const row = event.target.closest('tr');
+            let anchor;
+            if (cell && cell.dataset.pos != null) anchor = parseInt(cell.dataset.pos, 10);
+            else if (row && row.dataset.pos != null) anchor = parseInt(row.dataset.pos, 10);
+            else {
+              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+              anchor = pos != null ? pos : parseInt(wrap.dataset.from || '0', 10);
+            }
+            // Clamp defensively — positions are from the last render and the doc
+            // may have shifted since (it shouldn't, but never seek out of range).
+            anchor = Math.max(0, Math.min(anchor, view.state.doc.length));
             event.preventDefault();
             view.dispatch({ selection: { anchor } });
             view.focus();
