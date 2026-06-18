@@ -507,15 +507,24 @@ function numberedListWidths(doc) {
   };
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
-    const m = line.text.match(/^(\s*)(\d+)\.\s/);
-    if (m) {
-      const indent = m[1].length;
-      if (runIndent !== null && indent !== runIndent) flush();
-      runIndent = indent;
+    const text = line.text;
+    const m = text.match(/^(\s*)(\d+)\.\s/);
+    // A numbered item that starts or continues a run at this indent.
+    if (m && (runIndent === null || m[1].length === runIndent)) {
+      runIndent = m[1].length;
       run.push({ from: line.from, digits: m[2].length });
-    } else {
-      flush();
+      continue;
     }
+    // Sub-content of the current item — a blank line or a more-indented line
+    // (nested bullets, wrapped paragraphs) — does NOT end the run; the list
+    // keeps going at the same level after it.
+    if (runIndent !== null) {
+      if (text.trim() === "") continue;
+      if (text.match(/^(\s*)/)[1].length > runIndent) continue;
+    }
+    // Anything else (a shallower/equal non-numbered line) ends the run.
+    flush();
+    if (m) { runIndent = m[1].length; run.push({ from: line.from, digits: m[2].length }); }
   }
   flush();
   return map;
