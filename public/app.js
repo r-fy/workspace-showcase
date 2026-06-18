@@ -1589,6 +1589,7 @@ function renderEditor(note) {
     <div class="editor-toolbar">
       <input class="note-title-input" id="editor-title" value="${escHtml(note.title)}" placeholder="Untitled">
       <div class="tag-editor" id="tag-editor"></div>
+      <button class="ins-table-btn" id="ins-table-btn" title="Insert table">⊞ Table</button>
       <button class="share-note-btn" id="share-note-btn">↓ Share</button>
       <button class="del-note-btn" id="del-note-btn">Delete</button>
     </div>
@@ -1612,6 +1613,7 @@ function renderEditor(note) {
     renderToc();
   });
   renderTagEditor();
+  document.getElementById('ins-table-btn')?.addEventListener('click', () => WEditor.insertTable(noteEditor));
   document.getElementById('share-note-btn').addEventListener('click', shareCurrentNote);
   document.getElementById('editor-title').addEventListener('input', saveNoteDebounced);
   document.getElementById('del-note-btn').addEventListener('click', async () => {

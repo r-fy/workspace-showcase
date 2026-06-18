@@ -130,6 +130,79 @@ class HrWidget extends WidgetType {
   }
 }
 
+// ── Table cell inline rendering ────────────────────────────────────
+// Render a single cell's markdown to safe HTML. Escape first, then apply a
+// small set of inline rules on the escaped string so user text can never
+// inject markup. Mirrors the inline grammar used elsewhere (collectInline)
+// but emits HTML instead of CM6 decorations, since a widget needs real DOM.
+function escCellHtml(s) {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function cellHtml(raw) {
+  let s = escCellHtml(raw);
+  // Inline code first (nothing parsed inside)
+  s = s.replace(/`([^`]+)`/g, (_m, t) => `<code class="cm-ic">${t}</code>`);
+  // Images ![alt](url) before links
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt, url) => `<img src="${url}" alt="${alt}" style="max-width:120px;border-radius:3px;vertical-align:middle">`);
+  // Links [text](url)
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, txt, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer" class="cm-link">${txt}</a>`);
+  // Colored text {#hex words}
+  s = s.replace(/\{#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\s+([^}]+)\}/g, (_m, hex, t) => `<span style="color:#${hex}">${t}</span>`);
+  // Bold+italic, bold, italic, strike
+  s = s.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  s = s.replace(/(^|[^\w])_([^_]+)_(?=[^\w]|$)/g, "$1<em>$2</em>");
+  s = s.replace(/~~([^~]+)~~/g, "<span style='text-decoration:line-through;color:#888'>$1</span>");
+  return s;
+}
+
+class TableWidget extends WidgetType {
+  constructor(block) {
+    super();
+    this.block = block;
+    // Identity for CM6's diff — only rebuild the DOM when the content changes.
+    this.key = JSON.stringify([block.header, block.align, block.rows]);
+  }
+  eq(other) { return this.key === other.key; }
+  toDOM() {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-table-wrap";
+    wrap.dataset.from = String(this.block.from);
+    const table = document.createElement("table");
+    table.className = "cm-table-widget";
+
+    const thead = document.createElement("thead");
+    const htr = document.createElement("tr");
+    this.block.header.forEach((c, i) => {
+      const th = document.createElement("th");
+      th.innerHTML = cellHtml(c);
+      if (this.block.align[i]) th.style.textAlign = this.block.align[i];
+      htr.appendChild(th);
+    });
+    thead.appendChild(htr);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const row of this.block.rows) {
+      const tr = document.createElement("tr");
+      for (let i = 0; i < this.block.header.length; i++) {
+        const td = document.createElement("td");
+        td.innerHTML = cellHtml(row[i] || "");
+        if (this.block.align[i]) td.style.textAlign = this.block.align[i];
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
+  }
+  // Let clicks through so the editor's mousedown handler can either open a
+  // link in a cell or drop the cursor into the block to edit the raw pipes.
+  ignoreEvent() { return false; }
+}
+
 // ── Inline decoration helpers ──────────────────────────────────────
 
 function noOverlap(arr, s, e) {
@@ -232,6 +305,65 @@ function scanFences(doc) {
   return map;
 }
 
+// ── Table block scanner ────────────────────────────────────────────
+// A markdown table = a header row of `| a | b |`, a separator row of
+// `| --- | :--: |` directly below it, then zero+ body rows. We collapse the
+// whole block into one widget when the cursor is outside it.
+function splitRow(row) {
+  const cells = [];
+  let cur = "";
+  const s = row.trim();
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "\\" && s[i + 1] === "|") { cur += "|"; i++; continue; }
+    if (ch === "|") { cells.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  cells.push(cur);
+  // Drop the empty cells produced by leading/trailing outer pipes.
+  if (cells.length && cells[0].trim() === "") cells.shift();
+  if (cells.length && cells[cells.length - 1].trim() === "") cells.pop();
+  return cells.map((c) => c.trim());
+}
+function isSepRow(text) {
+  if (!text.includes("|")) return false;
+  const cells = splitRow(text);
+  return cells.length > 0 && cells.every((c) => /^:?-{1,}:?$/.test(c));
+}
+function alignOf(cell) {
+  const l = cell.startsWith(":"), r = cell.endsWith(":");
+  if (l && r) return "center";
+  if (r) return "right";
+  if (l) return "left";
+  return "";
+}
+function scanTables(doc, fences) {
+  const blocks = [];
+  let i = 1;
+  while (i < doc.lines) {
+    const h = doc.line(i);
+    const sep = doc.line(i + 1);
+    if (!fences.get(h.from) && h.text.includes("|") && isSepRow(sep.text)) {
+      const header = splitRow(h.text);
+      const align = splitRow(sep.text).map(alignOf);
+      const rows = [];
+      let j = i + 2;
+      while (j <= doc.lines) {
+        const r = doc.line(j);
+        if (fences.get(r.from) || !r.text.includes("|") || r.text.trim() === "") break;
+        rows.push(splitRow(r.text));
+        j++;
+      }
+      const last = doc.line(j - 1);
+      blocks.push({ from: h.from, to: last.to, header, align, rows });
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return blocks;
+}
+
 // ── ViewPlugin ─────────────────────────────────────────────────────
 
 // Decorate a single line. Throws nothing of its own, but the RangeSetBuilder it
@@ -323,10 +455,31 @@ function buildDecos(view) {
   const { doc } = view.state;
   const fences = scanFences(doc);
 
+  // Collapse each table whose block the cursor/selection does NOT touch into a
+  // rendered widget. When the cursor is inside, we leave the lines raw so the
+  // pipes can be edited — same "markers hide when not focused" idea as inline.
+  const sel = view.state.selection;
+  const collapsedTable = new Map();
+  for (const b of scanTables(doc, fences)) {
+    const editing = sel.ranges.some((r) => r.from <= b.to && r.to >= b.from);
+    if (!editing) collapsedTable.set(b.from, b);
+  }
+
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
     while (pos <= to) {
       const line = doc.lineAt(pos);
+      const block = collapsedTable.get(line.from);
+      if (block) {
+        // Replace the whole multi-line block with one table widget.
+        try {
+          builder.add(block.from, block.to, Decoration.replace({ widget: new TableWidget(block), block: true }));
+        } catch (e) {
+          console.warn("table render skipped", e);
+        }
+        pos = block.to + 1;
+        continue;
+      }
       pos = line.to + 1; // advance first, so a thrown line can't loop forever
       // Per-line safety net: if decorating one line ever throws (e.g. a future
       // markdown combo feeds RangeSetBuilder ranges out of order), only that
@@ -436,12 +589,17 @@ const editorTheme = EditorView.theme(
     ".cm-scroller::-webkit-scrollbar": { width: "6px" },
     ".cm-scroller::-webkit-scrollbar-thumb": { background: "#555", borderRadius: "3px" },
     // Tables
-    ".cm-table-wrap": { margin: "6px 0", overflowX: "auto", cursor: "text", borderRadius: "3px" },
-    ".cm-table-wrap:hover": { outline: "1px solid #2a2a2a" },
-    ".cm-table-widget": { borderCollapse: "collapse", fontFamily: "IBM Plex Mono, monospace", fontSize: "13px" },
-    ".cm-table-widget th, .cm-table-widget td": { border: "1px solid #222", padding: "4px 12px" },
-    ".cm-table-widget thead tr": { background: "#181818", color: "#e0e0e0", fontWeight: "600" },
-    ".cm-table-widget tbody tr:hover": { background: "#131313" },
+    ".cm-table-wrap": { margin: "10px 0", overflowX: "auto", cursor: "pointer", borderRadius: "5px", border: "1px solid #262626" },
+    ".cm-table-widget": { borderCollapse: "collapse", width: "100%", fontFamily: "IBM Plex Mono, monospace", fontSize: "13px" },
+    ".cm-table-widget th, .cm-table-widget td": { borderBottom: "1px solid #1e1e1e", borderRight: "1px solid #1e1e1e", padding: "8px 16px", textAlign: "left", whiteSpace: "nowrap" },
+    ".cm-table-widget th:last-child, .cm-table-widget td:last-child": { borderRight: "none" },
+    ".cm-table-widget tbody tr:last-child td": { borderBottom: "none" },
+    ".cm-table-widget thead tr": { background: "#161616", color: "#cfcfcf", fontWeight: "700" },
+    ".cm-table-widget thead th": { borderBottom: "1px solid #2a2a2a" },
+    ".cm-table-widget tbody td": { color: "#c8c8c8" },
+    ".cm-table-widget tbody tr:hover": { background: "#121212" },
+    ".cm-table-widget a.cm-link": { color: "#e0b25a", textDecoration: "none" },
+    ".cm-table-widget a.cm-link:hover": { textDecoration: "underline" },
     // Search / replace panel
     ".cm-panels": { background: "#111", borderBottom: "1px solid #222", zIndex: "10" },
     ".cm-search": { padding: "7px 10px", display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" },
@@ -596,6 +754,19 @@ window.WEditor = {
       }),
       EditorView.domEventHandlers({
         mousedown(event, view) {
+          // Click inside a rendered table → drop the cursor into the block so
+          // it flips back to raw pipes for editing. Links inside cells are real
+          // <a> tags, so let those clicks fall through and open normally.
+          const wrap = event.target.closest && event.target.closest('.cm-table-wrap');
+          if (wrap) {
+            if (event.target.closest('a')) return false;
+            const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+            const anchor = pos != null ? pos : parseInt(wrap.dataset.from || '0', 10);
+            event.preventDefault();
+            view.dispatch({ selection: { anchor } });
+            view.focus();
+            return true;
+          }
           // Open links on click — the URL part is hidden by decoration so we
           // look up the raw document text around the click position.
           if (!event.target.classList.contains('cm-link')) return false;
@@ -649,6 +820,28 @@ window.WEditor = {
       state: EditorState.create({ doc, extensions: exts }),
       parent,
     });
+  },
+
+  /** Insert a starter markdown table at the cursor and focus the editor */
+  insertTable(view) {
+    if (!view) return;
+    const tmpl =
+      "| Column 1 | Column 2 | Column 3 |\n" +
+      "| --- | --- | --- |\n" +
+      "| Cell | Cell | Cell |\n" +
+      "| Cell | Cell | Cell |\n";
+    const { from } = view.state.selection.main;
+    const line = view.state.doc.lineAt(from);
+    // Drop it on its own line — after the current line if that line has text.
+    const onText = line.text.trim() !== "";
+    const at = onText ? line.to : line.from;
+    const insert = onText ? "\n" + tmpl : tmpl;
+    view.dispatch({
+      changes: { from: at, to: at, insert },
+      // Park the cursor just past the table so it renders immediately.
+      selection: { anchor: at + insert.length },
+    });
+    view.focus();
   },
 
   /** Read current text from a view */
