@@ -174,6 +174,12 @@ class TableWidget extends WidgetType {
     const wrap = document.createElement("div");
     wrap.className = "cm-table-wrap";
     wrap.dataset.from = String(b.from);
+    // Border/radius live on an inner box so the wrap's spacing can be *padding*
+    // (part of the widget's measured height) rather than margin — a margin
+    // leaves a dead gap between the block widget and the next line where the
+    // cursor snaps into the table and vertical motion skips the whole block.
+    const box = document.createElement("div");
+    box.className = "cm-table-widget-box";
     const table = document.createElement("table");
     table.className = "cm-table-widget";
 
@@ -206,7 +212,8 @@ class TableWidget extends WidgetType {
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
-    wrap.appendChild(table);
+    box.appendChild(table);
+    wrap.appendChild(box);
     return wrap;
   }
   // Let clicks through so the editor's mousedown handler can either open a
@@ -646,7 +653,8 @@ const editorTheme = EditorView.theme(
     ".cm-scroller::-webkit-scrollbar": { width: "6px" },
     ".cm-scroller::-webkit-scrollbar-thumb": { background: "#555", borderRadius: "3px" },
     // Tables
-    ".cm-table-wrap": { margin: "10px 0", overflowX: "auto", cursor: "pointer", borderRadius: "5px", border: "1px solid #262626" },
+    ".cm-table-wrap": { padding: "10px 0", overflowX: "auto", cursor: "pointer" },
+    ".cm-table-widget-box": { borderRadius: "5px", border: "1px solid #262626", overflow: "hidden" },
     ".cm-table-widget": { borderCollapse: "collapse", width: "100%", fontFamily: "IBM Plex Mono, monospace", fontSize: "13px" },
     ".cm-table-widget th, .cm-table-widget td": { borderBottom: "1px solid #1e1e1e", borderRight: "1px solid #1e1e1e", padding: "8px 16px", textAlign: "left", verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word" },
     ".cm-table-widget th:last-child, .cm-table-widget td:last-child": { borderRight: "none" },
@@ -727,6 +735,42 @@ function smartEnter(view) {
   return true;
 }
 
+// ── Arrow-key entry into a collapsed table ─────────────────────────
+// A collapsed table is one block widget, so CM6's default vertical motion
+// leaps over ALL its rows in a single press — you can never land on a row with
+// the keyboard, only by clicking. These handlers detect the cursor sitting
+// directly above/below a collapsed table and step it onto the adjacent table
+// line instead, which (since the cursor is now inside) expands the table to
+// raw text so you can keep moving row by row normally.
+function tableStepDown(view) {
+  const { state } = view;
+  const sel = state.selection.main;
+  if (!sel.empty) return false;
+  const line = state.doc.lineAt(sel.head);
+  if (line.number >= state.doc.lines) return false;
+  const next = state.doc.line(line.number + 1);
+  if (!collapsedTables(state).has(next.from)) return false;
+  const col = sel.head - line.from;
+  view.dispatch({ selection: { anchor: Math.min(next.from + col, next.to) }, scrollIntoView: true });
+  return true;
+}
+function tableStepUp(view) {
+  const { state } = view;
+  const sel = state.selection.main;
+  if (!sel.empty) return false;
+  const line = state.doc.lineAt(sel.head);
+  if (line.number <= 1) return false;
+  const prev = state.doc.line(line.number - 1);
+  let hit = false;
+  for (const b of collapsedTables(state).values()) {
+    if (state.doc.lineAt(b.to).number === prev.number) { hit = true; break; }
+  }
+  if (!hit) return false;
+  const col = sel.head - line.from;
+  view.dispatch({ selection: { anchor: Math.min(prev.from + col, prev.to) }, scrollIntoView: true });
+  return true;
+}
+
 // ── Public API ─────────────────────────────────────────────────────
 
 window.WEditor = {
@@ -777,6 +821,9 @@ window.WEditor = {
         { key: "Ctrl-h", run: openSearchPanel },
         ...searchKeymap,
         { key: "Enter", run: smartEnter },
+        // Let the keyboard step into a collapsed table instead of jumping over it
+        { key: "ArrowDown", run: tableStepDown },
+        { key: "ArrowUp", run: tableStepUp },
         // Atomic image delete — removes the entire ![...](url) span in one keystroke
         { key: "Backspace", run(view) {
           const { from, empty } = view.state.selection.main;
