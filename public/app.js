@@ -1590,6 +1590,10 @@ function renderEditor(note) {
       <input class="note-title-input" id="editor-title" value="${escHtml(note.title)}" placeholder="Untitled">
       <div class="tag-editor" id="tag-editor"></div>
       <button class="ins-table-btn" id="ins-table-btn" title="Insert table">⊞ Table</button>
+      <div class="color-btn-wrap">
+        <button class="color-note-btn" id="color-note-btn" title="Color selected text">🎨 Color</button>
+        <div class="color-palette" id="color-palette" hidden></div>
+      </div>
       <button class="share-note-btn" id="share-note-btn">↓ Share</button>
       <button class="del-note-btn" id="del-note-btn">Delete</button>
     </div>
@@ -1614,6 +1618,7 @@ function renderEditor(note) {
   });
   renderTagEditor();
   document.getElementById('ins-table-btn')?.addEventListener('click', () => WEditor.insertTable(noteEditor));
+  setupColorPicker();
   document.getElementById('share-note-btn').addEventListener('click', shareCurrentNote);
   document.getElementById('editor-title').addEventListener('input', saveNoteDebounced);
   document.getElementById('del-note-btn').addEventListener('click', async () => {
@@ -1644,6 +1649,37 @@ async function saveCurrentNote() {
   if (full) await idbPut('notes', { ...full, title, content, tags, updated_at: t });
   try { const saved = await apiCall('PUT', '/notes/'+currentNoteId, { title, content, tags }); await idbPut('notes', saved); }
   catch(e) {}
+}
+
+// Curated swatch palette for the editor's color button (hex without #).
+const NOTE_COLOR_SWATCHES = [
+  'f87171', 'fb923c', 'fbbf24', 'facc15', '8ce870', '5fc83b',
+  '34d399', '38bdf8', '60a5fa', 'a78bfa', 'f472b6', 'e5e5e5',
+];
+function setupColorPicker() {
+  const btn = document.getElementById('color-note-btn');
+  const palette = document.getElementById('color-palette');
+  if (!btn || !palette) return;
+  palette.innerHTML = NOTE_COLOR_SWATCHES.map(h =>
+    `<button class="color-swatch" data-hex="${h}" style="background:#${h}" title="#${h}"></button>`
+  ).join('') + `<label class="color-swatch-custom" title="Custom color"><input type="color" id="color-custom-input" value="#5fc83b">+</label>`;
+  const close = () => { palette.hidden = true; };
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    palette.hidden = !palette.hidden;
+  });
+  palette.addEventListener('click', e => e.stopPropagation());
+  palette.querySelectorAll('.color-swatch').forEach(sw => {
+    sw.addEventListener('click', () => {
+      WEditor.applyColor(noteEditor, sw.dataset.hex);
+      close();
+    });
+  });
+  palette.querySelector('#color-custom-input')?.addEventListener('input', e => {
+    WEditor.applyColor(noteEditor, e.target.value.replace('#', ''));
+    close();
+  });
+  document.addEventListener('click', close);
 }
 
 function shareCurrentNote() {

@@ -1009,6 +1009,33 @@ window.WEditor = {
     view.focus();
   },
 
+  /**
+   * Wrap the current selection in {#hex text} so it renders colored.
+   * With no selection, drops a "{#hex text}" stub with "text" selected
+   * so the user can type over it. hex = "rrggbb" (no leading #).
+   */
+  applyColor(view, hex) {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const prefix = "{#" + hex + " ";
+    if (from === to) {
+      const stub = prefix + "text}";
+      view.dispatch({
+        changes: { from, to, insert: stub },
+        // Select the placeholder word "text" for easy overtyping.
+        selection: { anchor: from + prefix.length, head: from + prefix.length + 4 },
+      });
+    } else {
+      const sel = view.state.sliceDoc(from, to);
+      const insert = prefix + sel + "}";
+      view.dispatch({
+        changes: { from, to, insert },
+        selection: { anchor: from + insert.length },
+      });
+    }
+    view.focus();
+  },
+
   /** Read current text from a view */
   getText(view) {
     return view ? view.state.doc.toString() : "";
