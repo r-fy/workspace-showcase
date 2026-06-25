@@ -147,6 +147,7 @@ header {
 .color-palette { position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 50;
   display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 8px;
   background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.5); }
+.color-palette[hidden] { display: none; }
 .color-swatch { width: 20px; height: 20px; border-radius: 4px; border: 1px solid #00000040; cursor: pointer; padding: 0; }
 .color-swatch:hover { outline: 2px solid #fff6; }
 .color-swatch-custom { width: 20px; height: 20px; border-radius: 4px; border: 1px dashed #555;
