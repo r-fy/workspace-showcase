@@ -491,6 +491,13 @@ header {
   /* TOC hidden on mobile */
   #note-toc, #toc-resize-handle, .toc-bar-btn { display: none !important; }
 
+  /* Editor toolbar stacks into 3 clean rows so nothing can overflow:
+     row 1 = title, row 2 = tags, row 3 = action icons (right-aligned). */
+  .editor-toolbar { flex-wrap: wrap; row-gap: 8px; padding: 8px 14px; }
+  .note-title-input { order: 0; flex: 1 1 100%; min-width: 0; }
+  .tag-editor { order: 1; flex: 1 1 100%; min-width: 0; }
+  .ins-table-btn, .color-btn-wrap, .share-note-btn, .del-note-btn { order: 2; flex-shrink: 0; }
+
   /* Kanban: one column at a time with snap */
   .kanban-board {
     scroll-snap-type: x mandatory;
