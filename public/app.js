@@ -1376,7 +1376,7 @@ async function openNote(id) {
 function renderToc() {
   const tocEl = document.getElementById('note-toc');
   const resizeHandle = document.getElementById('toc-resize-handle');
-  const toggleBtn = document.getElementById('toc-toggle-btn');
+  const toggleBtn = document.getElementById('toc-bar-btn');
   if (!tocEl || !noteEditor) return;
   const doc = noteEditor.state.doc;
   const headings = [];
@@ -1396,11 +1396,11 @@ function renderToc() {
   if (tocHidden) {
     tocEl.style.display = 'none';
     if (resizeHandle) resizeHandle.style.display = 'none';
-    if (toggleBtn) toggleBtn.textContent = '›';
+    if (toggleBtn) toggleBtn.classList.remove('active');
   } else {
     tocEl.style.display = '';
     if (resizeHandle) resizeHandle.style.display = '';
-    if (toggleBtn) toggleBtn.textContent = '‹';
+    if (toggleBtn) toggleBtn.classList.add('active');
   }
   tocEl.innerHTML = headings.map(h =>
     `<div class="toc-item toc-h${h.level}" data-pos="${h.pos}" title="${escHtml(h.text)}">${escHtml(h.text)}</div>`
@@ -1589,17 +1589,17 @@ function renderEditor(note) {
     <div class="editor-toolbar">
       <input class="note-title-input" id="editor-title" value="${escHtml(note.title)}" placeholder="Untitled">
       <div class="tag-editor" id="tag-editor"></div>
-      <button class="ins-table-btn" id="ins-table-btn" title="Insert table">⊞ Table</button>
+      <button class="ins-table-btn tb-btn" id="ins-table-btn" title="Insert table"><span class="tb-icon">⊞</span><span class="tb-label">Table</span></button>
       <div class="color-btn-wrap">
-        <button class="color-note-btn" id="color-note-btn" title="Color selected text">🎨 Color</button>
+        <button class="color-note-btn tb-btn" id="color-note-btn" title="Color selected text"><span class="tb-icon">🎨</span><span class="tb-label">Color</span></button>
         <div class="color-palette" id="color-palette" hidden></div>
       </div>
-      <button class="share-note-btn" id="share-note-btn">↓ Share</button>
-      <button class="del-note-btn" id="del-note-btn">Delete</button>
+      <button class="share-note-btn tb-btn" id="share-note-btn" title="Share / export"><span class="tb-icon">↗</span><span class="tb-label">Share</span></button>
+      <button class="del-note-btn tb-btn" id="del-note-btn" title="Delete note"><span class="tb-icon">🗑</span><span class="tb-label">Delete</span></button>
+      <button class="toc-bar-btn" id="toc-bar-btn" title="Toggle outline" style="display:none">▤</button>
     </div>
     <div class="editor-body">
       <div id="note-cm-mount"></div>
-      <button class="toc-toggle-btn" id="toc-toggle-btn" style="display:none">›</button>
       <div class="toc-resize-handle" id="toc-resize-handle" style="display:none"></div>
       <nav id="note-toc" class="note-toc" style="display:none"></nav>
     </div>
@@ -1612,7 +1612,7 @@ function renderEditor(note) {
   });
   renderToc();
   setupTocResize();
-  document.getElementById('toc-toggle-btn')?.addEventListener('click', () => {
+  document.getElementById('toc-bar-btn')?.addEventListener('click', () => {
     localStorage.setItem('toc-hidden', localStorage.getItem('toc-hidden') === '1' ? '0' : '1');
     renderToc();
   });
