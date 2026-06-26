@@ -152,8 +152,9 @@ header {
 .color-btn-wrap { position: relative; display: inline-flex; }
 .color-note-btn { color: #555; font-size: 12px; padding: 3px 8px; }
 .color-note-btn:hover { color: #5fc83b; }
-.color-palette { position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 50;
+.color-palette { position: absolute; top: 100%; right: 0; margin-top: 4px; z-index: 50;
   display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 8px;
+  max-width: calc(100vw - 24px); box-sizing: border-box;
   background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.5); }
 .color-palette[hidden] { display: none; }
 .color-swatch { width: 20px; height: 20px; border-radius: 4px; border: 1px solid #00000040; cursor: pointer; padding: 0; }
