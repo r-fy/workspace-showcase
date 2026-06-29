@@ -1590,6 +1590,7 @@ function renderEditor(note) {
       <input class="note-title-input" id="editor-title" value="${escHtml(note.title)}" placeholder="Untitled">
       <div class="tag-editor" id="tag-editor"></div>
       <button class="ins-table-btn tb-btn" id="ins-table-btn" title="Insert table"><span class="tb-icon">⊞</span><span class="tb-label">Table</span></button>
+      <button class="ins-count-btn tb-btn" id="ins-count-btn" title="Insert tally counter"><span class="tb-icon">±</span><span class="tb-label">Count</span></button>
       <div class="color-btn-wrap">
         <button class="color-note-btn tb-btn" id="color-note-btn" title="Color selected text"><span class="tb-icon">🎨</span><span class="tb-label">Color</span></button>
         <div class="color-palette" id="color-palette" hidden></div>
@@ -1618,6 +1619,7 @@ function renderEditor(note) {
   });
   renderTagEditor();
   document.getElementById('ins-table-btn')?.addEventListener('click', () => WEditor.insertTable(noteEditor));
+  document.getElementById('ins-count-btn')?.addEventListener('click', () => WEditor.insertCounter(noteEditor));
   setupColorPicker();
   document.getElementById('share-note-btn').addEventListener('click', shareCurrentNote);
   document.getElementById('editor-title').addEventListener('input', saveNoteDebounced);

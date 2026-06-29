@@ -51,6 +51,62 @@ class CheckboxWidget extends WidgetType {
   }
 }
 
+// Inline tally counter: {count:N} renders as a [ − N + ] pill.
+// + / − adjust the number (clamped at 0); tapping the number sets an exact value.
+// All three edit the underlying {count:N} text, so the value is saved with the note.
+class CounterWidget extends WidgetType {
+  constructor(view, from, to, count) {
+    super();
+    this._view = view;
+    this.from = from;
+    this.to = to;
+    this.count = count;
+  }
+  eq(other) {
+    return this.count === other.count && this.from === other.from && this.to === other.to;
+  }
+  toDOM(view) {
+    const setCount = (n) => {
+      if (n < 0) n = 0;
+      // Re-verify the stored range still holds the token before editing it.
+      const cur = view.state.sliceDoc(this.from, this.to);
+      if (!/^\{count:-?\d+\}$/.test(cur)) return;
+      view.dispatch({ changes: { from: this.from, to: this.to, insert: `{count:${n}}` } });
+    };
+    const wrap = document.createElement("span");
+    wrap.className = "cm-counter";
+
+    const mkBtn = (label, cls, fn) => {
+      const b = document.createElement("button");
+      b.className = "cm-counter-btn " + cls;
+      b.textContent = label;
+      b.tabIndex = -1;
+      b.addEventListener("mousedown", (e) => e.preventDefault());
+      b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
+      return b;
+    };
+
+    wrap.appendChild(mkBtn("−", "cm-counter-minus", () => setCount(this.count - 1)));
+
+    const num = document.createElement("button");
+    num.className = "cm-counter-num";
+    num.textContent = String(this.count);
+    num.tabIndex = -1;
+    num.title = "Tap to set an exact value";
+    num.addEventListener("mousedown", (e) => e.preventDefault());
+    num.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const v = prompt("Set count to:", String(this.count));
+      if (v !== null && /^-?\d+$/.test(v.trim())) setCount(parseInt(v.trim(), 10));
+    });
+    wrap.appendChild(num);
+
+    wrap.appendChild(mkBtn("+", "cm-counter-plus", () => setCount(this.count + 1)));
+    return wrap;
+  }
+  ignoreEvent() { return true; }
+}
+
 class ImageWidget extends WidgetType {
   constructor(src, alt, view) {
     super();
@@ -244,6 +300,9 @@ function collectInline(text) {
   // Links [text](url)
   for (const m of text.matchAll(/\[([^\]\n]+)\]\(([^)\n]+)\)/g))
     add(m.index, m.index + m[0].length, 0, "cm-link", { linkText: m[1] });
+  // Tally counter {count:N}
+  for (const m of text.matchAll(/\{count:(-?\d+)\}/g))
+    add(m.index, m.index + m[0].length, 0, "cm-count", { count: parseInt(m[1], 10) });
   // Colored text {#rrggbb text} or {#rgb text}
   for (const m of text.matchAll(/\{#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\s+([^}\n]+)\}/g))
     add(m.index, m.index + m[0].length, 0, "cm-color", {
@@ -275,7 +334,10 @@ function pushInline(builder, base, inlines, view) {
   for (const il of inlines) {
     const f = base + il.s;
     const t = base + il.e;
-    if (il.cls === "cm-img") {
+    if (il.cls === "cm-count") {
+      // {count:N} → replace with an interactive [ − N + ] tally pill
+      builder.add(f, t, Decoration.replace({ widget: new CounterWidget(view, f, t, il.count) }));
+    } else if (il.cls === "cm-img") {
       // ![alt](url) → replace entire span with an image widget
       builder.add(f, t, Decoration.replace({ widget: new ImageWidget(il.imgSrc, il.imgAlt, view) }));
     } else if (il.cls === "cm-link") {
@@ -696,6 +758,12 @@ const editorTheme = EditorView.theme(
     ".cm-cb-wrap": { display: "inline-block", paddingRight: "10px", lineHeight: "1", verticalAlign: "middle" },
     ".cm-cb": { cursor: "pointer", verticalAlign: "middle" },
     ".cm-cb-done-line": { textDecoration: "line-through", color: "#666" },
+    // Tally counter pill
+    ".cm-counter": { display: "inline-flex", alignItems: "center", verticalAlign: "middle", gap: "0", borderRadius: "7px", border: "1px solid #2e4a22", background: "#13210c", overflow: "hidden", lineHeight: "1", margin: "0 2px" },
+    ".cm-counter-btn": { border: "none", background: "transparent", color: "#5fc83b", fontSize: "16px", fontWeight: "700", cursor: "pointer", padding: "2px 10px", minWidth: "30px", minHeight: "26px", fontFamily: "IBM Plex Mono, monospace", userSelect: "none" },
+    ".cm-counter-btn:hover": { background: "#1d3312", color: "#8ce870" },
+    ".cm-counter-num": { border: "none", borderLeft: "1px solid #2e4a22", borderRight: "1px solid #2e4a22", background: "transparent", color: "#cfe9c2", fontSize: "13px", fontWeight: "700", cursor: "pointer", padding: "2px 12px", minHeight: "26px", minWidth: "30px", textAlign: "center", fontFamily: "IBM Plex Mono, monospace", fontVariantNumeric: "tabular-nums" },
+    ".cm-counter-num:hover": { background: "#1d3312", color: "#fff" },
     // Scrollbar
     ".cm-scroller::-webkit-scrollbar": { width: "6px" },
     ".cm-scroller::-webkit-scrollbar-thumb": { background: "#555", borderRadius: "3px" },
@@ -1033,6 +1101,18 @@ window.WEditor = {
         selection: { anchor: from + insert.length },
       });
     }
+    view.focus();
+  },
+
+  /** Insert a tally counter {count:0} at the cursor and focus the editor */
+  insertCounter(view) {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const insert = "{count:0}";
+    view.dispatch({
+      changes: { from, to, insert },
+      selection: { anchor: from + insert.length },
+    });
     view.focus();
   },
 
