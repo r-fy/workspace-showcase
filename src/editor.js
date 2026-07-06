@@ -194,14 +194,24 @@ class HrWidget extends WidgetType {
 function escCellHtml(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
+
+// Only allow link/image destinations that can't run script: web links, mailto,
+// and our own /uploads images. Anything else (javascript:, data:, vbscript:, …)
+// returns null and the markdown renders inert instead of being clickable.
+function safeUrl(url) {
+  const u = String(url || "").trim();
+  if (/^(https?:|mailto:)/i.test(u)) return u;
+  if (u.startsWith("/uploads/")) return u;
+  return null;
+}
 function cellHtml(raw) {
   let s = escCellHtml(raw);
   // Inline code first (nothing parsed inside)
   s = s.replace(/`([^`]+)`/g, (_m, t) => `<code class="cm-ic">${t}</code>`);
-  // Images ![alt](url) before links
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt, url) => `<img src="${url}" alt="${alt}" style="max-width:120px;border-radius:3px;vertical-align:middle">`);
-  // Links [text](url)
-  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, txt, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer" class="cm-link">${txt}</a>`);
+  // Images ![alt](url) before links — unsafe URLs render as their raw text
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt, url) => safeUrl(url) ? `<img src="${safeUrl(url)}" alt="${alt}" style="max-width:120px;border-radius:3px;vertical-align:middle">` : _m);
+  // Links [text](url) — unsafe URLs render as plain (non-clickable) text
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, txt, url) => safeUrl(url) ? `<a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer" class="cm-link">${txt}</a>` : txt);
   // Colored text {#hex words}
   s = s.replace(/\{#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\s+([^}]+)\}/g, (_m, hex, t) => `<span style="color:#${hex}">${t}</span>`);
   // Bold+italic, bold, italic, strike
@@ -338,8 +348,10 @@ function pushInline(builder, base, inlines, view) {
       // {count:N} → replace with an interactive [ − N + ] tally pill
       builder.add(f, t, Decoration.replace({ widget: new CounterWidget(view, f, t, il.count) }));
     } else if (il.cls === "cm-img") {
-      // ![alt](url) → replace entire span with an image widget
-      builder.add(f, t, Decoration.replace({ widget: new ImageWidget(il.imgSrc, il.imgAlt, view) }));
+      // ![alt](url) → replace entire span with an image widget.
+      // Unsafe URL (javascript:/data:/…) → no widget; the raw text stays visible.
+      if (safeUrl(il.imgSrc))
+        builder.add(f, t, Decoration.replace({ widget: new ImageWidget(il.imgSrc, il.imgAlt, view) }));
     } else if (il.cls === "cm-link") {
       // [text](url) → hide [, mark text, hide ](url)
       builder.add(f, f + 1, Decoration.replace({}));
@@ -1012,8 +1024,10 @@ window.WEditor = {
             const start = line.from + m.index;
             const end   = start + m[0].length;
             if (pos >= start && pos <= end) {
+              const dest = safeUrl(m[2]);
+              if (!dest) return false; // unsafe scheme: inert — just place the cursor
               event.preventDefault();
-              window.open(m[2], '_blank', 'noopener,noreferrer');
+              window.open(dest, '_blank', 'noopener,noreferrer');
               return true;
             }
           }
