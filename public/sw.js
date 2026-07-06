@@ -15,48 +15,6 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
-// Page sends message → SW shows notification (bypasses page-context restrictions)
-self.addEventListener('message', e => {
-  if (e.data?.type === 'SHOW_NOTIFICATION') {
-    const { title, body, tag } = e.data;
-    e.waitUntil(
-      self.registration.showNotification(title, {
-        body,
-        icon: '/icons/icon-192.png',
-        badge: '/icons/icon-192.png',
-        tag,
-        renotify: true,
-        data: { url: '/' }
-      })
-    );
-  }
-});
-
-self.addEventListener('push', e => {
-  const data = e.data?.json() || {};
-  e.waitUntil(
-    self.registration.showNotification(data.title || 'Workspace', {
-      body: data.body || '',
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
-      tag: data.tag || 'workspace',
-      renotify: true,
-      data: { url: '/' }
-    })
-  );
-});
-
-self.addEventListener('notificationclick', e => {
-  e.notification.close();
-  e.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      const ws = list.find(c => c.url.includes(self.location.origin));
-      if (ws) return ws.focus();
-      return clients.openWindow('/');
-    })
-  );
-});
-
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 

@@ -10,7 +10,7 @@ const PORT = parseInt(process.env.PORT || '4000');
 const PASSWORD = process.env.AUTH_PASSWORD || '1225';
 const DB_PATH = process.env.DB_PATH || '/data/workspace.db';
 
-// Map of pin -> userId. AUTH_USERS="owner:1225,family:2662" or falls back to single-user.
+// Map of pin -> userId. AUTH_USERS="alice:1234,bob:5678" or falls back to single-user.
 const USERS = (() => {
   if (process.env.AUTH_USERS) {
     return Object.fromEntries(
@@ -81,18 +81,8 @@ db.exec(`
 
 // ── Safe migrations (add-only) ─────────────────────────────────
 try { db.exec(`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN due_date TEXT DEFAULT NULL`); } catch(e) {}
 try { db.exec(`ALTER TABLE notes ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
 try { db.exec(`ALTER TABLE tasks ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN recur_type TEXT DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN recur_day INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN recur_time TEXT DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN recur_col_id TEXT DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN recur_next_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN due_time TEXT DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN due_reminder TEXT DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN due_notified INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN due_notify_at INTEGER DEFAULT NULL`); } catch(e) {}
 // Multi-user: scope all data by user_id (existing rows default to 'owner')
 try { db.exec(`ALTER TABLE notes   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
 try { db.exec(`ALTER TABLE boards  ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
@@ -130,18 +120,6 @@ db.exec(`
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_cat_name ON expense_categories(user_id, name)`); } catch(e) {}
 try { db.exec(`ALTER TABLE expenses ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 try { db.exec(`ALTER TABLE expenses ADD COLUMN frequency TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS push_subscriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL DEFAULT 'owner',
-    endpoint TEXT UNIQUE NOT NULL,
-    p256dh TEXT NOT NULL,
-    auth TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  )
-`);
-try { db.exec(`ALTER TABLE push_subscriptions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -304,15 +282,12 @@ app.delete('/api/columns/:id', auth, (req, res) => {
 
 // ── Tasks ─────────────────────────────────────────────────────
 app.post('/api/tasks', auth, (req, res) => {
-  const { column_id, title, description = '', due_date = null, due_time = null, due_reminder = null,
-          due_notify_at = null,
-          recur_type = null, recur_day = null, recur_time = null,
-          recur_col_id = null, recur_next_at = null } = req.body;
+  const { column_id, title, description = '' } = req.body;
   if (!column_id || !title) return res.status(400).json({ error: 'column_id and title required' });
   const maxPos = db.prepare('SELECT COALESCE(MAX(position),-1) AS m FROM tasks WHERE column_id=? AND user_id=? AND deleted_at IS NULL').get(column_id, req.userId).m;
   const id = uid(), t = now();
-  db.prepare('INSERT INTO tasks (id, column_id, title, description, due_date, due_time, due_reminder, due_notify_at, recur_type, recur_day, recur_time, recur_col_id, recur_next_at, position, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, column_id, title, description, due_date, due_time, due_reminder, due_notify_at, recur_type, recur_day, recur_time, recur_col_id, recur_next_at, maxPos + 1, req.userId, t, t);
+  db.prepare('INSERT INTO tasks (id, column_id, title, description, position, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, column_id, title, description, maxPos + 1, req.userId, t, t);
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(id));
 });
 
@@ -321,17 +296,10 @@ app.put('/api/tasks/:id', auth, (req, res) => {
   if (!task) return res.status(404).json({ error: 'Not found' });
   const {
     title = task.title, description = task.description,
-    column_id = task.column_id, position = task.position,
-    due_date = task.due_date, due_time = task.due_time, due_reminder = task.due_reminder,
-    due_notify_at = task.due_notify_at,
-    recur_type = task.recur_type, recur_day = task.recur_day,
-    recur_time = task.recur_time, recur_col_id = task.recur_col_id,
-    recur_next_at = task.recur_next_at
+    column_id = task.column_id, position = task.position
   } = req.body;
-  const dueDateChanged = due_date !== task.due_date || due_time !== task.due_time || due_reminder !== task.due_reminder;
-  const due_notified = dueDateChanged ? 0 : task.due_notified;
-  db.prepare('UPDATE tasks SET title=?, description=?, column_id=?, position=?, due_date=?, due_time=?, due_reminder=?, due_notify_at=?, due_notified=?, recur_type=?, recur_day=?, recur_time=?, recur_col_id=?, recur_next_at=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(title, description, column_id, position, due_date, due_time, due_reminder, due_notify_at, due_notified, recur_type, recur_day, recur_time, recur_col_id, recur_next_at, now(), req.params.id, req.userId);
+  db.prepare('UPDATE tasks SET title=?, description=?, column_id=?, position=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(title, description, column_id, position, now(), req.params.id, req.userId);
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id));
 });
 

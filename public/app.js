@@ -167,17 +167,6 @@ function stopPolling()  { clearInterval(pollTimer); pollTimer = null; }
 
 // ── Markdown ──────────────────────────────────────────────────
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function inlineMd(s) {
-  s = escHtml(s);
-  s = s.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
-  s = s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
-  s = s.replace(/\*(.+?)\*/g,'<em>$1</em>');
-  s = s.replace(/_(.+?)_/g,'<em>$1</em>');
-  s = s.replace(/~~(.+?)~~/g,'<del>$1</del>');
-  s = s.replace(/`([^`]+)`/g,'<code>$1</code>');
-  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
-  return s;
-}
 
 // ── Toast ──────────────────────────────────────────────────────
 let toastTimer = null;
@@ -1024,15 +1013,6 @@ async function exportExpensesCsv() {
   } catch(e) { toast('Export failed'); }
 }
 
-async function importExpensesCsv(file) {
-  const text = await file.text();
-  try {
-    const r = await apiCall('POST', '/expenses/import', { csv: text });
-    toast(`Imported ${r.imported} expenses`);
-    await loadExpenses();
-  } catch(e) { toast('Import failed'); }
-}
-
 // ── Chase CSV Import ───────────────────────────────────────────
 
 function toTitleCase(str) {
@@ -1327,14 +1307,6 @@ async function confirmChaseImport() {
     toast(`Imported ${result.imported} expenses from Chase`);
     await loadExpenses();
   } catch(e) { toast('Import failed'); }
-}
-
-async function importChaseCSV(file) {
-  const text = await file.text();
-  const { format, rows } = parseChaseCSV(text);
-  if (format === 'unknown') { toast('Unrecognized Chase CSV format'); return; }
-  if (!rows.length) { toast('No May 2026 transactions found'); return; }
-  openChaseImportPreview(rows, format);
 }
 
 async function handleExpenseImport(file) {
