@@ -188,10 +188,19 @@ function toast(msg) {
 }
 
 // ── Auth ───────────────────────────────────────────────────────
+// <img> tags can't send the Authorization header, so /uploads images are
+// authenticated via this cookie carrying the same credential (server checks both).
+function setUploadsCookie() {
+  document.cookie = 'ws_auth=' + encodeURIComponent(authHeader) + '; path=/uploads; SameSite=Strict' + (location.protocol === 'https:' ? '; Secure' : '');
+}
+function clearUploadsCookie() {
+  document.cookie = 'ws_auth=; path=/uploads; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+}
 function showLogin() {
   document.getElementById('login-overlay').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
   sessionStorage.removeItem('ws_auth');
+  clearUploadsCookie();
   pinBuffer = ''; updatePinDots();
 }
 async function tryLogin(pin) {
@@ -199,6 +208,7 @@ async function tryLogin(pin) {
   try {
     await apiFetch('GET', '/auth/check');
     sessionStorage.setItem('ws_auth', authHeader);
+    setUploadsCookie();
     document.getElementById('login-overlay').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     if (isMobile()) document.getElementById('left-panel').classList.add('collapsed');
@@ -209,10 +219,13 @@ async function tryLogin(pin) {
   } catch(e) {
     authHeader = null;
     const err = document.getElementById('login-error');
-    err.textContent = 'Wrong PIN.';
+    const msg = String(e?.message || '');
+    err.textContent = msg.includes('Unauthorized') ? 'Wrong PIN.'
+      : msg.includes('Too many') ? 'Too many attempts — wait a few minutes.'
+      : "Can't reach server — check connection.";
     err.classList.remove('hidden');
     pinBuffer = ''; updatePinDots();
-    setTimeout(() => err.classList.add('hidden'), 1800);
+    setTimeout(() => err.classList.add('hidden'), 2600);
   }
 }
 
@@ -1261,7 +1274,6 @@ function parseChaseCSV(text) {
       const desc     = f[2]?.trim() || '';
       const amount   = parseFloat(f[3]);
       const type     = f[4]?.trim() || '';
-      if (!postDate?.startsWith('05/')) continue;
       if (type === 'ACCT_XFER') continue;
       if (details === 'CREDIT' || details === 'DSLIP') continue;
       if (!postDate || isNaN(amount)) continue;
@@ -1274,7 +1286,6 @@ function parseChaseCSV(text) {
       const chaseCat = f[3]?.trim() || '';
       const type   = f[4]?.trim() || '';
       const amount = parseFloat(f[5]);
-      if (!txDate?.startsWith('05/')) continue;
       if (type === 'Payment') continue;
       if (!txDate || isNaN(amount)) continue;
       rows.push({ date: mdyToIsoDate(txDate), amount: Math.abs(amount),
@@ -1301,7 +1312,7 @@ function openChaseImportPreview(rows, format) {
   label.textContent = `Import: ${format === 'credit' ? 'Chase Credit Card' : 'Chase Checking'}`;
   preview.innerHTML = `
     <div class="chase-preview-meta">
-      <span>${rows.length} May transactions</span>
+      <span>${rows.length} transactions</span>
       <span class="chase-preview-total">${escHtml(fmtAmount(total))}</span>
     </div>
     <div class="chase-preview-cats">${catRows}</div>`;
@@ -1329,19 +1340,11 @@ async function confirmChaseImport() {
   } catch(e) { toast('Import failed'); }
 }
 
-async function importChaseCSV(file) {
-  const text = await file.text();
-  const { format, rows } = parseChaseCSV(text);
-  if (format === 'unknown') { toast('Unrecognized Chase CSV format'); return; }
-  if (!rows.length) { toast('No May 2026 transactions found'); return; }
-  openChaseImportPreview(rows, format);
-}
-
 async function handleExpenseImport(file) {
   const text = await file.text();
   const { format, rows } = parseChaseCSV(text);
   if (format !== 'unknown') {
-    if (!rows.length) { toast('No May 2026 transactions found in this file'); return; }
+    if (!rows.length) { toast('No transactions found in this file'); return; }
     openChaseImportPreview(rows, format);
   } else {
     try {
@@ -1623,16 +1626,11 @@ function renderEditor(note) {
   setupColorPicker();
   document.getElementById('share-note-btn').addEventListener('click', shareCurrentNote);
   document.getElementById('editor-title').addEventListener('input', saveNoteDebounced);
-  document.getElementById('del-note-btn').addEventListener('click', async () => {
-    if (!confirm('Delete this note?')) return;
-    const id = currentNoteId;
-    notes = notes.filter(n => n.id !== id); delete notesFullCache[id];
-    await idbDelete('notes', id); currentNoteId = null;
-    WEditor.destroy(noteEditor); noteEditor = null;
-    renderNotesList(); renderTagsBar();
-    area.innerHTML = '<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
-    try { await apiCall('DELETE', '/notes/'+id); } catch(e) {}
+  // Enter in the title drops you into the note body
+  document.getElementById('editor-title').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); noteEditor?.focus(); }
   });
+  document.getElementById('del-note-btn').addEventListener('click', deleteCurrentNote);
 }
 
 function saveNoteDebounced() { clearTimeout(saveNoteTimer); saveNoteTimer = setTimeout(saveCurrentNote, 600); }
@@ -1738,14 +1736,14 @@ async function importMdFiles(files) {
 // ── Universal Search ───────────────────────────────────────────
 const COMMANDS = [
   { label: 'New Note',             icon: '📝', action: () => { switchTab('notes'); newNote(); } },
-  { label: 'Share Note as .md',    icon: '↓',  action: shareCurrentNote },
+  { label: 'Share Note as .md',    icon: '↗',  action: shareCurrentNote },
   { label: 'Delete Current Note',  icon: '🗑', action: deleteCurrentNote },
   { label: 'Import .md Files',     icon: '⬆',  action: () => document.getElementById('import-input').click() },
   { label: 'New Board',            icon: '📋', action: () => { switchTab('tasks'); promptNewBoard(); } },
   { label: 'New Column',           icon: '+',  action: () => { switchTab('tasks'); promptNewColumn(); } },
   { label: 'Delete Current Board', icon: '🗑', action: deleteCurrentBoard },
   { label: 'Switch to Notes',      icon: '📄', action: () => switchTab('notes') },
-  { label: 'Switch to Tasks',      icon: '✓',  action: () => switchTab('tasks') },
+  { label: 'Switch to Projects',   icon: '✓',  action: () => switchTab('tasks') }, // UI calls this tab "Projects"
   { label: 'Switch to Expenses',   icon: '$',  action: () => switchTab('expenses') },
   { label: 'New Expense',          icon: '$',  action: () => { switchTab('expenses'); openExpenseModal(); } },
   { label: 'Export Expenses CSV',  icon: '↓',  action: exportExpensesCsv },
@@ -2461,6 +2459,13 @@ document.addEventListener('keydown', e => {
     inp.focus(); inp.select();
     return;
   }
+  // Cmd/Ctrl+S: everything autosaves already — just flush any pending note save
+  // and confirm, instead of popping the browser's "Save page" dialog.
+  if (mod && e.key === 's') {
+    e.preventDefault();
+    if (currentNoteId && noteEditor) { clearTimeout(saveNoteTimer); saveCurrentNote(); toast('Saved'); }
+    return;
+  }
   if (e.key === 'Escape') {
     if (dropdownOpen) { closeSearch(); return; }
     if (!document.getElementById('expense-modal').classList.contains('hidden')) { closeExpenseModal(); return; }
@@ -2477,8 +2482,8 @@ document.addEventListener('keydown', e => {
       e.preventDefault();
       searchIdx = Math.max(searchIdx - 1, 0);
       updateSearchSel();
-    } else if (e.key === 'Enter' && searchIdx >= 0) {
-      activateSearch(searchIdx);
+    } else if (e.key === 'Enter' && searchFlat.length) {
+      activateSearch(searchIdx >= 0 ? searchIdx : 0); // Enter with nothing highlighted opens the top hit
     }
   }
 });
@@ -2542,6 +2547,10 @@ document.getElementById('add-expense-btn').addEventListener('click', e => { e.st
 document.getElementById('expense-modal-close').addEventListener('click', closeExpenseModal);
 document.getElementById('expense-modal-cancel').addEventListener('click', closeExpenseModal);
 document.getElementById('expense-modal-save').addEventListener('click', saveExpense);
+// Enter in a plain field saves the expense (datalist fields excluded — there Enter picks a suggestion)
+document.getElementById('expense-modal').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches('input:not([list])')) { e.preventDefault(); saveExpense(); }
+});
 document.getElementById('expense-modal-delete').addEventListener('click', deleteExpense);
 document.getElementById('expense-modal').addEventListener('click', e => { if (e.target === document.getElementById('expense-modal')) closeExpenseModal(); });
 document.getElementById('export-csv-btn').addEventListener('click', exportExpensesCsv);
@@ -2579,6 +2588,7 @@ document.getElementById('task-modal').addEventListener('click',e=>{if(e.target==
     authHeader = saved;
     try {
       await apiFetch('GET','/auth/check');
+      setUploadsCookie();
       document.getElementById('login-overlay').classList.add('hidden');
       document.getElementById('app').classList.remove('hidden');
       if (isMobile()) document.getElementById('left-panel').classList.add('collapsed');

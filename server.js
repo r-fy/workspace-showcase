@@ -7,10 +7,10 @@ const fs = require('fs');
 const multer = require('multer');
 const app = express();
 const PORT = parseInt(process.env.PORT || '4000');
-const PASSWORD = process.env.AUTH_PASSWORD || '1225';
 const DB_PATH = process.env.DB_PATH || '/data/workspace.db';
 
-// Map of pin -> userId. AUTH_USERS="owner:1225,family:2662" or falls back to single-user.
+// Map of pin -> userId. AUTH_USERS="owner:1111,family:2222" (example) or falls back to single-user.
+// Fail closed: refuse to start with no PIN configured rather than accept a baked-in default.
 const USERS = (() => {
   if (process.env.AUTH_USERS) {
     return Object.fromEntries(
@@ -20,8 +20,13 @@ const USERS = (() => {
       })
     );
   }
-  return { [PASSWORD]: 'owner' };
+  if (process.env.AUTH_PASSWORD) return { [process.env.AUTH_PASSWORD]: 'owner' };
+  return {};
 })();
+if (!Object.keys(USERS).length) {
+  console.error('FATAL: no auth configured. Set AUTH_USERS ("user:pin,user:pin") or AUTH_PASSWORD.');
+  process.exit(1);
+}
 
 const dataDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
@@ -29,14 +34,22 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 const UPLOADS_DIR = path.join(dataDir, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
+// Only real image types get saved — the extension comes from this map, never from
+// the client's claimed mimetype, so nobody can upload an HTML/SVG file that our
+// own domain would then serve back as a runnable page.
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 const upload = multer({
   storage: multer.diskStorage({
     destination: UPLOADS_DIR,
     filename: (req, file, cb) => {
-      const ext = (file.mimetype.split('/')[1] || 'png').replace('jpeg', 'jpg');
-      cb(null, crypto.randomBytes(12).toString('hex') + '.' + ext);
+      cb(null, crypto.randomBytes(12).toString('hex') + '.' + IMAGE_EXT[file.mimetype]);
     }
   }),
+  fileFilter: (req, file, cb) => {
+    if (IMAGE_EXT[file.mimetype]) return cb(null, true);
+    req.badFileType = true;
+    cb(null, false);
+  },
   limits: { fileSize: 25 * 1024 * 1024 }
 });
 
@@ -145,25 +158,68 @@ try { db.exec(`ALTER TABLE push_subscriptions ADD COLUMN user_id TEXT NOT NULL D
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR));
 
-function auth(req, res, next) {
-  const header = req.headers.authorization || '';
-  if (!header.startsWith('Basic ')) {
-    res.set('WWW-Authenticate', 'Basic realm="Workspace"');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
-  const colon = decoded.indexOf(':');
-  const pass = decoded.slice(colon + 1);
-  const userId = USERS[pass];
+// ── Auth ─────────────────────────────────────────────────────
+// Rate limit: after 10 failed PIN attempts an IP is locked out for 5 minutes,
+// so a 4-digit PIN can't just be brute-forced by a script.
+// ponytail: in-memory per-IP counter — resets on restart, plenty for a family app.
+const FAILS = new Map(); // ip -> { count, until }
+const MAX_FAILS = 10, LOCK_MS = 5 * 60 * 1000;
+function clientIp(req) {
+  // Caddy fronts the app and sets X-Forwarded-For; direct socket addr is the fallback.
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+}
+function lockedOut(ip) {
+  const f = FAILS.get(ip);
+  return !!(f && f.until > Date.now());
+}
+function recordFail(ip) {
+  if (FAILS.size > 1000) for (const [k, v] of FAILS) { if (v.until < Date.now()) FAILS.delete(k); }
+  const f = FAILS.get(ip) || { count: 0, until: 0 };
+  f.count++;
+  if (f.count >= MAX_FAILS) { f.until = Date.now() + LOCK_MS; f.count = 0; }
+  FAILS.set(ip, f);
+}
+
+// "Basic base64(user:pin)" -> userId, or null. The username part is ignored; the PIN identifies the user.
+function userFromBasic(value) {
+  if (!value || !value.startsWith('Basic ')) return null;
+  const decoded = Buffer.from(value.slice(6), 'base64').toString('utf8');
+  const pass = decoded.slice(decoded.indexOf(':') + 1);
+  return USERS[pass] || null;
+}
+
+function checkAuth(req, res, next, credential) {
+  const ip = clientIp(req);
+  if (lockedOut(ip)) return res.status(429).json({ error: 'Too many failed attempts — try again in a few minutes' });
+  const userId = userFromBasic(credential);
   if (!userId) {
+    if (credential) recordFail(ip); // only count actual wrong guesses, not missing headers
     res.set('WWW-Authenticate', 'Basic realm="Workspace"');
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  FAILS.delete(ip);
   req.userId = userId;
   next();
 }
+
+function auth(req, res, next) {
+  checkAuth(req, res, next, req.headers.authorization || '');
+}
+
+// Uploaded images load via plain <img> tags, which can't send the Authorization
+// header — so the app also stores the same credential in a cookie scoped to
+// /uploads, and this middleware accepts either. Outsiders get a 401 either way.
+function uploadsAuth(req, res, next) {
+  let credential = req.headers.authorization || '';
+  if (!credential) {
+    const m = (req.headers.cookie || '').match(/(?:^|;\s*)ws_auth=([^;]+)/);
+    if (m) credential = decodeURIComponent(m[1]);
+  }
+  checkAuth(req, res, next, credential);
+}
+
+app.use('/uploads', uploadsAuth, express.static(UPLOADS_DIR));
 
 function uid() { return crypto.randomBytes(8).toString('hex'); }
 function now() { return Date.now(); }
@@ -369,6 +425,7 @@ app.post('/api/trash/restore', auth, (req, res) => {
 
 // ── Image uploads ─────────────────────────────────────────────
 app.post('/api/uploads', auth, upload.single('image'), (req, res) => {
+  if (req.badFileType) return res.status(400).json({ error: 'Only PNG, JPEG, GIF, or WebP images are allowed' });
   if (!req.file) return res.status(400).json({ error: 'No file' });
   res.json({ url: '/uploads/' + req.file.filename });
 });
