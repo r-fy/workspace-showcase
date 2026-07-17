@@ -39,7 +39,20 @@ class CheckboxWidget extends WidgetType {
         ? line.text.replace(/\[ \] ?/, "[x] ")
         : line.text.replace(/\[x\] ?/i, "[ ] ");
       view.dispatch({ changes: { from: line.from, to: line.to, insert: newText } });
-      view.focus();
+      // Re-focusing the editor after a checkbox tap pulls up the on-screen
+      // keyboard on touch devices — only do it for mouse/desktop interaction.
+      if (!window.matchMedia?.("(pointer: coarse)").matches) view.focus();
+    });
+    // Double-click strips the checkbox marker, turning the line into a plain
+    // dash bullet (mirrors the tag-rename-via-double-click pattern elsewhere).
+    cb.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const line = view.state.doc.lineAt(this.lineFrom);
+      const m = line.text.match(/^(\s*)[-*] \[[ xX]\] ?(.*)/);
+      if (!m) return;
+      view.dispatch({ changes: { from: line.from, to: line.to, insert: `${m[1]}- ${m[2]}` } });
+      if (!window.matchMedia?.("(pointer: coarse)").matches) view.focus();
     });
     wrap.appendChild(cb);
     return wrap;
