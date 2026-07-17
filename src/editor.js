@@ -1067,6 +1067,21 @@ window.WEditor = {
           }
           return false;
         },
+        // Reverse of the checkbox dblclick handler: double-clicking the "- "
+        // marker of a plain bullet line turns it into a checkbox.
+        dblclick(event, view) {
+          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+          if (pos == null) return false;
+          const line = view.state.doc.lineAt(pos);
+          const m = line.text.match(/^(\s*)[-*] (?!\[[ xX]\])(.*)/);
+          if (!m) return false;
+          const markerEnd = line.from + m[1].length + 2; // indent + "- "
+          if (pos > markerEnd) return false; // only when the click lands on the marker itself
+          event.preventDefault();
+          view.dispatch({ changes: { from: line.from, to: line.to, insert: `${m[1]}- [ ] ${m[2]}` } });
+          if (!window.matchMedia?.("(pointer: coarse)").matches) view.focus();
+          return true;
+        },
       }),
     ];
     if (onChange) {
