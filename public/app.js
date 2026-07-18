@@ -2873,7 +2873,29 @@ document.querySelectorAll('.nav-menu-item').forEach(b => b.addEventListener('cli
   function saveNavOrder() {
     localStorage.setItem('nav-tab-order', JSON.stringify([...nav.querySelectorAll('.nav-row')].map(r => r.dataset.tab)));
   }
+  // Touch devices never fire HTML5 drag events at all — the ▲/▼ buttons
+  // (shown only on coarse pointers, see app.css) are the touch equivalent.
+  function updateReorderBtnStates() {
+    const rows = [...nav.querySelectorAll('.nav-row')];
+    rows.forEach((row, i) => {
+      row.querySelector('.nav-up-btn').disabled = i === 0;
+      row.querySelector('.nav-down-btn').disabled = i === rows.length - 1;
+    });
+  }
+  function moveRow(row, dir) {
+    const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+    if (!sib) return;
+    dir < 0 ? nav.insertBefore(row, sib) : nav.insertBefore(sib, row);
+    saveNavOrder(); updateReorderBtnStates();
+  }
   applyNavOrder();
+  updateReorderBtnStates();
+  nav.addEventListener('click', e => {
+    const btn = e.target.closest('.nav-up-btn, .nav-down-btn');
+    if (!btn || btn.disabled) return;
+    e.stopPropagation();
+    moveRow(btn.closest('.nav-row'), btn.classList.contains('nav-up-btn') ? -1 : 1);
+  });
   nav.querySelectorAll('.nav-row').forEach(row => {
     row.addEventListener('dragstart', e => {
       dragEl = row;
@@ -2900,7 +2922,7 @@ document.querySelectorAll('.nav-menu-item').forEach(b => b.addEventListener('cli
       const insertBefore = row.classList.contains('drop-above');
       row.classList.remove('drop-above', 'drop-below');
       nav.insertBefore(dragEl, insertBefore ? row : row.nextSibling);
-      saveNavOrder();
+      saveNavOrder(); updateReorderBtnStates();
     });
   });
 })();

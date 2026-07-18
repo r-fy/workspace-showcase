@@ -389,6 +389,15 @@ header {
 .nav-row.dragging { opacity: 0.4; }
 .nav-row.drop-above { border-top-color: #5fc83b; }
 .nav-row.drop-below { border-bottom-color: #5fc83b; }
+/* Native HTML5 drag-and-drop never fires on touch — these give touch devices
+   a way to reorder the nav tabs too. Hidden on mouse/trackpad, where the drag
+   already works, so desktop keeps its current look. */
+.nav-reorder-btn { display: none; width: 22px; font-size: 9px; color: #444; flex-shrink: 0; }
+.nav-reorder-btn:hover { color: #aaa; }
+.nav-reorder-btn:disabled { color: #2a2a2a; cursor: default; }
+@media (pointer: coarse) {
+  .nav-reorder-btn { display: flex; align-items: center; justify-content: center; }
+}
 .nav-menu-item {
   display: flex; align-items: center; flex: 1;
   padding: 9px 16px; font-size: 13px; color: #555; text-align: left;
