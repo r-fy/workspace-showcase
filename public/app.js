@@ -608,16 +608,36 @@ function dpRender() {
   });
 }
 
+// .dp-cal is position:fixed (escapes ancestor overflow:hidden — see app.css),
+// so its screen position has to be computed against the viewport instead of
+// relying on CSS anchoring. Clamped so it never runs off any edge.
+function dpPosition(wrapEl, cal) {
+  const r = wrapEl.getBoundingClientRect();
+  const margin = 8;
+  let top = r.bottom + 4;
+  let left = r.left;
+  const calW = cal.offsetWidth || 244;
+  const calH = cal.offsetHeight || 260;
+  if (top + calH > window.innerHeight - margin) top = r.top - calH - 4; // flip above if no room below
+  if (top < margin) top = margin;
+  if (left + calW > window.innerWidth - margin) left = window.innerWidth - calW - margin;
+  if (left < margin) left = margin;
+  cal.style.top = top + 'px';
+  cal.style.left = left + 'px';
+}
+
 function wireDatePicker(inputId, calId, triggerId) {
   document.getElementById(triggerId)?.addEventListener('click', e => {
     e.stopPropagation();
     const cal = document.getElementById(calId);
+    const wrap = document.getElementById(inputId)?.closest('.dp-wrap');
     if (!cal) return;
     if (cal.classList.contains('hidden')) {
       dpTarget = { inputId, calId };
       const typed = dpFromMdy(document.getElementById(inputId)?.value);
       if (typed) { dpYear = typed.getFullYear(); dpMonth = typed.getMonth(); }
       dpRender(); cal.classList.remove('hidden');
+      if (wrap) dpPosition(wrap, cal);
     } else cal.classList.add('hidden');
   });
 }
@@ -2836,6 +2856,54 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
 document.getElementById('sidebar-overlay').addEventListener('click', closeSidebar);
 // Nav items inside left panel
 document.querySelectorAll('.nav-menu-item').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+// Drag-to-reorder the nav tabs themselves (Notes/Projects/Expenses/Calendar).
+// Rows are static markup (not re-rendered from an array), so reordering just
+// moves the existing DOM nodes — listeners already attached to them travel
+// along for free. Order persists the same way as expense-col-order.
+(() => {
+  const nav = document.getElementById('left-panel-nav');
+  let dragEl = null;
+  function applyNavOrder() {
+    let order;
+    try { order = JSON.parse(localStorage.getItem('nav-tab-order') || 'null'); } catch(e) { order = null; }
+    if (!Array.isArray(order)) return;
+    const rows = new Map([...nav.querySelectorAll('.nav-row')].map(r => [r.dataset.tab, r]));
+    order.forEach(tab => { const r = rows.get(tab); if (r) nav.appendChild(r); });
+  }
+  function saveNavOrder() {
+    localStorage.setItem('nav-tab-order', JSON.stringify([...nav.querySelectorAll('.nav-row')].map(r => r.dataset.tab)));
+  }
+  applyNavOrder();
+  nav.querySelectorAll('.nav-row').forEach(row => {
+    row.addEventListener('dragstart', e => {
+      dragEl = row;
+      e.dataTransfer.setData('nav-row-drag', row.dataset.tab);
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => row.classList.add('dragging'), 0);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      nav.querySelectorAll('.nav-row').forEach(r => r.classList.remove('drop-above', 'drop-below'));
+      dragEl = null;
+    });
+    row.addEventListener('dragover', e => {
+      if (!Array.from(e.dataTransfer.types).includes('nav-row-drag') || row === dragEl) return;
+      e.preventDefault();
+      const mid = row.getBoundingClientRect().top + row.offsetHeight / 2;
+      row.classList.toggle('drop-above', e.clientY < mid);
+      row.classList.toggle('drop-below', e.clientY >= mid);
+    });
+    row.addEventListener('dragleave', e => { if (!row.contains(e.relatedTarget)) row.classList.remove('drop-above', 'drop-below'); });
+    row.addEventListener('drop', e => {
+      if (!dragEl || dragEl === row) return;
+      e.preventDefault();
+      const insertBefore = row.classList.contains('drop-above');
+      row.classList.remove('drop-above', 'drop-below');
+      nav.insertBefore(dragEl, insertBefore ? row : row.nextSibling);
+      saveNavOrder();
+    });
+  });
+})();
 // Mobile col nav
 document.getElementById('prev-col-btn').addEventListener('click', () => goToMobileCol(mobileColIdx - 1));
 document.getElementById('next-col-btn').addEventListener('click', () => goToMobileCol(mobileColIdx + 1));

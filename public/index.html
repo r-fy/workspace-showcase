@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=103">
+<link rel="stylesheet" href="/app.css?v=104">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -62,20 +62,20 @@
   <div id="main-area">
     <!-- Unified left panel -->
     <div id="left-panel" class="left-panel">
-      <div class="left-panel-nav">
-        <div class="nav-row">
+      <div class="left-panel-nav" id="left-panel-nav">
+        <div class="nav-row" draggable="true" data-tab="notes">
           <button class="nav-menu-item active" data-tab="notes">Notes</button>
           <button class="icon-btn nav-add-btn" id="new-note-btn" title="New note">+</button>
         </div>
-        <div class="nav-row">
+        <div class="nav-row" draggable="true" data-tab="tasks">
           <button class="nav-menu-item" data-tab="tasks">Projects</button>
           <button class="icon-btn nav-add-btn" id="add-board-btn" title="New board">+</button>
         </div>
-        <div class="nav-row">
+        <div class="nav-row" draggable="true" data-tab="expenses">
           <button class="nav-menu-item" data-tab="expenses">Expenses</button>
           <button class="icon-btn nav-add-btn" id="add-expense-btn" title="New expense">+</button>
         </div>
-        <div class="nav-row">
+        <div class="nav-row" draggable="true" data-tab="calendar">
           <button class="nav-menu-item" data-tab="calendar">Calendar</button>
           <button class="icon-btn nav-add-btn" id="add-reminder-btn" title="New reminder">+</button>
         </div>
@@ -354,6 +354,6 @@
 
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
-<script src="/app.js?v=110"></script>
+<script src="/app.js?v=111"></script>
 </body>
 </html>
