@@ -5,6 +5,11 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const multer = require('multer');
+const { advance, computeInitialNextFire } = require('./recurrence');
+// web-push is in package.json (Docker installs it); tolerate a local checkout
+// without node_modules so the server still boots for dev/testing.
+let webpush = null;
+try { webpush = require('web-push'); } catch (e) {}
 const app = express();
 const PORT = parseInt(process.env.PORT || '4000');
 const DB_PATH = process.env.DB_PATH || '/data/workspace.db';
@@ -133,6 +138,34 @@ db.exec(`
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_cat_name ON expense_categories(user_id, name)`); } catch(e) {}
 try { db.exec(`ALTER TABLE expenses ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 try { db.exec(`ALTER TABLE expenses ADD COLUMN frequency TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reminders (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    first_fire_at INTEGER NOT NULL,
+    recur_type TEXT NOT NULL DEFAULT 'none',
+    recur_interval INTEGER NOT NULL DEFAULT 1,
+    recur_weekdays TEXT DEFAULT NULL,
+    recur_end_at INTEGER DEFAULT NULL,
+    next_fire_at INTEGER DEFAULT NULL,
+    snoozed_until INTEGER DEFAULT NULL,
+    completed_at INTEGER DEFAULT NULL,
+    deleted_at INTEGER DEFAULT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_reminders_next ON reminders(next_fire_at);
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -270,7 +303,8 @@ app.get('/api/sync', auth, (req, res) => {
   const boards = db.prepare('SELECT * FROM boards WHERE user_id=? ORDER BY position').all(req.userId);
   const columns = db.prepare('SELECT * FROM columns WHERE user_id=? ORDER BY position').all(req.userId);
   const tasks = db.prepare('SELECT * FROM tasks WHERE deleted_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
-  res.json({ notes, boards, columns, tasks });
+  const reminders = db.prepare('SELECT * FROM reminders WHERE deleted_at IS NULL AND user_id=? ORDER BY next_fire_at ASC').all(req.userId);
+  res.json({ notes, boards, columns, tasks, reminders });
 });
 
 // ── Boards ────────────────────────────────────────────────────
@@ -379,7 +413,8 @@ app.delete('/api/tasks/:id', auth, (req, res) => {
 app.get('/api/trash', auth, (req, res) => {
   const notes = db.prepare('SELECT id, title, deleted_at FROM notes WHERE deleted_at IS NOT NULL AND user_id=? ORDER BY deleted_at DESC').all(req.userId);
   const tasks = db.prepare('SELECT id, title, column_id, deleted_at FROM tasks WHERE deleted_at IS NOT NULL AND user_id=? ORDER BY deleted_at DESC').all(req.userId);
-  res.json({ notes, tasks });
+  const reminders = db.prepare('SELECT id, title, deleted_at FROM reminders WHERE deleted_at IS NOT NULL AND user_id=? ORDER BY deleted_at DESC').all(req.userId);
+  res.json({ notes, tasks, reminders });
 });
 
 app.post('/api/trash/restore', auth, (req, res) => {
@@ -387,7 +422,8 @@ app.post('/api/trash/restore', auth, (req, res) => {
   if (!type || !id) return res.status(400).json({ error: 'type and id required' });
   if (type === 'note') db.prepare('UPDATE notes SET deleted_at=NULL WHERE id=? AND user_id=?').run(id, req.userId);
   else if (type === 'task') db.prepare('UPDATE tasks SET deleted_at=NULL WHERE id=? AND user_id=?').run(id, req.userId);
-  else return res.status(400).json({ error: 'type must be note or task' });
+  else if (type === 'reminder') db.prepare('UPDATE reminders SET deleted_at=NULL WHERE id=? AND user_id=?').run(id, req.userId);
+  else return res.status(400).json({ error: 'type must be note, task, or reminder' });
   res.json({ ok: true });
 });
 
@@ -422,6 +458,8 @@ app.delete('/api/trash/item', auth, (req, res) => {
     const row = db.prepare('SELECT description FROM tasks WHERE id=? AND user_id=? AND deleted_at IS NOT NULL').get(id, req.userId);
     if (row) deleteUploadFiles(extractUploadFilenames(row.description));
     db.prepare('DELETE FROM tasks WHERE id=? AND user_id=? AND deleted_at IS NOT NULL').run(id, req.userId);
+  } else if (type === 'reminder') {
+    db.prepare('DELETE FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NOT NULL').run(id, req.userId);
   }
   res.json({ ok: true });
 });
@@ -433,6 +471,7 @@ app.delete('/api/trash/empty', auth, (req, res) => {
   tasks.forEach(r => deleteUploadFiles(extractUploadFilenames(r.description)));
   db.prepare('DELETE FROM notes WHERE deleted_at IS NOT NULL AND user_id=?').run(req.userId);
   db.prepare('DELETE FROM tasks WHERE deleted_at IS NOT NULL AND user_id=?').run(req.userId);
+  db.prepare('DELETE FROM reminders WHERE deleted_at IS NOT NULL AND user_id=?').run(req.userId);
   res.json({ ok: true });
 });
 
@@ -533,6 +572,194 @@ app.post('/api/expenses/import', auth, (req, res) => {
   })();
   res.json({ imported });
 });
+
+// ── Reminders (Calendar tab) ──────────────────────────────────
+const RECUR_TYPES = ['none', 'daily', 'weekly', 'monthly', 'yearly'];
+
+// Validates + normalizes reminder schedule fields from a request body.
+// Returns { error } or the clean fields.
+function reminderFields(body) {
+  const title = String(body.title ?? '').trim();
+  if (!title) return { error: 'title required' };
+  const first_fire_at = Number(body.first_fire_at);
+  if (!Number.isFinite(first_fire_at)) return { error: 'first_fire_at (epoch ms) required' };
+  const recur_type = body.recur_type ?? 'none';
+  if (!RECUR_TYPES.includes(recur_type)) return { error: 'invalid recur_type' };
+  const recur_interval = Math.max(1, parseInt(body.recur_interval, 10) || 1);
+  let recur_weekdays = null;
+  if (body.recur_weekdays != null && body.recur_weekdays !== '') {
+    const days = String(body.recur_weekdays).split(',').map(s => parseInt(s.trim(), 10));
+    if (days.some(d => !Number.isInteger(d) || d < 0 || d > 6)) return { error: 'recur_weekdays must be 0-6' };
+    recur_weekdays = [...new Set(days)].sort().join(',');
+  }
+  let recur_end_at = null;
+  if (body.recur_end_at != null) {
+    recur_end_at = Number(body.recur_end_at);
+    if (!Number.isFinite(recur_end_at)) return { error: 'recur_end_at must be epoch ms' };
+  }
+  return {
+    title, description: String(body.description ?? ''),
+    first_fire_at, recur_type, recur_interval, recur_weekdays, recur_end_at,
+  };
+}
+
+app.get('/api/reminders', auth, (req, res) => {
+  res.json(db.prepare('SELECT * FROM reminders WHERE user_id=? AND deleted_at IS NULL ORDER BY next_fire_at ASC').all(req.userId));
+});
+
+app.post('/api/reminders', auth, (req, res) => {
+  const f = reminderFields(req.body);
+  if (f.error) return res.status(400).json({ error: f.error });
+  const id = uid(), t = now();
+  const next_fire_at = computeInitialNextFire(f, t);
+  db.prepare(`INSERT INTO reminders (id, user_id, title, description, first_fire_at, recur_type, recur_interval,
+      recur_weekdays, recur_end_at, next_fire_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, req.userId, f.title, f.description, f.first_fire_at, f.recur_type, f.recur_interval,
+      f.recur_weekdays, f.recur_end_at, next_fire_at, t, t);
+  res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(id));
+});
+
+app.put('/api/reminders/:id', auth, (req, res) => {
+  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const f = reminderFields({ ...r, ...req.body });
+  if (f.error) return res.status(400).json({ error: f.error });
+  const scheduleChanged =
+    f.first_fire_at !== r.first_fire_at || f.recur_type !== r.recur_type ||
+    f.recur_interval !== r.recur_interval || f.recur_weekdays !== r.recur_weekdays ||
+    f.recur_end_at !== r.recur_end_at;
+  const t = now();
+  // A schedule edit re-arms the reminder: recompute next fire, clear snooze,
+  // and un-complete (rescheduling an old done one-off is the natural "revive").
+  const next_fire_at = scheduleChanged ? computeInitialNextFire(f, t) : r.next_fire_at;
+  const snoozed_until = scheduleChanged ? null : r.snoozed_until;
+  const completed_at = scheduleChanged ? null : r.completed_at;
+  db.prepare(`UPDATE reminders SET title=?, description=?, first_fire_at=?, recur_type=?, recur_interval=?,
+      recur_weekdays=?, recur_end_at=?, next_fire_at=?, snoozed_until=?, completed_at=?, updated_at=?
+    WHERE id=? AND user_id=?`)
+    .run(f.title, f.description, f.first_fire_at, f.recur_type, f.recur_interval,
+      f.recur_weekdays, f.recur_end_at, next_fire_at, snoozed_until, completed_at, t, req.params.id, req.userId);
+  res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(req.params.id));
+});
+
+app.delete('/api/reminders/:id', auth, (req, res) => {
+  db.prepare('UPDATE reminders SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+app.post('/api/reminders/:id/complete', auth, (req, res) => {
+  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  // One-off: done for good. Recurring: the scheduler already advanced
+  // next_fire_at when it fired (advance-on-fire) — "done" just silences any
+  // pending snooze echo; the series keeps going.
+  if (r.recur_type === 'none') {
+    db.prepare('UPDATE reminders SET completed_at=?, snoozed_until=NULL, next_fire_at=NULL, updated_at=? WHERE id=?').run(now(), now(), r.id);
+  } else {
+    db.prepare('UPDATE reminders SET snoozed_until=NULL, updated_at=? WHERE id=?').run(now(), r.id);
+  }
+  res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(r.id));
+});
+
+app.post('/api/reminders/:id/snooze', auth, (req, res) => {
+  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const minutes = parseInt(req.body.minutes, 10);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) return res.status(400).json({ error: 'minutes must be 1-10080' });
+  db.prepare('UPDATE reminders SET snoozed_until=?, updated_at=? WHERE id=?').run(now() + minutes * 60000, now(), r.id);
+  res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(r.id));
+});
+
+// ── Web push ──────────────────────────────────────────────────
+// VAPID keys live in the server's docker-compose.yml env (generate once with
+// `npx web-push generate-vapid-keys`) — never committed. Without them the app
+// still runs; reminders advance but no notifications go out.
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const pushEnabled = !!(webpush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (pushEnabled) {
+  webpush.setVapidDetails('mailto:workspace@rfisolns.org', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn('push disabled — web-push module or VAPID keys not configured');
+}
+
+app.get('/api/push/vapid-key', auth, (req, res) => {
+  if (!pushEnabled) return res.status(503).json({ error: 'push not configured' });
+  res.json({ key: VAPID_PUBLIC_KEY });
+});
+
+app.post('/api/push/subscribe', auth, (req, res) => {
+  const { endpoint, keys } = req.body || {};
+  if (typeof endpoint !== 'string' || !endpoint || typeof keys?.p256dh !== 'string' || typeof keys?.auth !== 'string')
+    return res.status(400).json({ error: 'endpoint and keys required' });
+  db.prepare('INSERT OR REPLACE INTO push_subscriptions (endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(endpoint, req.userId, keys.p256dh, keys.auth, now());
+  res.json({ ok: true });
+});
+
+app.post('/api/push/unsubscribe', auth, (req, res) => {
+  const { endpoint } = req.body || {};
+  if (typeof endpoint !== 'string') return res.status(400).json({ error: 'endpoint required' });
+  db.prepare('DELETE FROM push_subscriptions WHERE endpoint=? AND user_id=?').run(endpoint, req.userId);
+  res.json({ ok: true });
+});
+
+// ── Reminder scheduler ────────────────────────────────────────
+// First in-process background loop in this app: every minute, fire anything
+// due, push to every registered device, then advance recurring reminders.
+// After downtime a long-overdue reminder fires ONE notification, not a backlog.
+async function sendPushToUser(userId, payload) {
+  if (!pushEnabled) return;
+  const subs = db.prepare('SELECT * FROM push_subscriptions WHERE user_id=?').all(userId);
+  for (const s of subs) {
+    try {
+      await webpush.sendNotification(
+        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+        JSON.stringify(payload)
+      );
+    } catch (err) {
+      // 404/410 = subscription expired/revoked — drop it. Anything else: log, move on.
+      if (err.statusCode === 404 || err.statusCode === 410) {
+        db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(s.endpoint);
+      } else {
+        console.warn('push send failed:', err.statusCode || err.message);
+      }
+    }
+  }
+}
+
+function fireTimeLabel(epochMs) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles', weekday: 'short', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  }).format(new Date(epochMs));
+}
+
+async function checkReminders() {
+  const t = now();
+  const due = db.prepare(`SELECT * FROM reminders
+    WHERE next_fire_at IS NOT NULL AND next_fire_at <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
+  for (const r of due) {
+    // Advance BEFORE the (async) send so a slow push can't double-fire on the next tick.
+    if (r.recur_type === 'none') {
+      db.prepare('UPDATE reminders SET next_fire_at=NULL WHERE id=?').run(r.id);
+    } else {
+      let next = r.next_fire_at;
+      do { next = advance(r, next); } while (next !== null && next <= t);
+      db.prepare('UPDATE reminders SET next_fire_at=? WHERE id=?').run(next, r.id);
+    }
+    await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: r.description || fireTimeLabel(r.next_fire_at) });
+  }
+  const snoozed = db.prepare(`SELECT * FROM reminders
+    WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
+  for (const r of snoozed) {
+    db.prepare('UPDATE reminders SET snoozed_until=NULL WHERE id=?').run(r.id);
+    await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: '(snoozed) ' + (r.description || '') });
+  }
+}
+setInterval(() => checkReminders().catch(err => console.warn('scheduler tick failed:', err.message)), 60000);
+checkReminders().catch(err => console.warn('scheduler startup check failed:', err.message));
 
 // ── SPA fallback
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
