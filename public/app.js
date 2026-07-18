@@ -19,6 +19,10 @@ let expenseSortCols = [];
 const selectedExpenses = new Set();
 let lastClickedExpenseId = null;
 
+let reminders = [];
+let currentReminderId = null;
+const remWeekdaySel = new Set();
+
 let boards = [];
 let currentBoardId = null;
 let currentBoardData = [];
@@ -98,8 +102,10 @@ async function fullSync() {
     ]);
     data.notes.forEach(n => { if (notesFullCache[n.id]) notesFullCache[n.id] = n; });
     notes = data.notes; boards = data.boards; allColumns = data.columns;
+    reminders = data.reminders || [];
     lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
+    if (currentTab === 'calendar') renderAgenda();
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
     notes = await idbGetAll('notes'); boards = await idbGetAll('boards');
@@ -117,7 +123,8 @@ let lastSyncHash = '';
 function hashData(data) {
   const ts = (data.tasks||[]).map(t=>t.id+':'+t.updated_at+':'+t.column_id).sort().join('|');
   const ns = (data.notes||[]).map(n=>n.id+':'+n.updated_at).sort().join('|');
-  return ts + '$$' + ns;
+  const rs = (data.reminders||[]).map(r=>r.id+':'+r.updated_at+':'+(r.next_fire_at||0)+':'+(r.snoozed_until||0)).sort().join('|');
+  return ts + '$$' + ns + '$$' + rs;
 }
 
 function buildBoardData(boardId, columns, tasks) {
@@ -143,7 +150,9 @@ async function pollSync() {
     ]);
     data.notes.forEach(n => { if (notesFullCache[n.id]) notesFullCache[n.id] = n; });
     notes = data.notes; boards = data.boards; allColumns = data.columns;
+    reminders = data.reminders || [];
     renderNotesList(); renderTagsBar(); renderBoardsBar();
+    if (currentTab === 'calendar') renderAgenda();
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
       const remote = data.notes.find(n => n.id === currentNoteId);
@@ -185,11 +194,35 @@ function setUploadsCookie() {
 function clearUploadsCookie() {
   document.cookie = 'ws_auth=; path=/uploads; expires=Thu, 01 Jan 1970 00:00:00 GMT';
 }
+// The service worker needs the credential too (notification action buttons hit
+// the API while the app may be closed, and the ws_auth cookie never reaches
+// /api). Mirrored into a tiny dedicated IDB the SW reads — see sw.js swGetAuth.
+function swAuthDb() {
+  return new Promise(resolve => {
+    const open = indexedDB.open('ws-push', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('kv');
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => resolve(null);
+  });
+}
+async function mirrorAuthForSw() {
+  const dbi = await swAuthDb();
+  if (!dbi) return;
+  dbi.transaction('kv', 'readwrite').objectStore('kv').put(authHeader, 'authHeader');
+  dbi.close();
+}
+async function clearSwAuth() {
+  const dbi = await swAuthDb();
+  if (!dbi) return;
+  dbi.transaction('kv', 'readwrite').objectStore('kv').delete('authHeader');
+  dbi.close();
+}
 function showLogin() {
   document.getElementById('login-overlay').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
   sessionStorage.removeItem('ws_auth');
   clearUploadsCookie();
+  clearSwAuth();
   pinBuffer = ''; updatePinDots();
 }
 async function tryLogin(pin) {
@@ -198,6 +231,7 @@ async function tryLogin(pin) {
     await apiFetch('GET', '/auth/check');
     sessionStorage.setItem('ws_auth', authHeader);
     setUploadsCookie();
+    mirrorAuthForSw();
     document.getElementById('login-overlay').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     if (isMobile()) document.getElementById('left-panel').classList.add('collapsed');
@@ -251,13 +285,16 @@ function switchTab(tab) {
   document.getElementById('notes-view').classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-view').classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-view')?.classList.toggle('hidden', tab !== 'expenses');
+  document.getElementById('calendar-view')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
+  document.getElementById('calendar-panel')?.classList.toggle('hidden', tab !== 'calendar');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
+  if (tab === 'calendar') loadCalendar();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
 
@@ -399,9 +436,10 @@ function renderTrashView(data) {
   if (!content) return;
   const notes = data.notes || [];
   const tasks = data.tasks || [];
+  const trashedReminders = data.reminders || [];
   const emptyBtn = document.getElementById('empty-trash-btn');
-  if (emptyBtn) emptyBtn.disabled = !notes.length && !tasks.length;
-  if (!notes.length && !tasks.length) {
+  if (emptyBtn) emptyBtn.disabled = !notes.length && !tasks.length && !trashedReminders.length;
+  if (!notes.length && !tasks.length && !trashedReminders.length) {
     content.innerHTML = '<div class="trash-empty">Trash is empty</div>';
     return;
   }
@@ -429,6 +467,19 @@ function renderTrashView(data) {
       <div class="trash-item-actions">
         <button class="trash-restore-btn" data-type="task" data-id="${t.id}">Restore</button>
         <button class="trash-perm-btn" data-type="task" data-id="${t.id}">Delete forever</button>
+      </div>
+    </div>`).join('');
+  }
+  if (trashedReminders.length) {
+    html += `<div class="trash-section-label">Reminders</div>`;
+    html += trashedReminders.map(r => `<div class="trash-item">
+      <div class="trash-item-info">
+        <span class="trash-item-title">${escHtml(r.title)}</span>
+        <span class="trash-item-date">Deleted ${fmtDate(r.deleted_at)}</span>
+      </div>
+      <div class="trash-item-actions">
+        <button class="trash-restore-btn" data-type="reminder" data-id="${r.id}">Restore</button>
+        <button class="trash-perm-btn" data-type="reminder" data-id="${r.id}">Delete forever</button>
       </div>
     </div>`).join('');
   }
@@ -494,15 +545,21 @@ function dpFromMdy(s) {
   return dpFromIso(iso);
 }
 
-function dpInit(iso) {
+// One picker implementation drives every date field; dpTarget says which
+// input/calendar pair is active (only one calendar is ever open at a time —
+// the document-level close listener guarantees that).
+let dpTarget = { inputId: 'exp-date', calId: 'exp-date-cal' };
+
+function dpInit(iso, inputId = 'exp-date', calId = 'exp-date-cal') {
+  dpTarget = { inputId, calId };
   const d = dpFromIso(iso) || new Date();
   dpYear = d.getFullYear(); dpMonth = d.getMonth();
-  document.getElementById('exp-date-cal')?.classList.add('hidden');
+  document.getElementById(calId)?.classList.add('hidden');
 }
 
 function dpRender() {
-  const cal = document.getElementById('exp-date-cal');
-  const input = document.getElementById('exp-date');
+  const cal = document.getElementById(dpTarget.calId);
+  const input = document.getElementById(dpTarget.inputId);
   if (!cal || !input) return;
   const today = dpToIso(new Date());
   const sel = mdyToIso(input.value);
@@ -551,16 +608,25 @@ function dpRender() {
   });
 }
 
-document.getElementById('exp-date-trigger').addEventListener('click', e => {
-  e.stopPropagation();
-  const cal = document.getElementById('exp-date-cal');
-  if (cal.classList.contains('hidden')) {
-    const typed = dpFromMdy(document.getElementById('exp-date')?.value);
-    if (typed) { dpYear = typed.getFullYear(); dpMonth = typed.getMonth(); }
-    dpRender(); cal.classList.remove('hidden');
-  } else cal.classList.add('hidden');
+function wireDatePicker(inputId, calId, triggerId) {
+  document.getElementById(triggerId)?.addEventListener('click', e => {
+    e.stopPropagation();
+    const cal = document.getElementById(calId);
+    if (!cal) return;
+    if (cal.classList.contains('hidden')) {
+      dpTarget = { inputId, calId };
+      const typed = dpFromMdy(document.getElementById(inputId)?.value);
+      if (typed) { dpYear = typed.getFullYear(); dpMonth = typed.getMonth(); }
+      dpRender(); cal.classList.remove('hidden');
+    } else cal.classList.add('hidden');
+  });
+}
+wireDatePicker('exp-date', 'exp-date-cal', 'exp-date-trigger');
+wireDatePicker('rem-date', 'rem-date-cal', 'rem-date-trigger');
+document.addEventListener('click', () => {
+  document.getElementById('exp-date-cal')?.classList.add('hidden');
+  document.getElementById('rem-date-cal')?.classList.add('hidden');
 });
-document.addEventListener('click', () => document.getElementById('exp-date-cal')?.classList.add('hidden'));
 
 // ── Expenses ───────────────────────────────────────────────────
 async function loadExpenses() {
@@ -1024,6 +1090,260 @@ async function exportExpensesCsv() {
     a.href = url; a.download = 'expenses.csv'; a.click();
     URL.revokeObjectURL(url);
   } catch(e) { toast('Export failed'); }
+}
+
+// ── Calendar / Reminders ───────────────────────────────────────
+const RECUR_UNITS = { daily: 'day(s)', weekly: 'week(s)', monthly: 'month(s)', yearly: 'year(s)' };
+const WD_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+async function loadCalendar() {
+  try { reminders = await apiFetch('GET', '/reminders'); } catch(e) {}
+  renderAgenda();
+  updateNotifsButton();
+}
+
+function recurLabel(r) {
+  if (r.recur_type === 'none') return '';
+  const n = r.recur_interval > 1 ? r.recur_interval + ' ' : '';
+  if (r.recur_type === 'weekly' && r.recur_weekdays) {
+    const days = r.recur_weekdays.split(',').map(d => WD_SHORT[+d]).join(' ');
+    return `↻ every ${n}wk · ${days}`;
+  }
+  return `↻ every ${n}${RECUR_UNITS[r.recur_type] || r.recur_type}`;
+}
+
+function fmtFireTime(ts) {
+  const d = new Date(ts);
+  const date = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
+// One row per reminder showing its NEXT occurrence (a ↻ badge marks the
+// series). Sections: Overdue / Today / Tomorrow / This week / Later.
+function renderAgenda() {
+  const list = document.getElementById('agenda-list');
+  if (!list) return;
+  const nowMs = Date.now();
+  const startOfDay = d => { const x = new Date(d); x.setHours(0,0,0,0); return x.getTime(); };
+  const todayStart = startOfDay(nowMs);
+  const tomorrowStart = todayStart + 86400000; // section bucketing only — fire times come from the server
+  const dayAfterStart = tomorrowStart + 86400000;
+  const weekEnd = todayStart + 7 * 86400000;
+
+  const buckets = { overdue: [], today: [], tomorrow: [], week: [], later: [], done: [] };
+  for (const r of reminders) {
+    if (r.completed_at) { buckets.done.push({ r, fireAt: r.completed_at }); continue; }
+    const fireAt = r.snoozed_until || r.next_fire_at;
+    if (fireAt == null) { buckets.overdue.push({ r, fireAt: r.first_fire_at }); continue; } // fired one-off awaiting done
+    if (fireAt < nowMs) buckets.overdue.push({ r, fireAt });
+    else if (fireAt < tomorrowStart) buckets.today.push({ r, fireAt });
+    else if (fireAt < dayAfterStart) buckets.tomorrow.push({ r, fireAt });
+    else if (fireAt < weekEnd) buckets.week.push({ r, fireAt });
+    else buckets.later.push({ r, fireAt });
+  }
+  for (const k in buckets) buckets[k].sort((a, b) => a.fireAt - b.fireAt);
+  buckets.done.sort((a, b) => b.fireAt - a.fireAt); // newest done first
+  buckets.done = buckets.done.slice(0, 20);
+
+  // The ✓ quick-action only shows on one-offs: with the advance-on-fire model
+  // a recurring reminder's row always shows a FUTURE occurrence, so "done"
+  // there would be ambiguous (skip next vs acknowledge last) — manage series
+  // via the modal instead.
+  const section = (label, items, opts = {}) => !items.length ? '' :
+    `<div class="agenda-section-label">${label}</div>` + items.map(({ r, fireAt }) => `
+      <div class="agenda-item${opts.done ? ' agenda-item-done' : ''}" data-id="${r.id}">
+        <div class="agenda-item-main">
+          <div class="agenda-item-title">${escHtml(r.title)}</div>
+          <div class="agenda-item-meta">
+            <span class="agenda-item-time">${opts.done ? 'Done ' : ''}${fmtFireTime(fireAt)}</span>
+            ${r.recur_type !== 'none' ? `<span class="agenda-badge">${escHtml(recurLabel(r))}</span>` : ''}
+            ${!opts.done && r.snoozed_until ? '<span class="agenda-badge agenda-snoozed">snoozed</span>' : ''}
+          </div>
+          ${r.description ? `<div class="agenda-item-desc">${escHtml(r.description)}</div>` : ''}
+        </div>
+        ${!opts.done && r.recur_type === 'none' ? `<button class="agenda-done-btn" data-id="${r.id}" title="Mark done">✓</button>` : ''}
+      </div>`).join('');
+
+  list.innerHTML =
+    (section('Overdue', buckets.overdue) + section('Today', buckets.today) +
+    section('Tomorrow', buckets.tomorrow) + section('This week', buckets.week) +
+    section('Later', buckets.later) ||
+    '<div class="agenda-empty">No reminders — hit + to add one</div>') +
+    section('Completed', buckets.done, { done: true });
+
+  list.querySelectorAll('.agenda-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const r = reminders.find(x => x.id === el.dataset.id);
+      if (r) openReminderModal(r);
+    });
+  });
+  list.querySelectorAll('.agenda-done-btn').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      try {
+        const updated = await apiCall('POST', '/reminders/' + btn.dataset.id + '/complete');
+        const idx = reminders.findIndex(x => x.id === updated.id);
+        if (idx >= 0) reminders[idx] = updated;
+        renderAgenda(); toast('Done');
+      } catch(err) {
+        toast(String(err.message || '').includes('offline')
+          ? 'Offline — will mark done when reconnected' : 'Could not update — check connection');
+      }
+    });
+  });
+}
+
+// ── Reminder modal ──
+function updateRecurRows() {
+  const type = document.getElementById('rem-recur').value;
+  document.getElementById('rem-interval-row').classList.toggle('hidden', type === 'none');
+  document.getElementById('rem-end-row').classList.toggle('hidden', type === 'none');
+  document.getElementById('rem-weekdays-row').classList.toggle('hidden', type !== 'weekly');
+  document.getElementById('rem-interval-unit').textContent = RECUR_UNITS[type] || '';
+}
+
+function renderWeekdayPills() {
+  document.querySelectorAll('#rem-weekdays .rem-wd').forEach(b =>
+    b.classList.toggle('active', remWeekdaySel.has(+b.dataset.d)));
+}
+
+function openReminderModal(reminder = null) {
+  currentReminderId = reminder?.id || null;
+  document.getElementById('reminder-modal-label').textContent = reminder ? 'Edit Reminder' : 'New Reminder';
+  document.getElementById('reminder-modal-delete').style.display = reminder ? '' : 'none';
+  document.getElementById('rem-title').value = reminder?.title || '';
+  document.getElementById('rem-desc').value = reminder?.description || '';
+  const base = reminder ? new Date(reminder.first_fire_at) : new Date(Date.now() + 3600000);
+  const iso = dpToIso(base);
+  document.getElementById('rem-date').value = isoToMdy(iso);
+  dpInit(iso, 'rem-date', 'rem-date-cal');
+  document.getElementById('rem-time').value =
+    String(base.getHours()).padStart(2,'0') + ':' + String(base.getMinutes()).padStart(2,'0');
+  document.getElementById('rem-recur').value = reminder?.recur_type || 'none';
+  document.getElementById('rem-interval').value = reminder?.recur_interval || 1;
+  remWeekdaySel.clear();
+  (reminder?.recur_weekdays || '').split(',').filter(s => s !== '').forEach(d => remWeekdaySel.add(+d));
+  renderWeekdayPills();
+  document.getElementById('rem-end').value = reminder?.recur_end_at ? isoToMdy(dpToIso(new Date(reminder.recur_end_at))) : '';
+  updateRecurRows();
+  document.getElementById('reminder-modal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('rem-title').focus(), 30);
+}
+
+function closeReminderModal() {
+  document.getElementById('reminder-modal').classList.add('hidden');
+  currentReminderId = null;
+}
+
+async function saveReminder() {
+  const title = document.getElementById('rem-title').value.trim();
+  if (!title) { toast('Title required'); return; }
+  const dateStr = document.getElementById('rem-date').value;
+  if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateStr)) { toast('Date must be MM/DD/YYYY'); return; }
+  const timeStr = document.getElementById('rem-time').value || '09:00';
+  const [m, d, y] = dateStr.split('/').map(Number);
+  const [hh, mm] = timeStr.split(':').map(Number);
+  // Device local time == LA for this deployment (single-timezone by design)
+  const first_fire_at = new Date(y, m - 1, d, hh, mm).getTime();
+  const recur_type = document.getElementById('rem-recur').value;
+  const recur_interval = Math.max(1, parseInt(document.getElementById('rem-interval').value, 10) || 1);
+  const recur_weekdays = recur_type === 'weekly' && remWeekdaySel.size ? [...remWeekdaySel].sort().join(',') : null;
+  let recur_end_at = null;
+  const endStr = document.getElementById('rem-end').value.trim();
+  if (recur_type !== 'none' && endStr) {
+    if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(endStr)) { toast('End date must be MM/DD/YYYY'); return; }
+    const [em, ed, ey] = endStr.split('/').map(Number);
+    recur_end_at = new Date(ey, em - 1, ed, 23, 59).getTime();
+  }
+  const body = { title, description: document.getElementById('rem-desc').value.trim(),
+    first_fire_at, recur_type, recur_interval, recur_weekdays, recur_end_at };
+  const isEdit = !!currentReminderId;
+  try {
+    if (isEdit) {
+      const updated = await apiCall('PUT', '/reminders/' + currentReminderId, body);
+      const idx = reminders.findIndex(r => r.id === updated.id);
+      if (idx >= 0) reminders[idx] = updated;
+    } else {
+      reminders.push(await apiCall('POST', '/reminders', body));
+    }
+    closeReminderModal(); renderAgenda();
+    toast(isEdit ? 'Reminder updated' : 'Reminder added');
+  } catch(e) {
+    // apiCall queues non-GET writes while offline and replays them on
+    // reconnect — say so honestly instead of inviting a duplicate retry.
+    if (String(e.message || '').includes('offline')) {
+      closeReminderModal();
+      toast('Offline — reminder will save when reconnected');
+    } else {
+      toast('Could not save: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection'));
+    }
+  }
+}
+
+async function deleteReminder() {
+  if (!currentReminderId) return;
+  if (!confirm('Delete this reminder?')) return;
+  const id = currentReminderId;
+  reminders = reminders.filter(r => r.id !== id);
+  closeReminderModal(); renderAgenda();
+  try { await apiCall('DELETE', '/reminders/' + id); } catch(e) {}
+}
+
+// ── Push notifications setup ──
+function urlBase64ToUint8Array(base64) {
+  const padding = '='.repeat((4 - base64.length % 4) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function subscribePush() {
+  const reg = await navigator.serviceWorker.ready;
+  const { key } = await apiFetch('GET', '/push/vapid-key');
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(key),
+  });
+  await apiCall('POST', '/push/subscribe', sub.toJSON());
+}
+
+async function updateNotifsButton() {
+  const btn = document.getElementById('enable-notifs-btn');
+  if (!btn) return;
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    btn.classList.add('hidden'); return;
+  }
+  let subscribed = false;
+  if (Notification.permission === 'granted') {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      subscribed = !!(await reg.pushManager.getSubscription());
+    } catch(e) {}
+  }
+  btn.classList.toggle('hidden', subscribed);
+}
+
+async function enableNotifications() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Notifications blocked — allow them in browser settings'); return; }
+    await subscribePush();
+    toast('Notifications enabled on this device');
+  } catch(e) {
+    toast(String(e.message || '').includes('not configured')
+      ? 'Push not set up on the server yet' : 'Could not enable notifications');
+  }
+  updateNotifsButton();
+}
+
+// Keep the server's subscription row fresh on every app open (endpoints rotate).
+async function refreshPushSubscription() {
+  try {
+    if (!('serviceWorker' in navigator) || Notification.permission !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await apiFetch('POST', '/push/subscribe', sub.toJSON());
+  } catch(e) {}
 }
 
 // ── Chase CSV Import ───────────────────────────────────────────
@@ -1727,6 +2047,8 @@ const COMMANDS = [
   { label: 'Switch to Expenses',   icon: '$',  action: () => switchTab('expenses') },
   { label: 'New Expense',          icon: '$',  action: () => { switchTab('expenses'); openExpenseModal(); } },
   { label: 'Export Expenses CSV',  icon: '↓',  action: exportExpensesCsv },
+  { label: 'Switch to Calendar',   icon: '📅', action: () => switchTab('calendar') },
+  { label: 'New Reminder',         icon: '⏰', action: () => { switchTab('calendar'); openReminderModal(); } },
   { label: 'Open Trash',           icon: '🗑', action: () => switchTab('trash') },
 ];
 
@@ -2448,6 +2770,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape') {
     if (dropdownOpen) { closeSearch(); return; }
+    if (!document.getElementById('reminder-modal').classList.contains('hidden')) { closeReminderModal(); return; }
     if (!document.getElementById('expense-modal').classList.contains('hidden')) { closeExpenseModal(); return; }
     if (!document.getElementById('task-modal').classList.contains('hidden')) { closeTaskModal(); return; }
   }
@@ -2539,6 +2862,25 @@ document.getElementById('chase-import-close')?.addEventListener('click', () => {
 document.getElementById('chase-import-cancel')?.addEventListener('click', () => { document.getElementById('chase-import-modal').classList.add('hidden'); chaseImportPending = null; });
 document.getElementById('chase-import-confirm')?.addEventListener('click', confirmChaseImport);
 document.getElementById('chase-import-modal')?.addEventListener('click', e => { if (e.target === document.getElementById('chase-import-modal')) { chaseImportPending = null; e.target.classList.add('hidden'); } });
+// Calendar / reminders
+document.getElementById('add-reminder-btn').addEventListener('click', () => { switchTab('calendar'); openReminderModal(); });
+document.getElementById('reminder-modal-close').addEventListener('click', closeReminderModal);
+document.getElementById('reminder-modal-cancel').addEventListener('click', closeReminderModal);
+document.getElementById('reminder-modal-save').addEventListener('click', saveReminder);
+document.getElementById('reminder-modal-delete').addEventListener('click', deleteReminder);
+document.getElementById('reminder-modal').addEventListener('click', e => { if (e.target === document.getElementById('reminder-modal')) closeReminderModal(); });
+document.getElementById('reminder-modal').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches('input:not([type="time"])')) { e.preventDefault(); saveReminder(); }
+});
+document.getElementById('rem-recur').addEventListener('change', updateRecurRows);
+document.getElementById('rem-weekdays').addEventListener('click', e => {
+  const btn = e.target.closest('.rem-wd');
+  if (!btn) return;
+  const d = +btn.dataset.d;
+  remWeekdaySel.has(d) ? remWeekdaySel.delete(d) : remWeekdaySel.add(d);
+  renderWeekdayPills();
+});
+document.getElementById('enable-notifs-btn').addEventListener('click', enableNotifications);
 document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTasks);
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);
@@ -2569,6 +2911,8 @@ document.getElementById('task-modal').addEventListener('click',e=>{if(e.target==
     try {
       await apiFetch('GET','/auth/check');
       setUploadsCookie();
+      mirrorAuthForSw();
+      refreshPushSubscription();
       document.getElementById('login-overlay').classList.add('hidden');
       document.getElementById('app').classList.remove('hidden');
       if (isMobile()) document.getElementById('left-panel').classList.add('collapsed');
