@@ -303,7 +303,8 @@ app.get('/api/sync', auth, (req, res) => {
   const boards = db.prepare('SELECT * FROM boards WHERE user_id=? ORDER BY position').all(req.userId);
   const columns = db.prepare('SELECT * FROM columns WHERE user_id=? ORDER BY position').all(req.userId);
   const tasks = db.prepare('SELECT * FROM tasks WHERE deleted_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
-  const reminders = db.prepare('SELECT * FROM reminders WHERE deleted_at IS NULL AND user_id=? ORDER BY next_fire_at ASC').all(req.userId);
+  const reminders = db.prepare('SELECT * FROM reminders WHERE deleted_at IS NULL AND user_id=? AND (completed_at IS NULL OR completed_at > ?) ORDER BY next_fire_at ASC')
+    .all(req.userId, now() - COMPLETED_KEEP_MS);
   res.json({ notes, boards, columns, tasks, reminders });
 });
 
@@ -603,8 +604,13 @@ function reminderFields(body) {
   };
 }
 
+// Completed one-offs stay listed for 60 days (the agenda's Completed section),
+// then drop out of the payload — keeps the 2s sync poll from growing forever.
+const COMPLETED_KEEP_MS = 60 * 86400000;
+
 app.get('/api/reminders', auth, (req, res) => {
-  res.json(db.prepare('SELECT * FROM reminders WHERE user_id=? AND deleted_at IS NULL ORDER BY next_fire_at ASC').all(req.userId));
+  res.json(db.prepare('SELECT * FROM reminders WHERE user_id=? AND deleted_at IS NULL AND (completed_at IS NULL OR completed_at > ?) ORDER BY next_fire_at ASC')
+    .all(req.userId, now() - COMPLETED_KEEP_MS));
 });
 
 app.post('/api/reminders', auth, (req, res) => {
@@ -612,6 +618,8 @@ app.post('/api/reminders', auth, (req, res) => {
   if (f.error) return res.status(400).json({ error: f.error });
   const id = uid(), t = now();
   const next_fire_at = computeInitialNextFire(f, t);
+  if (f.recur_type !== 'none' && next_fire_at === null)
+    return res.status(400).json({ error: 'series is entirely in the past — check the end date' });
   db.prepare(`INSERT INTO reminders (id, user_id, title, description, first_fire_at, recur_type, recur_interval,
       recur_weekdays, recur_end_at, next_fire_at, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -633,6 +641,8 @@ app.put('/api/reminders/:id', auth, (req, res) => {
   // A schedule edit re-arms the reminder: recompute next fire, clear snooze,
   // and un-complete (rescheduling an old done one-off is the natural "revive").
   const next_fire_at = scheduleChanged ? computeInitialNextFire(f, t) : r.next_fire_at;
+  if (scheduleChanged && f.recur_type !== 'none' && next_fire_at === null)
+    return res.status(400).json({ error: 'series is entirely in the past — check the end date' });
   const snoozed_until = scheduleChanged ? null : r.snoozed_until;
   const completed_at = scheduleChanged ? null : r.completed_at;
   db.prepare(`UPDATE reminders SET title=?, description=?, first_fire_at=?, recur_type=?, recur_interval=?,
@@ -651,10 +661,11 @@ app.delete('/api/reminders/:id', auth, (req, res) => {
 app.post('/api/reminders/:id/complete', auth, (req, res) => {
   const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  // One-off: done for good. Recurring: the scheduler already advanced
-  // next_fire_at when it fired (advance-on-fire) — "done" just silences any
-  // pending snooze echo; the series keeps going.
-  if (r.recur_type === 'none') {
+  // One-off: done for good. Recurring with a live series: the scheduler
+  // already advanced next_fire_at when it fired (advance-on-fire) — "done"
+  // just silences any pending snooze echo; the series keeps going. Recurring
+  // with next_fire_at NULL (series exhausted past its end date): done for good.
+  if (r.recur_type === 'none' || r.next_fire_at === null) {
     db.prepare('UPDATE reminders SET completed_at=?, snoozed_until=NULL, next_fire_at=NULL, updated_at=? WHERE id=?').run(now(), now(), r.id);
   } else {
     db.prepare('UPDATE reminders SET snoozed_until=NULL, updated_at=? WHERE id=?').run(now(), r.id);
@@ -665,6 +676,7 @@ app.post('/api/reminders/:id/complete', auth, (req, res) => {
 app.post('/api/reminders/:id/snooze', auth, (req, res) => {
   const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!r) return res.status(404).json({ error: 'Not found' });
+  if (r.completed_at) return res.status(400).json({ error: 'reminder is completed' });
   const minutes = parseInt(req.body.minutes, 10);
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) return res.status(400).json({ error: 'minutes must be 1-10080' });
   db.prepare('UPDATE reminders SET snoozed_until=?, updated_at=? WHERE id=?').run(now() + minutes * 60000, now(), r.id);
@@ -736,26 +748,39 @@ function fireTimeLabel(epochMs) {
   }).format(new Date(epochMs));
 }
 
+let schedulerTickRunning = false;
 async function checkReminders() {
-  const t = now();
-  const due = db.prepare(`SELECT * FROM reminders
-    WHERE next_fire_at IS NOT NULL AND next_fire_at <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
-  for (const r of due) {
-    // Advance BEFORE the (async) send so a slow push can't double-fire on the next tick.
-    if (r.recur_type === 'none') {
-      db.prepare('UPDATE reminders SET next_fire_at=NULL WHERE id=?').run(r.id);
-    } else {
-      let next = r.next_fire_at;
-      do { next = advance(r, next); } while (next !== null && next <= t);
-      db.prepare('UPDATE reminders SET next_fire_at=? WHERE id=?').run(next, r.id);
+  if (schedulerTickRunning) return; // a hung push send must not let ticks overlap
+  schedulerTickRunning = true;
+  try {
+    const t = now();
+    const due = db.prepare(`SELECT * FROM reminders
+      WHERE next_fire_at IS NOT NULL AND next_fire_at <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
+    for (const r of due) {
+      // Advance BEFORE the (async) send so a slow push can't double-fire on the next tick.
+      if (r.recur_type === 'none') {
+        db.prepare('UPDATE reminders SET next_fire_at=NULL WHERE id=?').run(r.id);
+      } else {
+        let next = r.next_fire_at;
+        do { next = advance(r, next); } while (next !== null && next <= t);
+        // A null advance means the series just fired its last occurrence
+        // (recur_end_at reached) — that's completion, not a dangling row.
+        if (next === null) {
+          db.prepare('UPDATE reminders SET next_fire_at=NULL, completed_at=? WHERE id=?').run(t, r.id);
+        } else {
+          db.prepare('UPDATE reminders SET next_fire_at=? WHERE id=?').run(next, r.id);
+        }
+      }
+      await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: r.description || fireTimeLabel(r.next_fire_at) });
     }
-    await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: r.description || fireTimeLabel(r.next_fire_at) });
-  }
-  const snoozed = db.prepare(`SELECT * FROM reminders
-    WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
-  for (const r of snoozed) {
-    db.prepare('UPDATE reminders SET snoozed_until=NULL WHERE id=?').run(r.id);
-    await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: '(snoozed) ' + (r.description || '') });
+    const snoozed = db.prepare(`SELECT * FROM reminders
+      WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
+    for (const r of snoozed) {
+      db.prepare('UPDATE reminders SET snoozed_until=NULL WHERE id=?').run(r.id);
+      await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: '(snoozed) ' + (r.description || '') });
+    }
+  } finally {
+    schedulerTickRunning = false;
   }
 }
 setInterval(() => checkReminders().catch(err => console.warn('scheduler tick failed:', err.message)), 60000);

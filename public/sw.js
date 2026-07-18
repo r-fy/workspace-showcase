@@ -61,13 +61,27 @@ function swGetAuth() {
   });
 }
 
+// Returns true only when the API accepted the action; false on missing/stale
+// auth, offline, or a non-2xx — callers open the app instead of failing silently.
 async function swApiPost(path, body) {
   const authHeader = await swGetAuth();
-  if (!authHeader) return; // logged out — click still opens the app below
-  await fetch('/api' + path, {
-    method: 'POST',
-    headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
+  if (!authHeader) return false; // logged out
+  try {
+    const res = await fetch('/api' + path, {
+      method: 'POST',
+      headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    return res.ok;
+  } catch (err) {
+    return false;
+  }
+}
+
+function swOpenApp() {
+  return clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    for (const c of list) if ('focus' in c) return c.focus();
+    return clients.openWindow('/');
   });
 }
 
@@ -90,15 +104,15 @@ self.addEventListener('push', e => {
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const id = e.notification.data && e.notification.data.id;
-  if (e.action === 'done' && id) {
-    e.waitUntil(swApiPost('/reminders/' + id + '/complete').catch(() => {}));
-  } else if (e.action === 'snooze' && id) {
-    e.waitUntil(swApiPost('/reminders/' + id + '/snooze', { minutes: 60 }).catch(() => {}));
+  if ((e.action === 'done' || e.action === 'snooze') && id) {
+    const call = e.action === 'done'
+      ? swApiPost('/reminders/' + id + '/complete')
+      : swApiPost('/reminders/' + id + '/snooze', { minutes: 60 });
+    // If the action couldn't land (locked out, offline, stale auth), open the
+    // app so the user sees why instead of the tap silently doing nothing.
+    e.waitUntil(call.then(ok => { if (!ok) return swOpenApp(); }).catch(() => swOpenApp()));
   } else {
-    e.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      for (const c of list) if ('focus' in c) return c.focus();
-      return clients.openWindow('/');
-    }));
+    e.waitUntil(swOpenApp());
   }
 });
 

@@ -790,6 +790,8 @@ header {
 }
 .agenda-done-btn:hover { border-color: #2a5a20; color: #8ce870; background: #1a3a13; }
 .agenda-empty { color: #555; font-size: 13px; text-align: center; padding: 40px 16px; }
+.agenda-item-done { opacity: 0.5; }
+.agenda-item-done .agenda-item-title { text-decoration: line-through; }
 
 @media (max-width: 640px) {
   .agenda-done-btn { opacity: 1; } /* no hover on touch — always visible */

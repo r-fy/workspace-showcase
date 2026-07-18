@@ -22,17 +22,21 @@ function laWall(epochMs) {
 }
 
 // LA wall-clock time -> epoch ms. Guess UTC, measure how far off the LA
-// rendering of the guess is, correct, re-check once (handles DST edges; the
-// nonexistent spring-forward hour lands on the post-jump interpretation).
+// rendering of the guess is, correct, re-check (handles DST edges). A wall
+// time inside the spring-forward gap (2:00-2:59 AM on the jump day) doesn't
+// exist — the correction loop oscillates between the pre- and post-jump
+// instants; we take the later (post-jump) one.
 function laEpoch(y, m, d, hh, mm) {
-  let guess = Date.UTC(y, m - 1, d, hh, mm);
-  for (let i = 0; i < 2; i++) {
+  const target = Date.UTC(y, m - 1, d, hh, mm);
+  let guess = target, prev = guess;
+  for (let i = 0; i < 3; i++) {
     const w = laWall(guess);
-    const diff = Date.UTC(w.y, w.m - 1, w.d, w.hh, w.mm) - Date.UTC(y, m - 1, d, hh, mm);
-    if (diff === 0) break;
+    const diff = Date.UTC(w.y, w.m - 1, w.d, w.hh, w.mm) - target;
+    if (diff === 0) return guess;
+    prev = guess;
     guess -= diff;
   }
-  return guess;
+  return Math.max(guess, prev);
 }
 
 function daysInMonth(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
@@ -102,7 +106,7 @@ function advance(reminder, fromEpochMs) {
       k++;
     }
   } else if (type === 'yearly') {
-    let k = Math.max(0, from.y - first.y);
+    let k = Math.max(0, Math.floor((from.y - first.y) / interval));
     for (let i = 0; i < 3; i++) {
       const y = first.y + k * interval;
       const d = Math.min(first.d, daysInMonth(y, first.m));
@@ -119,13 +123,17 @@ function advance(reminder, fromEpochMs) {
   return next;
 }
 
-// next_fire_at for a freshly created/edited reminder: the first fire if still
-// ahead; else the next future occurrence for recurring; a past one-off keeps
-// its past time so it fires once immediately (creating it was the intent).
+// next_fire_at for a freshly created/edited reminder. One-off: first_fire_at
+// as-is (a past one fires once immediately — creating it was the intent).
+// Recurring: the next on-grid occurrence — advancing from just before
+// first_fire_at (or from now if that's later) both catches up an overdue
+// series AND snaps a first fire whose weekday/day isn't on the recurrence
+// grid (e.g. weekly Mon/Thu created on a Wednesday) onto the grid, instead
+// of firing once on the unselected day. Returns null if the whole series is
+// already past (recur_end_at exhausted) — callers must reject that.
 function computeInitialNextFire(reminder, nowMs) {
-  if (reminder.first_fire_at > nowMs) return reminder.first_fire_at;
   if (reminder.recur_type === 'none' || !reminder.recur_type) return reminder.first_fire_at;
-  return advance(reminder, nowMs);
+  return advance(reminder, Math.max(nowMs, reminder.first_fire_at - 1));
 }
 
 module.exports = { laWall, laEpoch, advance, computeInitialNextFire, parseWeekdays };

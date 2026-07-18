@@ -1131,9 +1131,9 @@ function renderAgenda() {
   const dayAfterStart = tomorrowStart + 86400000;
   const weekEnd = todayStart + 7 * 86400000;
 
-  const buckets = { overdue: [], today: [], tomorrow: [], week: [], later: [] };
+  const buckets = { overdue: [], today: [], tomorrow: [], week: [], later: [], done: [] };
   for (const r of reminders) {
-    if (r.completed_at) continue;
+    if (r.completed_at) { buckets.done.push({ r, fireAt: r.completed_at }); continue; }
     const fireAt = r.snoozed_until || r.next_fire_at;
     if (fireAt == null) { buckets.overdue.push({ r, fireAt: r.first_fire_at }); continue; } // fired one-off awaiting done
     if (fireAt < nowMs) buckets.overdue.push({ r, fireAt });
@@ -1143,27 +1143,34 @@ function renderAgenda() {
     else buckets.later.push({ r, fireAt });
   }
   for (const k in buckets) buckets[k].sort((a, b) => a.fireAt - b.fireAt);
+  buckets.done.sort((a, b) => b.fireAt - a.fireAt); // newest done first
+  buckets.done = buckets.done.slice(0, 20);
 
-  const section = (label, items) => !items.length ? '' :
+  // The ✓ quick-action only shows on one-offs: with the advance-on-fire model
+  // a recurring reminder's row always shows a FUTURE occurrence, so "done"
+  // there would be ambiguous (skip next vs acknowledge last) — manage series
+  // via the modal instead.
+  const section = (label, items, opts = {}) => !items.length ? '' :
     `<div class="agenda-section-label">${label}</div>` + items.map(({ r, fireAt }) => `
-      <div class="agenda-item" data-id="${r.id}">
+      <div class="agenda-item${opts.done ? ' agenda-item-done' : ''}" data-id="${r.id}">
         <div class="agenda-item-main">
           <div class="agenda-item-title">${escHtml(r.title)}</div>
           <div class="agenda-item-meta">
-            <span class="agenda-item-time">${fmtFireTime(fireAt)}</span>
+            <span class="agenda-item-time">${opts.done ? 'Done ' : ''}${fmtFireTime(fireAt)}</span>
             ${r.recur_type !== 'none' ? `<span class="agenda-badge">${escHtml(recurLabel(r))}</span>` : ''}
-            ${r.snoozed_until ? '<span class="agenda-badge agenda-snoozed">snoozed</span>' : ''}
+            ${!opts.done && r.snoozed_until ? '<span class="agenda-badge agenda-snoozed">snoozed</span>' : ''}
           </div>
           ${r.description ? `<div class="agenda-item-desc">${escHtml(r.description)}</div>` : ''}
         </div>
-        <button class="agenda-done-btn" data-id="${r.id}" title="${r.recur_type === 'none' ? 'Mark done' : 'Done for this time'}">✓</button>
+        ${!opts.done && r.recur_type === 'none' ? `<button class="agenda-done-btn" data-id="${r.id}" title="Mark done">✓</button>` : ''}
       </div>`).join('');
 
   list.innerHTML =
-    section('Overdue', buckets.overdue) + section('Today', buckets.today) +
+    (section('Overdue', buckets.overdue) + section('Today', buckets.today) +
     section('Tomorrow', buckets.tomorrow) + section('This week', buckets.week) +
     section('Later', buckets.later) ||
-    '<div class="agenda-empty">No reminders — hit + to add one</div>';
+    '<div class="agenda-empty">No reminders — hit + to add one</div>') +
+    section('Completed', buckets.done, { done: true });
 
   list.querySelectorAll('.agenda-item').forEach(el => {
     el.addEventListener('click', () => {
@@ -1179,7 +1186,10 @@ function renderAgenda() {
         const idx = reminders.findIndex(x => x.id === updated.id);
         if (idx >= 0) reminders[idx] = updated;
         renderAgenda(); toast('Done');
-      } catch(err) { toast('Could not update — check connection'); }
+      } catch(err) {
+        toast(String(err.message || '').includes('offline')
+          ? 'Offline — will mark done when reconnected' : 'Could not update — check connection');
+      }
     });
   });
 }
@@ -1259,7 +1269,16 @@ async function saveReminder() {
     }
     closeReminderModal(); renderAgenda();
     toast(isEdit ? 'Reminder updated' : 'Reminder added');
-  } catch(e) { toast('Could not save — check connection'); }
+  } catch(e) {
+    // apiCall queues non-GET writes while offline and replays them on
+    // reconnect — say so honestly instead of inviting a duplicate retry.
+    if (String(e.message || '').includes('offline')) {
+      closeReminderModal();
+      toast('Offline — reminder will save when reconnected');
+    } else {
+      toast('Could not save: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection'));
+    }
+  }
 }
 
 async function deleteReminder() {
