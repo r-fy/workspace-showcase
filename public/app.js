@@ -1359,7 +1359,16 @@ function urlBase64ToUint8Array(base64) {
 
 async function subscribePush() {
   const reg = await navigator.serviceWorker.ready;
+  // Fetch the key BEFORE touching the existing subscription so an offline/
+  // failed fetch can't destroy a working subscription (review catch).
   const { key } = await apiFetch('GET', '/push/vapid-key');
+  // Discard any existing subscription before subscribing — subscribe() is NOT
+  // idempotent: with one already present the browser hands back the same
+  // (possibly dead) cached subscription instead of negotiating a fresh
+  // endpoint. This exact gap kept a 403-dead Android subscription
+  // re-registering itself forever.
+  const existing = await reg.pushManager.getSubscription();
+  if (existing) await existing.unsubscribe();
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(key),
@@ -1367,10 +1376,15 @@ async function subscribePush() {
   await apiCall('POST', '/push/subscribe', sub.toJSON());
 }
 
+// The button never hides while permission is granted: a local subscription
+// existing says nothing about whether the push service still honors it, so
+// there must always be a one-tap way to force a real resubscribe. It only
+// hides on unsupported browsers or a hard permission denial.
 async function updateNotifsButton() {
   const btn = document.getElementById('enable-notifs-btn');
   if (!btn) return;
-  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)
+      || Notification.permission === 'denied') {
     btn.classList.add('hidden'); return;
   }
   let subscribed = false;
@@ -1380,7 +1394,8 @@ async function updateNotifsButton() {
       subscribed = !!(await reg.pushManager.getSubscription());
     } catch(e) {}
   }
-  btn.classList.toggle('hidden', subscribed);
+  btn.textContent = subscribed ? '🔄 Refresh notifications' : '🔔 Enable notifications';
+  btn.classList.remove('hidden');
 }
 
 async function enableNotifications() {
@@ -1390,6 +1405,7 @@ async function enableNotifications() {
     await subscribePush();
     toast('Notifications enabled on this device');
   } catch(e) {
+    console.warn('push subscribe failed:', e);
     toast(String(e.message || '').includes('not configured')
       ? 'Push not set up on the server yet' : 'Could not enable notifications');
   }
@@ -1408,7 +1424,7 @@ async function refreshPushSubscription() {
     if (sub) await apiFetch('POST', '/push/subscribe', sub.toJSON());
     else await subscribePush();
     updateNotifsButton();
-  } catch(e) {}
+  } catch(e) { console.warn('push subscription refresh failed:', e); }
 }
 
 // ── Chase CSV Import ───────────────────────────────────────────
