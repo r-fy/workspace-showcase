@@ -736,8 +736,9 @@ app.post('/api/push/unsubscribe', auth, (req, res) => {
 });
 
 // ── Reminder scheduler ────────────────────────────────────────
-// First in-process background loop in this app: every minute, fire anything
-// due, push to every registered device, then advance recurring reminders.
+// First in-process background loop in this app: every 15 seconds, fire
+// anything due, push to every registered device, then advance recurring
+// reminders.
 // After downtime a long-overdue reminder fires ONE notification, not a backlog.
 async function sendPushToUser(userId, payload) {
   if (!pushEnabled) return;
@@ -832,7 +833,7 @@ async function checkReminders() {
     schedulerTickRunning = false;
   }
 }
-setInterval(() => checkReminders().catch(err => console.warn('scheduler tick failed:', err.message)), 60000);
+setInterval(() => checkReminders().catch(err => console.warn('scheduler tick failed:', err.message)), 15000);
 checkReminders().catch(err => console.warn('scheduler startup check failed:', err.message));
 
 // ── SPA fallback
