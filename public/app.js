@@ -232,6 +232,7 @@ async function tryLogin(pin) {
     sessionStorage.setItem('ws_auth', authHeader);
     setUploadsCookie();
     mirrorAuthForSw();
+    refreshPushSubscription(); // fresh PIN login path was missing this — restore-path only before
     document.getElementById('login-overlay').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     if (isMobile()) document.getElementById('left-panel').classList.add('collapsed');
@@ -1132,6 +1133,12 @@ function recurLabel(r) {
   return `↻ every ${n}${RECUR_UNITS[r.recur_type] || r.recur_type}`;
 }
 
+function leadLabel(minutes) {
+  if (minutes % 1440 === 0) { const d = minutes / 1440; return d + (d === 1 ? ' day' : ' days'); }
+  if (minutes % 60 === 0) { const h = minutes / 60; return h + (h === 1 ? ' hr' : ' hrs'); }
+  return minutes + ' min';
+}
+
 function fmtFireTime(ts) {
   const d = new Date(ts);
   const date = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
@@ -1170,33 +1177,44 @@ function renderAgenda() {
   // a recurring reminder's row always shows a FUTURE occurrence, so "done"
   // there would be ambiguous (skip next vs acknowledge last) — manage series
   // via the modal instead.
+  // opts.timeClass colors the time pill by urgency bucket; the Completed
+  // section keeps the old dim plain text so it doesn't fight the 0.5 opacity.
   const section = (label, items, opts = {}) => !items.length ? '' :
-    `<div class="agenda-section-label">${label}</div>` + items.map(({ r, fireAt }) => `
+    `<div class="agenda-section-label">${label}${opts.clear ? '<button id="clear-completed-btn" class="agenda-clear-btn">Clear completed</button>' : ''}</div>` + items.map(({ r, fireAt }) => `
       <div class="agenda-item${opts.done ? ' agenda-item-done' : ''}" data-id="${r.id}">
         <div class="agenda-item-main">
           <div class="agenda-item-title">${escHtml(r.title)}</div>
           <div class="agenda-item-meta">
-            <span class="agenda-item-time">${opts.done ? 'Done ' : ''}${fmtFireTime(fireAt)}</span>
+            <span class="${opts.done ? 'agenda-item-time' : 'agenda-time ' + (opts.timeClass || 'agenda-time-neutral')}">${opts.done ? 'Done ' : ''}${fmtFireTime(fireAt)}</span>
             ${r.recur_type !== 'none' ? `<span class="agenda-badge">${escHtml(recurLabel(r))}</span>` : ''}
+            ${!opts.done && r.lead_minutes ? `<span class="agenda-badge agenda-lead">⏰ ${leadLabel(r.lead_minutes)} before</span>` : ''}
             ${!opts.done && r.snoozed_until ? '<span class="agenda-badge agenda-snoozed">snoozed</span>' : ''}
           </div>
           ${r.description ? `<div class="agenda-item-desc">${escHtml(r.description)}</div>` : ''}
         </div>
         ${!opts.done && r.recur_type === 'none' ? `<button class="agenda-done-btn" data-id="${r.id}" title="Mark done">✓</button>` : ''}
+        <button class="agenda-del-btn" data-id="${r.id}" title="Delete">🗑</button>
       </div>`).join('');
 
   list.innerHTML =
-    (section('Overdue', buckets.overdue) + section('Today', buckets.today) +
+    (section('Overdue', buckets.overdue, { timeClass: 'agenda-time-overdue' }) +
+    section('Today', buckets.today, { timeClass: 'agenda-time-today' }) +
     section('Tomorrow', buckets.tomorrow) + section('This week', buckets.week) +
     section('Later', buckets.later) ||
     '<div class="agenda-empty">No reminders — hit + to add one</div>') +
-    section('Completed', buckets.done, { done: true });
+    section('Completed', buckets.done, { done: true, clear: true });
 
   list.querySelectorAll('.agenda-item').forEach(el => {
     el.addEventListener('click', () => {
       const r = reminders.find(x => x.id === el.dataset.id);
       if (r) openReminderModal(r);
     });
+  });
+  list.querySelectorAll('.agenda-del-btn').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); deleteReminder(btn.dataset.id); });
+  });
+  document.getElementById('clear-completed-btn')?.addEventListener('click', e => {
+    e.stopPropagation(); clearCompleted();
   });
   list.querySelectorAll('.agenda-done-btn').forEach(btn => {
     btn.addEventListener('click', async e => {
@@ -1240,6 +1258,12 @@ function openReminderModal(reminder = null) {
   dpInit(iso, 'rem-date', 'rem-date-cal');
   document.getElementById('rem-time').value =
     String(base.getHours()).padStart(2,'0') + ':' + String(base.getMinutes()).padStart(2,'0');
+  const lm = reminder?.lead_minutes || null;
+  const leadEl = document.getElementById('rem-lead'), leadUnitEl = document.getElementById('rem-lead-unit');
+  if (lm && lm % 1440 === 0) { leadEl.value = lm / 1440; leadUnitEl.value = '1440'; }
+  else if (lm && lm % 60 === 0) { leadEl.value = lm / 60; leadUnitEl.value = '60'; }
+  else { leadEl.value = lm || ''; leadUnitEl.value = '1'; }
+  leadUnitEl.disabled = !leadEl.value;
   document.getElementById('rem-recur').value = reminder?.recur_type || 'none';
   document.getElementById('rem-interval').value = reminder?.recur_interval || 1;
   remWeekdaySel.clear();
@@ -1276,8 +1300,12 @@ async function saveReminder() {
     const [em, ed, ey] = endStr.split('/').map(Number);
     recur_end_at = new Date(ey, em - 1, ed, 23, 59).getTime();
   }
+  const leadRaw = document.getElementById('rem-lead').value.trim();
+  const leadN = parseInt(leadRaw, 10);
+  const lead_minutes = leadRaw !== '' && Number.isInteger(leadN) && leadN > 0
+    ? leadN * +document.getElementById('rem-lead-unit').value : null;
   const body = { title, description: document.getElementById('rem-desc').value.trim(),
-    first_fire_at, recur_type, recur_interval, recur_weekdays, recur_end_at };
+    first_fire_at, recur_type, recur_interval, recur_weekdays, recur_end_at, lead_minutes };
   const isEdit = !!currentReminderId;
   try {
     if (isEdit) {
@@ -1301,13 +1329,25 @@ async function saveReminder() {
   }
 }
 
-async function deleteReminder() {
-  if (!currentReminderId) return;
+// Called with an explicit id from the inline agenda 🗑, without one from the
+// modal's Delete button (falls back to the open reminder).
+async function deleteReminder(id) {
+  id = typeof id === 'string' ? id : currentReminderId;
+  if (!id) return;
   if (!confirm('Delete this reminder?')) return;
-  const id = currentReminderId;
   reminders = reminders.filter(r => r.id !== id);
-  closeReminderModal(); renderAgenda();
+  if (id === currentReminderId) closeReminderModal();
+  renderAgenda();
   try { await apiCall('DELETE', '/reminders/' + id); } catch(e) {}
+}
+
+async function clearCompleted() {
+  const n = reminders.filter(r => r.completed_at).length;
+  if (!n) return;
+  if (!confirm(`Delete ${n} completed reminder${n > 1 ? 's' : ''}? (They can still be restored from Trash.)`)) return;
+  reminders = reminders.filter(r => !r.completed_at);
+  renderAgenda();
+  try { await apiCall('DELETE', '/reminders/completed'); } catch(e) {}
 }
 
 // ── Push notifications setup ──
@@ -1357,12 +1397,17 @@ async function enableNotifications() {
 }
 
 // Keep the server's subscription row fresh on every app open (endpoints rotate).
+// Self-heal: browsers occasionally kill a push subscription without telling the
+// page (desktop went silent exactly this way) — permission still granted but
+// getSubscription() null. Re-subscribe instead of silently doing nothing.
 async function refreshPushSubscription() {
   try {
-    if (!('serviceWorker' in navigator) || Notification.permission !== 'granted') return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || Notification.permission !== 'granted') return;
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
     if (sub) await apiFetch('POST', '/push/subscribe', sub.toJSON());
+    else await subscribePush();
+    updateNotifsButton();
   } catch(e) {}
 }
 
@@ -2963,6 +3008,9 @@ document.getElementById('reminder-modal').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('input:not([type="time"])')) { e.preventDefault(); saveReminder(); }
 });
 document.getElementById('rem-recur').addEventListener('change', updateRecurRows);
+document.getElementById('rem-lead').addEventListener('input', e => {
+  document.getElementById('rem-lead-unit').disabled = !e.target.value.trim();
+});
 document.getElementById('rem-weekdays').addEventListener('click', e => {
   const btn = e.target.closest('.rem-wd');
   if (!btn) return;

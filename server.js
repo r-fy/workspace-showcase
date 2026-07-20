@@ -166,6 +166,11 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 `);
+// Lead-time alerts: fire once at next_fire_at - lead_minutes, plus the normal
+// at-time alert. lead_fired_for remembers WHICH occurrence the lead was sent
+// for — it re-arms automatically when next_fire_at advances.
+try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_minutes INTEGER DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_fired_for INTEGER DEFAULT NULL`); } catch(e) {}
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -598,9 +603,14 @@ function reminderFields(body) {
     recur_end_at = Number(body.recur_end_at);
     if (!Number.isFinite(recur_end_at)) return { error: 'recur_end_at must be epoch ms' };
   }
+  let lead_minutes = null;
+  if (body.lead_minutes != null && body.lead_minutes !== '') {
+    lead_minutes = Number(body.lead_minutes);
+    if (!Number.isInteger(lead_minutes) || lead_minutes < 1) return { error: 'lead_minutes must be a positive integer' };
+  }
   return {
     title, description: String(body.description ?? ''),
-    first_fire_at, recur_type, recur_interval, recur_weekdays, recur_end_at,
+    first_fire_at, recur_type, recur_interval, recur_weekdays, recur_end_at, lead_minutes,
   };
 }
 
@@ -621,10 +631,10 @@ app.post('/api/reminders', auth, (req, res) => {
   if (f.recur_type !== 'none' && next_fire_at === null)
     return res.status(400).json({ error: 'series is entirely in the past — check the end date' });
   db.prepare(`INSERT INTO reminders (id, user_id, title, description, first_fire_at, recur_type, recur_interval,
-      recur_weekdays, recur_end_at, next_fire_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      recur_weekdays, recur_end_at, lead_minutes, next_fire_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(id, req.userId, f.title, f.description, f.first_fire_at, f.recur_type, f.recur_interval,
-      f.recur_weekdays, f.recur_end_at, next_fire_at, t, t);
+      f.recur_weekdays, f.recur_end_at, f.lead_minutes, next_fire_at, t, t);
   res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(id));
 });
 
@@ -646,11 +656,19 @@ app.put('/api/reminders/:id', auth, (req, res) => {
   const snoozed_until = scheduleChanged ? null : r.snoozed_until;
   const completed_at = scheduleChanged ? null : r.completed_at;
   db.prepare(`UPDATE reminders SET title=?, description=?, first_fire_at=?, recur_type=?, recur_interval=?,
-      recur_weekdays=?, recur_end_at=?, next_fire_at=?, snoozed_until=?, completed_at=?, updated_at=?
+      recur_weekdays=?, recur_end_at=?, lead_minutes=?, next_fire_at=?, snoozed_until=?, completed_at=?, updated_at=?
     WHERE id=? AND user_id=?`)
     .run(f.title, f.description, f.first_fire_at, f.recur_type, f.recur_interval,
-      f.recur_weekdays, f.recur_end_at, next_fire_at, snoozed_until, completed_at, t, req.params.id, req.userId);
+      f.recur_weekdays, f.recur_end_at, f.lead_minutes, next_fire_at, snoozed_until, completed_at, t, req.params.id, req.userId);
   res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(req.params.id));
+});
+
+// Registered BEFORE /api/reminders/:id so the literal path isn't swallowed
+// by the :id pattern (same route-ordering lesson as expenses export.csv).
+app.delete('/api/reminders/completed', auth, (req, res) => {
+  const info = db.prepare('UPDATE reminders SET deleted_at=? WHERE user_id=? AND completed_at IS NOT NULL AND deleted_at IS NULL')
+    .run(now(), req.userId);
+  res.json({ deleted: info.changes });
 });
 
 app.delete('/api/reminders/:id', auth, (req, res) => {
@@ -728,17 +746,29 @@ async function sendPushToUser(userId, payload) {
     try {
       await webpush.sendNotification(
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-        JSON.stringify(payload)
+        JSON.stringify(payload),
+        // urgency:high = deliver now, don't batch (matters on Android Doze).
+        // TTL 60s: a reminder delivered late is noise, drop it instead.
+        { urgency: 'high', TTL: 60 }
       );
     } catch (err) {
-      // 404/410 = subscription expired/revoked — drop it. Anything else: log, move on.
-      if (err.statusCode === 404 || err.statusCode === 410) {
+      // 404/410 = expired/revoked, 403 = VAPID mismatch (subscribed under old
+      // keys) — all permanently dead, retrying can never succeed. Drop them.
+      if (err.statusCode === 404 || err.statusCode === 410 || err.statusCode === 403) {
         db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(s.endpoint);
+        console.warn('pruned dead push subscription:', err.statusCode, s.endpoint.slice(0, 60));
       } else {
-        console.warn('push send failed:', err.statusCode || err.message);
+        // Log the body too — status code alone is undiagnosable from docker logs.
+        console.warn('push send failed:', err.statusCode || err.message, err.body || '');
       }
     }
   }
+}
+
+function humanizeLead(minutes) {
+  if (minutes % 1440 === 0) { const d = minutes / 1440; return d + (d === 1 ? ' day' : ' days'); }
+  if (minutes % 60 === 0) { const h = minutes / 60; return h + (h === 1 ? ' hour' : ' hours'); }
+  return minutes + ' min';
 }
 
 function fireTimeLabel(epochMs) {
@@ -778,6 +808,25 @@ async function checkReminders() {
     for (const r of snoozed) {
       db.prepare('UPDATE reminders SET snoozed_until=NULL WHERE id=?').run(r.id);
       await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: '(snoozed) ' + (r.description || '') });
+    }
+    // Lead-time alerts: fire once per occurrence, lead_minutes before it.
+    // Runs AFTER the due pass so an occurrence that just fired (next_fire_at
+    // advanced or nulled) can't also send a stale "in 0 min" lead this tick.
+    // If the lead point was already past at creation/edit time it fires
+    // immediately (deliberate — late beats never). Independent of snooze.
+    const leads = db.prepare(`SELECT * FROM reminders
+      WHERE lead_minutes IS NOT NULL AND next_fire_at IS NOT NULL
+        AND (lead_fired_for IS NULL OR lead_fired_for != next_fire_at)
+        AND next_fire_at - (lead_minutes * 60000) <= ?
+        AND next_fire_at > ?
+        AND completed_at IS NULL AND deleted_at IS NULL`).all(t, t);
+    for (const r of leads) {
+      // Mark BEFORE the async send — same no-double-fire discipline as due.
+      db.prepare('UPDATE reminders SET lead_fired_for=? WHERE id=?').run(r.next_fire_at, r.id);
+      await sendPushToUser(r.user_id, {
+        id: r.id, title: r.title,
+        body: 'in ' + humanizeLead(r.lead_minutes) + (r.description ? ' — ' + r.description : ''),
+      });
     }
   } finally {
     schedulerTickRunning = false;

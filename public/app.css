@@ -789,11 +789,15 @@ header {
   border-left: 2px solid transparent;
 }
 .agenda-item:hover { background: #181818; }
-.agenda-item:hover .agenda-done-btn { opacity: 1; }
+.agenda-item:hover .agenda-done-btn, .agenda-item:hover .agenda-del-btn { opacity: 1; }
 .agenda-item-main { flex: 1; min-width: 0; }
 .agenda-item-title { font-size: 13px; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agenda-item-meta { display: flex; align-items: center; gap: 8px; margin-top: 2px; flex-wrap: wrap; }
 .agenda-item-time { font-size: 11px; color: #666; }
+/* Status-colored time pill: red = overdue, green = today, gray = later */
+.agenda-time { font-size: 10px; padding: 1px 7px; border-radius: 8px; border: 1px solid #2a2a2a; color: #999; }
+.agenda-time-overdue { border-color: #5a2020; color: #f87171; }
+.agenda-time-today { border-color: #2a5a20; color: #5fc83b; }
 .agenda-badge {
   font-size: 10px; padding: 1px 7px; border-radius: 8px;
   border: 1px solid #2a5a20; color: #5fc83b;
@@ -805,12 +809,20 @@ header {
   border: 1px solid #2a2a2a; color: #555; font-size: 13px; opacity: 0;
 }
 .agenda-done-btn:hover { border-color: #2a5a20; color: #8ce870; background: #1a3a13; }
+.agenda-del-btn {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid transparent; color: #555; font-size: 12px; opacity: 0;
+}
+.agenda-del-btn:hover { border-color: #5a2020; color: #f87171; background: #2a1010; }
+.agenda-clear-btn { float: right; font-size: 10px; color: #555; text-transform: none; letter-spacing: normal; }
+.agenda-clear-btn:hover { color: #f87171; }
+.agenda-badge.agenda-lead { border-color: #2a2a2a; color: #999; }
 .agenda-empty { color: #555; font-size: 13px; text-align: center; padding: 40px 16px; }
 .agenda-item-done { opacity: 0.5; }
 .agenda-item-done .agenda-item-title { text-decoration: line-through; }
 
 @media (max-width: 640px) {
-  .agenda-done-btn { opacity: 1; } /* no hover on touch — always visible */
+  .agenda-done-btn, .agenda-del-btn { opacity: 1; } /* no hover on touch — always visible */
   .agenda-list { padding: 10px 12px; }
 }
 
