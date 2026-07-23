@@ -38,6 +38,7 @@ let currentBoardData = [];
 let selectedTasks = new Set();
 let modalTaskId = null;
 let newTaskColId = null;
+let modalClaudeMarked = false;
 let dragColId = null;
 let dragBoardId = null;
 let dragNoteId = null;
@@ -2873,6 +2874,7 @@ function createTaskEl(task, col) {
     <div class="task-card-header">
       <input type="checkbox" class="task-select-cb" ${selectedTasks.has(task.id)?'checked':''}>
       <span class="task-title">${escHtml(task.title)}</span>
+      ${task.claude_marked ? `<span class="task-claude-badge" title="Marked for Claude Code">🤖</span>` : ''}
       ${hasDesc ? `<span class="task-desc-dot" title="Has description"></span>` : ''}
       <button class="task-done-btn" title="${inDone ? 'Already done' : 'Mark as done'}">✓</button>
     </div>
@@ -2995,9 +2997,15 @@ function populateModalSelects(boardId, colId) {
   populateColSelectForBoard(boardId, colId);
 }
 
+function setClaudeMarkBtn(on) {
+  modalClaudeMarked = !!on;
+  document.getElementById('modal-claude-mark')?.classList.toggle('active', modalClaudeMarked);
+}
+
 function openTaskModal(task) {
   modalTaskId = task.id;
   newTaskColId = null;
+  setClaudeMarkBtn(task.claude_marked);
   document.getElementById('modal-title').value = task.title;
   document.getElementById('task-modal').classList.remove('hidden');
   const mount = document.getElementById('modal-editor-mount');
@@ -3010,6 +3018,7 @@ function openTaskModal(task) {
 function openNewTaskModal(colId) {
   newTaskColId = colId;
   modalTaskId = 'new';
+  setClaudeMarkBtn(false);
   document.getElementById('modal-title').value = '';
   document.getElementById('task-modal').classList.remove('hidden');
   const mount = document.getElementById('modal-editor-mount');
@@ -3024,18 +3033,19 @@ async function persistTaskModal() {
   const title = (document.getElementById('modal-title')?.value || '').trim();
   if (!title) return;
   const description = WEditor.getText(taskEditor);
+  const claude_marked = modalClaudeMarked ? 1 : 0;
 
   if (modalTaskId === 'new') {
     const col = currentBoardData.find(c => c.id === newTaskColId);
     if (!col) return;
     try {
-      const task = await apiCall('POST', '/tasks', { column_id: newTaskColId, title, description });
+      const task = await apiCall('POST', '/tasks', { column_id: newTaskColId, title, description, claude_marked });
       col.tasks.push(task); await idbPut('tasks', task);
     } catch(e) {
       const id = 'local_'+Date.now(), t = Date.now();
-      const task = { id, column_id: newTaskColId, title, description, position: col.tasks.length, created_at: t, updated_at: t };
+      const task = { id, column_id: newTaskColId, title, description, claude_marked, position: col.tasks.length, created_at: t, updated_at: t };
       col.tasks.push(task); await idbPut('tasks', task);
-      await enqueueOp({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description } });
+      await enqueueOp({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description, claude_marked } });
     }
     renderKanban();
   } else {
@@ -3052,7 +3062,7 @@ async function persistTaskModal() {
         col.tasks.splice(tidx, 1);
       } else {
         const t = col.tasks[tidx];
-        t.title = title; t.description = description;
+        t.title = title; t.description = description; t.claude_marked = claude_marked;
         if (newColId && newColId !== col.id) {
           const moved = { ...t, column_id: newColId };
           col.tasks.splice(tidx, 1);
@@ -3065,13 +3075,13 @@ async function persistTaskModal() {
     renderKanban();
     if (crossBoard) {
       await idbDelete('tasks', id);
-      try { await apiCall('PUT', '/tasks/'+id, { title, description, column_id: newColId }); } catch(e) {}
+      try { await apiCall('PUT', '/tasks/'+id, { title, description, claude_marked, column_id: newColId }); } catch(e) {}
     } else {
       const colChanged = newColId && newColId !== oldColId;
       const updated = await idbGet('tasks', id);
-      const merged = { ...updated, title, description, ...(colChanged ? { column_id: newColId } : {}) };
+      const merged = { ...updated, title, description, claude_marked, ...(colChanged ? { column_id: newColId } : {}) };
       if (updated) await idbPut('tasks', merged);
-      try { await apiCall('PUT', '/tasks/'+id, { title, description, ...(colChanged ? { column_id: newColId } : {}) }); } catch(e) {}
+      try { await apiCall('PUT', '/tasks/'+id, { title, description, claude_marked, ...(colChanged ? { column_id: newColId } : {}) }); } catch(e) {}
     }
   }
 }
@@ -3079,7 +3089,7 @@ async function persistTaskModal() {
 function destroyTaskModal() {
   WEditor.destroy(taskEditor); taskEditor = null;
   document.getElementById('task-modal').classList.add('hidden');
-  modalTaskId = null; newTaskColId = null;
+  modalTaskId = null; newTaskColId = null; modalClaudeMarked = false;
 }
 
 async function saveTaskModal() {
@@ -3344,6 +3354,7 @@ document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTa
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);
 document.getElementById('modal-delete').addEventListener('click',deleteTaskFromModal);
+document.getElementById('modal-claude-mark').addEventListener('click',()=>setClaudeMarkBtn(!modalClaudeMarked));
 document.getElementById('modal-board-select')?.addEventListener('change', e => {
   const colSel = document.getElementById('modal-col-select');
   const currentCol = colSel?.value;
