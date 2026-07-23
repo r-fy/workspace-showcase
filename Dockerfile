@@ -17,6 +17,9 @@ COPY public/ ./public/
 # Bundle CodeMirror 6 into a single file
 RUN node_modules/.bin/esbuild src/editor.js --bundle --minify --outfile=public/editor.bundle.js
 
+# Bundle the Twilio Voice SDK for the Calls tab
+RUN node_modules/.bin/esbuild src/dialer.js --bundle --minify --outfile=public/dialer.bundle.js
+
 # Drop devDeps from final image
 RUN npm prune --omit=dev
 

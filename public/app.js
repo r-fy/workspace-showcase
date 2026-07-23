@@ -23,6 +23,15 @@ let reminders = [];
 let currentReminderId = null;
 const remWeekdaySel = new Set();
 
+let calls = [];
+let twDevice = null;        // Twilio Voice Device (created lazily on first Calls-tab open)
+let twCall = null;          // active Call, null when idle
+let twDialing = false;      // set synchronously on Call click — twCall only exists after connect() resolves
+let twTokenAt = 0;          // when the current token was fetched (epoch ms)
+let dialerCallerId = '';
+let callTimerInt = null;
+const recUrlCache = new Map(); // recording_sid → blob object URL (kept for the session — re-listens are free)
+
 let boards = [];
 let currentBoardId = null;
 let currentBoardData = [];
@@ -103,9 +112,11 @@ async function fullSync() {
     data.notes.forEach(n => { if (notesFullCache[n.id]) notesFullCache[n.id] = n; });
     notes = data.notes; boards = data.boards; allColumns = data.columns;
     reminders = data.reminders || [];
+    calls = data.calls || [];
     lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderAgenda();
+    if (currentTab === 'calls') renderCallLog();
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
     notes = await idbGetAll('notes'); boards = await idbGetAll('boards');
@@ -124,7 +135,8 @@ function hashData(data) {
   const ts = (data.tasks||[]).map(t=>t.id+':'+t.updated_at+':'+t.column_id).sort().join('|');
   const ns = (data.notes||[]).map(n=>n.id+':'+n.updated_at).sort().join('|');
   const rs = (data.reminders||[]).map(r=>r.id+':'+r.updated_at+':'+(r.next_fire_at||0)+':'+(r.snoozed_until||0)).sort().join('|');
-  return ts + '$$' + ns + '$$' + rs;
+  const cs = (data.calls||[]).map(c=>c.id+':'+c.status+':'+(c.recording_sid||'')).sort().join('|');
+  return ts + '$$' + ns + '$$' + rs + '$$' + cs;
 }
 
 function buildBoardData(boardId, columns, tasks) {
@@ -151,8 +163,10 @@ async function pollSync() {
     data.notes.forEach(n => { if (notesFullCache[n.id]) notesFullCache[n.id] = n; });
     notes = data.notes; boards = data.boards; allColumns = data.columns;
     reminders = data.reminders || [];
+    calls = data.calls || [];
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderAgenda();
+    if (currentTab === 'calls') renderCallLog();
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
       const remote = data.notes.find(n => n.id === currentNoteId);
@@ -287,15 +301,18 @@ function switchTab(tab) {
   document.getElementById('tasks-view').classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-view')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-view')?.classList.toggle('hidden', tab !== 'calendar');
+  document.getElementById('calls-view')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-panel')?.classList.toggle('hidden', tab !== 'calendar');
+  document.getElementById('calls-panel')?.classList.toggle('hidden', tab !== 'calls');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
+  if (tab === 'calls') loadCallsTab();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
 
@@ -1346,6 +1363,232 @@ async function clearCompleted() {
   try { await apiCall('DELETE', '/reminders/completed'); } catch(e) {}
 }
 
+// ── Calls tab (Twilio dialer) ──────────────────────────────────
+// Outbound-only browser dialer. The server issues short-lived tokens
+// (/api/twilio/token); TwiML + dual-channel recording happen server-side.
+// Every call auto-records; the log below the pad plays recordings inline.
+
+function fmtPhone(n) {
+  const m = String(n || '').match(/^\+1([2-9]\d{2})(\d{3})(\d{4})$/);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : (n || '');
+}
+
+function fmtCallDur(secs) {
+  secs = parseInt(secs, 10) || 0;
+  return Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+}
+
+// Same rules as the server's normalizeE164 — US-default.
+function normalizeDialNumber(raw) {
+  const d = String(raw || '').replace(/[^\d+]/g, '');
+  if (d.startsWith('+')) return /^\+[1-9]\d{7,14}$/.test(d) ? d : null;
+  if (/^1\d{10}$/.test(d)) return '+' + d;
+  if (/^[2-9]\d{9}$/.test(d)) return '+1' + d;
+  return null;
+}
+
+function setDialerStatus(msg, cls) {
+  const el = document.getElementById('dialer-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'dialer-status' + (cls ? ' ' + cls : '');
+}
+
+async function loadCallsTab() {
+  try { calls = await apiFetch('GET', '/calls'); } catch(e) {}
+  renderCallLog();
+  initDialer();
+}
+
+async function refreshDialerToken() {
+  const { token, callerId } = await apiFetch('GET', '/twilio/token');
+  twTokenAt = Date.now();
+  dialerCallerId = callerId || dialerCallerId;
+  return token;
+}
+
+async function initDialer() {
+  if (twDevice) return;
+  if (!window.TwilioVoice) { setDialerStatus('Dialer failed to load — refresh the app'); return; }
+  try {
+    const token = await refreshDialerToken();
+    const info = document.getElementById('calls-panel-info');
+    if (info) info.innerHTML = `Calling from<br><span class="calls-panel-num">${escHtml(fmtPhone(dialerCallerId))}</span><br><br>Every call records automatically — playback in the log.`;
+    twDevice = new TwilioVoice.Device(token, { logLevel: 'error' });
+    // Tokens live 1h; during an active signaling stream the SDK warns before
+    // expiry — refresh in place. (An IDLE device never fires this — the
+    // signaling stream only exists after the first connect — so startCall
+    // also age-checks the token before dialing.)
+    twDevice.on('tokenWillExpire', async () => {
+      try { twDevice.updateToken(await refreshDialerToken()); } catch(e) {}
+    });
+    twDevice.on('error', async err => {
+      console.warn('twilio device error:', err);
+      // 20101/20104 = invalid/expired token — recover in place, don't strand the tab.
+      if (err && (err.code === 20101 || err.code === 20104)) {
+        try { twDevice.updateToken(await refreshDialerToken()); setDialerStatus('Ready', 'dialer-status-ready'); return; } catch(e) {}
+      }
+      setDialerStatus('Dialer error — ' + (err.message || err.code), 'dialer-status-err');
+    });
+    setDialerStatus('Ready', 'dialer-status-ready');
+  } catch(e) {
+    setDialerStatus(String(e.message || '').includes('not configured')
+      ? 'Twilio not configured on the server' : 'Could not reach server', 'dialer-status-err');
+  }
+}
+
+function startCallTimer() {
+  const start = Date.now();
+  clearInterval(callTimerInt);
+  callTimerInt = setInterval(() => {
+    setDialerStatus('In call · ' + fmtCallDur(Math.round((Date.now() - start) / 1000)), 'dialer-status-live');
+  }, 1000);
+  setDialerStatus('In call · 0:00', 'dialer-status-live');
+}
+
+function endCallUi() {
+  clearInterval(callTimerInt); callTimerInt = null;
+  twCall = null;
+  twDialing = false;
+  document.getElementById('dial-call-btn')?.classList.remove('hidden');
+  document.getElementById('dial-hangup-btn')?.classList.add('hidden');
+  setDialerStatus('Ready', 'dialer-status-ready');
+  // The recording takes a few seconds to process server-side; the 2s sync
+  // poll picks it up (hashData covers recording_sid), no refresh needed here.
+}
+
+async function startCall() {
+  // twDialing guards the async window before connect() resolves — twCall
+  // alone would let a double-click place two simultaneous billable calls.
+  if (twCall || twDialing) return;
+  const num = normalizeDialNumber(document.getElementById('dial-number').value);
+  if (!num) { toast('Enter a valid phone number'); return; }
+  twDialing = true;
+  if (!twDevice) { await initDialer(); if (!twDevice) { twDialing = false; return; } }
+  // An idle Device never hears tokenWillExpire (no signaling stream until the
+  // first connect) — a stale token would fail every call until a page reload.
+  if (Date.now() - twTokenAt > 50 * 60000) {
+    try { twDevice.updateToken(await refreshDialerToken()); } catch(e) {}
+  }
+  setDialerStatus('Connecting…');
+  document.getElementById('dial-call-btn').classList.add('hidden');
+  document.getElementById('dial-hangup-btn').classList.remove('hidden');
+  try {
+    // Triggers the mic permission prompt on first use.
+    twCall = await twDevice.connect({ params: { To: num } });
+  } catch(e) {
+    console.warn('twilio connect failed:', e);
+    const msg = String(e && (e.message || e.name) || '');
+    toast(/Permission|NotAllowed/i.test(msg) ? 'Microphone blocked — allow it in browser settings' : 'Could not start call');
+    endCallUi();
+    return;
+  }
+  twCall.on('ringing', () => setDialerStatus('Ringing ' + fmtPhone(num) + '…'));
+  twCall.on('accept', startCallTimer);
+  twCall.on('disconnect', endCallUi);
+  twCall.on('cancel', endCallUi);
+  twCall.on('error', err => {
+    console.warn('twilio call error:', err);
+    toast('Call error — ' + (err.message || err.code));
+    endCallUi();
+  });
+}
+
+// disconnectAll covers the window where connect() hasn't resolved yet —
+// otherwise Hang Up is dead exactly when a stuck "Connecting…" needs it.
+function hangUp() {
+  if (twCall) twCall.disconnect();
+  else if (twDevice) { twDevice.disconnectAll(); endCallUi(); }
+}
+
+// Keypad: appends digits while idle, sends DTMF tones (phone-tree navigation)
+// while a call is live.
+function dialKeyPress(k) {
+  if (twCall) { twCall.sendDigits(k); return; }
+  const input = document.getElementById('dial-number');
+  input.value += k;
+  input.focus();
+}
+
+const CALL_STATUS_LABEL = {
+  'completed': { label: 'Completed', cls: 'call-status-ok' },
+  'answered':  { label: 'Completed', cls: 'call-status-ok' },
+  'no-answer': { label: 'No answer', cls: 'call-status-bad' },
+  'busy':      { label: 'Busy',      cls: 'call-status-bad' },
+  'failed':    { label: 'Failed',    cls: 'call-status-bad' },
+  'canceled':  { label: 'Canceled',  cls: 'call-status-dim' },
+  'initiated': { label: 'In progress', cls: 'call-status-dim' },
+};
+
+function renderCallLog() {
+  const log = document.getElementById('call-log');
+  if (!log) return;
+  // The 2s sync poll re-renders on ANY data change (notes, reminders, …) —
+  // an innerHTML rebuild would silently kill a recording mid-playback. Hold
+  // the re-render while a player is open; it catches up once it's closed.
+  if (log.querySelector('audio')) return;
+  if (!calls.length) {
+    log.innerHTML = '<div class="agenda-empty">No calls yet — dial a number above</div>';
+    return;
+  }
+  log.innerHTML = '<div class="agenda-section-label">Call log</div>' + calls.map(c => {
+    const st = CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
+    return `<div class="call-item" data-id="${c.id}">
+      <div class="call-item-main">
+        <div class="call-item-number">${escHtml(fmtPhone(c.to_number))}</div>
+        <div class="call-item-meta">
+          <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(c.started_at))}</span>
+          <span class="call-status ${st.cls}">${escHtml(st.label)}</span>
+          ${c.duration ? `<span class="call-dur">${escHtml(fmtCallDur(c.duration))}</span>` : ''}
+        </div>
+        <div class="call-audio-slot" id="call-audio-${escHtml(c.recording_sid || c.id)}"></div>
+      </div>
+      ${c.recording_sid ? `
+        <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" title="Play recording">▶</button>
+        <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>` : ''}
+    </div>`;
+  }).join('');
+  log.querySelectorAll('.call-play-btn').forEach(btn => {
+    btn.addEventListener('click', () => playRecording(btn.dataset.sid, btn));
+  });
+  log.querySelectorAll('.call-dl-btn').forEach(btn => {
+    btn.addEventListener('click', () => downloadRecording(btn.dataset.sid, btn.dataset.num, +btn.dataset.ts));
+  });
+}
+
+// Recordings sit behind auth, so a bare <audio src> can't load them — fetch
+// with the Authorization header into a blob and play that. Cached per sid.
+async function fetchRecordingUrl(sid) {
+  if (recUrlCache.has(sid)) return recUrlCache.get(sid);
+  const res = await fetch('/api/twilio/recording/' + sid, { headers: { 'Authorization': authHeader } });
+  if (!res.ok) throw new Error('recording fetch failed');
+  const url = URL.createObjectURL(await res.blob());
+  recUrlCache.set(sid, url);
+  return url;
+}
+
+async function playRecording(sid, btn) {
+  const slot = document.getElementById('call-audio-' + sid);
+  if (!slot) return;
+  if (slot.querySelector('audio')) { slot.innerHTML = ''; return; } // toggle off
+  btn.textContent = '…';
+  try {
+    const url = await fetchRecordingUrl(sid);
+    slot.innerHTML = `<audio controls autoplay src="${url}"></audio>`;
+  } catch(e) { toast('Could not load recording'); }
+  btn.textContent = '▶';
+}
+
+async function downloadRecording(sid, num, ts) {
+  try {
+    const url = await fetchRecordingUrl(sid);
+    const a = document.createElement('a');
+    const d = new Date(ts || Date.now());
+    const stamp = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    a.href = url; a.download = `call-${stamp}-${String(num||'').replace(/[^\d]/g,'')}.mp3`; a.click();
+  } catch(e) { toast('Could not load recording'); }
+}
+
 // ── Push notifications setup ──
 function urlBase64ToUint8Array(base64) {
   const padding = '='.repeat((4 - base64.length % 4) % 4);
@@ -2126,6 +2369,8 @@ const COMMANDS = [
   { label: 'Export Expenses CSV',  icon: '↓',  action: exportExpensesCsv },
   { label: 'Switch to Calendar',   icon: '📅', action: () => switchTab('calendar') },
   { label: 'New Reminder',         icon: '⏰', action: () => { switchTab('calendar'); openReminderModal(); } },
+  { label: 'Switch to Calls',      icon: '📞', action: () => switchTab('calls') },
+  { label: 'New Call',             icon: '📞', action: () => { switchTab('calls'); setTimeout(() => document.getElementById('dial-number')?.focus(), 50); } },
   { label: 'Open Trash',           icon: '🗑', action: () => switchTab('trash') },
 ];
 
@@ -2926,6 +3171,10 @@ document.querySelectorAll('.nav-menu-item').forEach(b => b.addEventListener('cli
     if (!Array.isArray(order)) return;
     const rows = new Map([...nav.querySelectorAll('.nav-row')].map(r => [r.dataset.tab, r]));
     order.forEach(tab => { const r = rows.get(tab); if (r) nav.appendChild(r); });
+    // A tab added after the order was saved (e.g. Calls landing on a 4-tab
+    // list) would otherwise be left stranded ABOVE the reordered rows —
+    // new tabs belong at the bottom until the user places them.
+    rows.forEach((r, tab) => { if (!order.includes(tab)) nav.appendChild(r); });
   }
   function saveNavOrder() {
     localStorage.setItem('nav-tab-order', JSON.stringify([...nav.querySelectorAll('.nav-row')].map(r => r.dataset.tab)));
@@ -3031,6 +3280,25 @@ document.getElementById('rem-weekdays').addEventListener('click', e => {
   renderWeekdayPills();
 });
 document.getElementById('enable-notifs-btn').addEventListener('click', enableNotifications);
+// Calls / dialer
+document.getElementById('new-call-btn').addEventListener('click', () => {
+  switchTab('calls');
+  if (isMobile()) closeSidebar();
+  setTimeout(() => document.getElementById('dial-number')?.focus(), 50);
+});
+document.getElementById('dial-pad').addEventListener('click', e => {
+  const k = e.target.closest('.dial-key');
+  if (k) dialKeyPress(k.dataset.k);
+});
+document.getElementById('dial-back').addEventListener('click', () => {
+  const i = document.getElementById('dial-number');
+  i.value = i.value.slice(0, -1); i.focus();
+});
+document.getElementById('dial-call-btn').addEventListener('click', startCall);
+document.getElementById('dial-hangup-btn').addEventListener('click', hangUp);
+document.getElementById('dial-number').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); startCall(); }
+});
 document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTasks);
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);

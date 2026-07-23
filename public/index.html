@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=106">
+<link rel="stylesheet" href="/app.css?v=107">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -87,6 +87,12 @@
           <button class="nav-menu-item" data-tab="calendar">Calendar</button>
           <button class="icon-btn nav-add-btn" id="add-reminder-btn" title="New reminder">+</button>
         </div>
+        <div class="nav-row" draggable="true" data-tab="calls">
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="calls">Calls</button>
+          <button class="icon-btn nav-add-btn" id="new-call-btn" title="New call">+</button>
+        </div>
       </div>
       <div id="notes-panel" class="panel-section">
         <div id="tags-bar" class="tags-bar" style="display:none"></div>
@@ -114,6 +120,9 @@
         <div class="import-btn-wrap">
           <button id="enable-notifs-btn" class="hidden">🔔 Enable notifications</button>
         </div>
+      </div>
+      <div id="calls-panel" class="panel-section hidden">
+        <div class="calls-panel-info" id="calls-panel-info"></div>
       </div>
       <div class="left-panel-footer">
         <button class="icon-btn" id="trash-btn" title="Trash">🗑</button>
@@ -150,6 +159,36 @@
     <!-- Calendar view -->
     <div class="view hidden" id="calendar-view" style="flex-direction:column;overflow-y:auto;">
       <div id="agenda-list" class="agenda-list"></div>
+    </div>
+
+    <!-- Calls view (dialer) -->
+    <div class="view hidden" id="calls-view" style="flex-direction:column;overflow-y:auto;">
+      <div class="dialer-area">
+        <div class="dialer-card">
+          <div id="dialer-status" class="dialer-status">Loading…</div>
+          <input type="tel" id="dial-number" class="dial-number-input" placeholder="(555) 123-4567" autocomplete="off" spellcheck="false">
+          <div class="dial-pad" id="dial-pad">
+            <button class="dial-key" data-k="1">1</button>
+            <button class="dial-key" data-k="2">2</button>
+            <button class="dial-key" data-k="3">3</button>
+            <button class="dial-key" data-k="4">4</button>
+            <button class="dial-key" data-k="5">5</button>
+            <button class="dial-key" data-k="6">6</button>
+            <button class="dial-key" data-k="7">7</button>
+            <button class="dial-key" data-k="8">8</button>
+            <button class="dial-key" data-k="9">9</button>
+            <button class="dial-key" data-k="*">*</button>
+            <button class="dial-key" data-k="0">0</button>
+            <button class="dial-key" data-k="#">#</button>
+          </div>
+          <div class="dial-actions">
+            <button class="dial-back-key" id="dial-back">←</button>
+            <button class="dial-call-btn" id="dial-call-btn">Call</button>
+            <button class="dial-hangup-btn hidden" id="dial-hangup-btn">Hang Up</button>
+          </div>
+        </div>
+        <div class="call-log" id="call-log"></div>
+      </div>
     </div>
 
     <!-- Tasks view -->
@@ -372,6 +411,7 @@
 
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
-<script src="/app.js?v=115"></script>
+<script src="/dialer.bundle.js?v=1"></script>
+<script src="/app.js?v=116"></script>
 </body>
 </html>
