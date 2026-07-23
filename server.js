@@ -679,14 +679,19 @@ app.delete('/api/reminders/:id', auth, (req, res) => {
 app.post('/api/reminders/:id/complete', auth, (req, res) => {
   const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  // One-off: done for good. Recurring with a live series: the scheduler
-  // already advanced next_fire_at when it fired (advance-on-fire) — "done"
-  // just silences any pending snooze echo; the series keeps going. Recurring
-  // with next_fire_at NULL (series exhausted past its end date): done for good.
+  // One-off, or a recurring series already exhausted past its end date: done for good.
   if (r.recur_type === 'none' || r.next_fire_at === null) {
     db.prepare('UPDATE reminders SET completed_at=?, snoozed_until=NULL, next_fire_at=NULL, updated_at=? WHERE id=?').run(now(), now(), r.id);
   } else {
-    db.prepare('UPDATE reminders SET snoozed_until=NULL, updated_at=? WHERE id=?').run(now(), r.id);
+    // Recurring with a live series: completing early advances past the current
+    // occurrence right now (same math the scheduler uses at fire time), so the
+    // agenda immediately shows the next one instead of waiting for the clock.
+    const next = advance(r, r.next_fire_at);
+    if (next === null) {
+      db.prepare('UPDATE reminders SET next_fire_at=NULL, completed_at=?, snoozed_until=NULL, updated_at=? WHERE id=?').run(now(), now(), r.id);
+    } else {
+      db.prepare('UPDATE reminders SET next_fire_at=?, snoozed_until=NULL, updated_at=? WHERE id=?').run(next, now(), r.id);
+    }
   }
   res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(r.id));
 });

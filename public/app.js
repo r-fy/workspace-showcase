@@ -1173,10 +1173,6 @@ function renderAgenda() {
   buckets.done.sort((a, b) => b.fireAt - a.fireAt); // newest done first
   buckets.done = buckets.done.slice(0, 20);
 
-  // The ✓ quick-action only shows on one-offs: with the advance-on-fire model
-  // a recurring reminder's row always shows a FUTURE occurrence, so "done"
-  // there would be ambiguous (skip next vs acknowledge last) — manage series
-  // via the modal instead.
   // opts.timeClass colors the time pill by urgency bucket; the Completed
   // section keeps the old dim plain text so it doesn't fight the 0.5 opacity.
   const section = (label, items, opts = {}) => !items.length ? '' :
@@ -1192,7 +1188,7 @@ function renderAgenda() {
           </div>
           ${r.description ? `<div class="agenda-item-desc">${escHtml(r.description)}</div>` : ''}
         </div>
-        ${!opts.done && r.recur_type === 'none' ? `<button class="agenda-done-btn" data-id="${r.id}" title="Mark done">✓</button>` : ''}
+        ${!opts.done ? `<button class="agenda-done-btn" data-id="${r.id}" title="Mark done">✓</button>` : ''}
         <button class="agenda-del-btn" data-id="${r.id}" title="Delete">🗑</button>
       </div>`).join('');
 
