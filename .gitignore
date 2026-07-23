@@ -5,6 +5,7 @@ node_modules/
 .deploy_key
 .claude/
 public/editor.bundle.js
+public/dialer.bundle.js
 
 # Bank statement exports — never commit transaction history
 *.csv

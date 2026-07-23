@@ -10,6 +10,10 @@ const { advance, computeInitialNextFire } = require('./recurrence');
 // without node_modules so the server still boots for dev/testing.
 let webpush = null;
 try { webpush = require('web-push'); } catch (e) {}
+// twilio powers the Calls tab (browser dialer) — same tolerance as web-push.
+let twilio = null;
+try { twilio = require('twilio'); } catch (e) {}
+const { Readable } = require('stream');
 const app = express();
 const PORT = parseInt(process.env.PORT || '4000');
 const DB_PATH = process.env.DB_PATH || '/data/workspace.db';
@@ -172,7 +176,29 @@ db.exec(`
 try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_minutes INTEGER DEFAULT NULL`); } catch(e) {}
 try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_fired_for INTEGER DEFAULT NULL`); } catch(e) {}
 
+// Calls tab: one row per outbound call, written by the Twilio webhooks below.
+// Recordings stay on Twilio's storage — recording_sid is the pointer, audio is
+// proxied through /api/twilio/recording/:sid on demand.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS calls (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    call_sid TEXT UNIQUE,
+    to_number TEXT NOT NULL DEFAULT '',
+    from_number TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'initiated',
+    duration INTEGER DEFAULT NULL,
+    recording_sid TEXT DEFAULT NULL,
+    recording_duration INTEGER DEFAULT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER DEFAULT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id, started_at);
+`);
+
 app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Auth ─────────────────────────────────────────────────────
@@ -310,7 +336,9 @@ app.get('/api/sync', auth, (req, res) => {
   const tasks = db.prepare('SELECT * FROM tasks WHERE deleted_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
   const reminders = db.prepare('SELECT * FROM reminders WHERE deleted_at IS NULL AND user_id=? AND (completed_at IS NULL OR completed_at > ?) ORDER BY next_fire_at ASC')
     .all(req.userId, now() - COMPLETED_KEEP_MS);
-  res.json({ notes, boards, columns, tasks, reminders });
+  // Newest 200 calls only — this rides the 2s poll, keep the payload bounded.
+  const calls = db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId);
+  res.json({ notes, boards, columns, tasks, reminders, calls });
 });
 
 // ── Boards ────────────────────────────────────────────────────
@@ -699,6 +727,133 @@ app.post('/api/reminders/:id/snooze', auth, (req, res) => {
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) return res.status(400).json({ error: 'minutes must be 1-10080' });
   db.prepare('UPDATE reminders SET snoozed_until=?, updated_at=? WHERE id=?').run(now() + minutes * 60000, now(), r.id);
   res.json(db.prepare('SELECT * FROM reminders WHERE id=?').get(r.id));
+});
+
+// ── Twilio dialer (Calls tab) ─────────────────────────────────
+// All six env vars live in the server's docker-compose.yml, same as the VAPID
+// keys — never committed. Without them the app runs; the Calls tab just shows
+// "not configured" instead of a dial pad.
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
+const TWILIO_API_KEY_SID = process.env.TWILIO_API_KEY_SID || '';
+const TWILIO_API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET || '';
+const TWILIO_TWIML_APP_SID = process.env.TWILIO_TWIML_APP_SID || '';
+const TWILIO_CALLER_ID = process.env.TWILIO_CALLER_ID || '';
+const twilioEnabled = !!(twilio && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_API_KEY_SID
+  && TWILIO_API_KEY_SECRET && TWILIO_TWIML_APP_SID && TWILIO_CALLER_ID);
+if (!twilioEnabled) console.warn('twilio disabled — twilio module or TWILIO_* env vars not configured');
+
+// The webhook routes are public URLs Twilio's servers call directly — they
+// can't hold a PIN, so they're NOT behind auth. Instead every request must
+// carry a valid X-Twilio-Signature (HMAC over the exact URL + params, keyed
+// by the auth token) or it's rejected. Random scanners get a 403.
+function twilioWebhook(req, res, next) {
+  if (!twilioEnabled) return res.status(503).send('twilio not configured');
+  const signature = req.headers['x-twilio-signature'] || '';
+  const url = 'https://' + req.get('host') + req.originalUrl;
+  if (!twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, req.body || {}))
+    return res.status(403).send('invalid signature');
+  next();
+}
+
+// Short-lived token the browser SDK uses to place calls. Identity = the
+// logged-in user; the VoiceGrant points at the TwiML App whose Voice URL is
+// /api/twilio/voice below. Outbound-only by design (incomingAllow false).
+app.get('/api/twilio/token', auth, (req, res) => {
+  if (!twilioEnabled) return res.status(503).json({ error: 'twilio not configured' });
+  const AccessToken = twilio.jwt.AccessToken;
+  const token = new AccessToken(TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET,
+    { identity: req.userId, ttl: 3600 });
+  token.addGrant(new AccessToken.VoiceGrant({ outgoingApplicationSid: TWILIO_TWIML_APP_SID, incomingAllow: false }));
+  res.json({ token: token.toJwt(), identity: req.userId, callerId: TWILIO_CALLER_ID });
+});
+
+// Accepts what a human types, returns E.164 or null. US-default like the UI.
+function normalizeE164(raw) {
+  const d = String(raw || '').replace(/[^\d+]/g, '');
+  if (d.startsWith('+')) return /^\+[1-9]\d{7,14}$/.test(d) ? d : null;
+  if (/^1\d{10}$/.test(d)) return '+' + d;
+  if (/^[2-9]\d{9}$/.test(d)) return '+1' + d;
+  return null;
+}
+
+// Twilio fetches this when the browser SDK connects. From is "client:<user>",
+// To is the param the dial pad passed. Responds with TwiML that dials out with
+// the real caller ID and records both sides on separate tracks from answer.
+app.post('/api/twilio/voice', twilioWebhook, (req, res) => {
+  const twiml = new twilio.twiml.VoiceResponse();
+  const from = String(req.body.From || '');
+  const userId = from.startsWith('client:') ? from.slice(7) : 'owner';
+  const to = normalizeE164(req.body.To);
+  if (!to) {
+    twiml.say('Invalid number.');
+  } else {
+    db.prepare(`INSERT OR IGNORE INTO calls (id, user_id, call_sid, to_number, from_number, status, started_at, created_at)
+      VALUES (?, ?, ?, ?, ?, 'initiated', ?, ?)`)
+      .run(uid(), userId, req.body.CallSid || null, to, TWILIO_CALLER_ID, now(), now());
+    const dial = twiml.dial({
+      callerId: TWILIO_CALLER_ID,
+      record: 'record-from-answer-dual',           // two clean tracks: you / them
+      recordingStatusCallback: '/api/twilio/recording-status',
+      recordingStatusCallbackEvent: 'completed',
+      action: '/api/twilio/dial-status',           // relative URLs resolve against this webhook's URL
+    });
+    dial.number(to);
+  }
+  res.type('text/xml').send(twiml.toString());
+});
+
+// Fires when the <Dial> finishes — the accurate outcome (completed / busy /
+// no-answer / failed / canceled) plus talk time. Empty TwiML ends the call.
+app.post('/api/twilio/dial-status', twilioWebhook, (req, res) => {
+  const { CallSid, DialCallStatus, DialCallDuration } = req.body;
+  if (CallSid && DialCallStatus) {
+    db.prepare('UPDATE calls SET status=?, duration=?, ended_at=? WHERE call_sid=?')
+      .run(DialCallStatus, parseInt(DialCallDuration, 10) || 0, now(), CallSid);
+  }
+  res.type('text/xml').send(new twilio.twiml.VoiceResponse().toString());
+});
+
+// Recording finished processing on Twilio's side. Also tolerates plain
+// call-status events (the TwiML App's StatusCallback points here too) without
+// clobbering the more precise outcome dial-status already wrote.
+app.post('/api/twilio/recording-status', twilioWebhook, (req, res) => {
+  const { CallSid, RecordingSid, RecordingDuration, CallStatus } = req.body;
+  if (CallSid && RecordingSid) {
+    db.prepare('UPDATE calls SET recording_sid=?, recording_duration=? WHERE call_sid=?')
+      .run(RecordingSid, parseInt(RecordingDuration, 10) || 0, CallSid);
+  } else if (CallSid && CallStatus) {
+    db.prepare(`UPDATE calls SET status = CASE WHEN status='initiated' THEN ? ELSE status END,
+        ended_at = COALESCE(ended_at, ?) WHERE call_sid=?`)
+      .run(CallStatus, now(), CallSid);
+  }
+  res.sendStatus(204);
+});
+
+app.get('/api/calls', auth, (req, res) => {
+  res.json(db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId));
+});
+
+// Streams the mp3 from Twilio using server-side credentials — the browser
+// never sees the auth token and Twilio's URLs are never exposed. The client
+// fetches this with its normal Authorization header into a blob for playback.
+app.get('/api/twilio/recording/:sid', auth, async (req, res) => {
+  if (!twilioEnabled) return res.status(503).json({ error: 'twilio not configured' });
+  const sid = req.params.sid;
+  if (!/^RE[0-9a-fA-F]{32}$/.test(sid)) return res.status(400).json({ error: 'bad recording id' });
+  const owned = db.prepare('SELECT 1 FROM calls WHERE recording_sid=? AND user_id=?').get(sid, req.userId);
+  if (!owned) return res.status(404).json({ error: 'Not found' });
+  try {
+    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Recordings/${sid}.mp3`, {
+      headers: { Authorization: 'Basic ' + Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64') },
+    });
+    if (!r.ok) return res.status(502).json({ error: 'recording fetch failed: ' + r.status });
+    res.set('Content-Type', 'audio/mpeg');
+    Readable.fromWeb(r.body).pipe(res);
+  } catch (err) {
+    console.warn('recording proxy failed:', err.message);
+    if (!res.headersSent) res.status(502).json({ error: 'recording fetch failed' });
+  }
 });
 
 // ── Web push ──────────────────────────────────────────────────
