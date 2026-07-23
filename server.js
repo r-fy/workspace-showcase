@@ -845,6 +845,30 @@ app.get('/api/calls', auth, (req, res) => {
   res.json(db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId));
 });
 
+// Deletes the recording from Twilio's storage (permanent, frees the recording
+// minutes cost) but keeps the call log row itself — date/number/duration/
+// outcome stays as history, it just loses playback.
+app.delete('/api/calls/:id/recording', auth, async (req, res) => {
+  if (!twilioEnabled) return res.status(503).json({ error: 'twilio not configured' });
+  const call = db.prepare('SELECT * FROM calls WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!call) return res.status(404).json({ error: 'Not found' });
+  if (!call.recording_sid) return res.status(400).json({ error: 'no recording on this call' });
+  try {
+    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Recordings/${call.recording_sid}.json`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Basic ' + Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64') },
+    });
+    // 404 = already gone on Twilio's side (e.g. deleted from the console) —
+    // treat as success rather than leaving a dead recording_sid behind.
+    if (!r.ok && r.status !== 404) return res.status(502).json({ error: 'Twilio delete failed: ' + r.status });
+  } catch (err) {
+    console.warn('recording delete failed:', err.message);
+    return res.status(502).json({ error: 'could not reach Twilio' });
+  }
+  db.prepare('UPDATE calls SET recording_sid=NULL, recording_duration=NULL WHERE id=?').run(call.id);
+  res.json({ ok: true });
+});
+
 // Streams the mp3 from Twilio using server-side credentials — the browser
 // never sees the auth token and Twilio's URLs are never exposed. The client
 // fetches this with its normal Authorization header into a blob for playback.
@@ -864,6 +888,46 @@ app.get('/api/twilio/recording/:sid', auth, async (req, res) => {
   } catch (err) {
     console.warn('recording proxy failed:', err.message);
     if (!res.headersSent) res.status(502).json({ error: 'recording fetch failed' });
+  }
+});
+
+// Account balance + rough spend, for the Calls tab's "am I burning money"
+// glance. 'recordings' is a rollup that duplicates 'calls-recordings' — Twilio
+// nests some usage categories under a parent that repeats their cost, so
+// summing every category naively double-counts that one. Excluded here.
+// ponytail: single-page reads, no pagination — this account has ~50 usage
+// categories total, nowhere near Twilio's default page size. Revisit only if
+// this account's product mix grows enough to paginate.
+const USAGE_ROLLUP_CATEGORIES = new Set(['recordings']);
+async function fetchTwilioJson(path) {
+  const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}${path}`, {
+    headers: { Authorization: 'Basic ' + Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64') },
+  });
+  if (!r.ok) throw new Error('Twilio API ' + r.status);
+  return r.json();
+}
+function sumUsageCost(records) {
+  return records
+    .filter(r => !USAGE_ROLLUP_CATEGORIES.has(r.category))
+    .reduce((sum, r) => sum + (parseFloat(r.price) || 0), 0);
+}
+app.get('/api/twilio/usage', auth, async (req, res) => {
+  if (!twilioEnabled) return res.status(503).json({ error: 'twilio not configured' });
+  try {
+    const [balance, today, month] = await Promise.all([
+      fetchTwilioJson('/Balance.json'),
+      fetchTwilioJson('/Usage/Records/Today.json?PageSize=200'),
+      fetchTwilioJson('/Usage/Records/ThisMonth.json?PageSize=200'),
+    ]);
+    res.json({
+      balance: parseFloat(balance.balance) || 0,
+      currency: balance.currency || 'usd',
+      spentToday: sumUsageCost(today.usage_records || []),
+      spentThisMonth: sumUsageCost(month.usage_records || []),
+    });
+  } catch (err) {
+    console.warn('twilio usage fetch failed:', err.message);
+    res.status(502).json({ error: 'could not reach Twilio' });
   }
 });
 

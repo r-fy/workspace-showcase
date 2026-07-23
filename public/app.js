@@ -1394,10 +1394,24 @@ function setDialerStatus(msg, cls) {
   el.className = 'dialer-status' + (cls ? ' ' + cls : '');
 }
 
+function fmtUsd(n) { return '$' + (n || 0).toFixed(2); }
+
+// Refetched every time the tab opens (unlike the Device, which is a one-time
+// singleton) — balance moves every call, so a stale glance is worse than none.
+async function loadUsagePanel() {
+  const el = document.getElementById('calls-usage-info');
+  if (!el) return;
+  try {
+    const u = await apiFetch('GET', '/twilio/usage');
+    el.innerHTML = `Balance <b>${escHtml(fmtUsd(u.balance))}</b> · today ${escHtml(fmtUsd(u.spentToday))} · this month ${escHtml(fmtUsd(u.spentThisMonth))}`;
+  } catch(e) { el.innerHTML = ''; } // not configured / offline — just stay quiet, dialer status already covers real errors
+}
+
 async function loadCallsTab() {
   try { calls = await apiFetch('GET', '/calls'); } catch(e) {}
   renderCallLog();
   initDialer();
+  loadUsagePanel();
 }
 
 async function refreshDialerToken() {
@@ -1455,6 +1469,7 @@ function endCallUi() {
   setDialerStatus('Ready', 'dialer-status-ready');
   // The recording takes a few seconds to process server-side; the 2s sync
   // poll picks it up (hashData covers recording_sid), no refresh needed here.
+  loadUsagePanel(); // balance just moved
 }
 
 async function startCall() {
@@ -1545,7 +1560,8 @@ function renderCallLog() {
       </div>
       ${c.recording_sid ? `
         <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" title="Play recording">▶</button>
-        <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>` : ''}
+        <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>
+        <button class="call-del-btn" data-id="${escHtml(c.id)}" title="Delete recording">🗑</button>` : ''}
     </div>`;
   }).join('');
   log.querySelectorAll('.call-play-btn').forEach(btn => {
@@ -1553,6 +1569,9 @@ function renderCallLog() {
   });
   log.querySelectorAll('.call-dl-btn').forEach(btn => {
     btn.addEventListener('click', () => downloadRecording(btn.dataset.sid, btn.dataset.num, +btn.dataset.ts));
+  });
+  log.querySelectorAll('.call-del-btn').forEach(btn => {
+    btn.addEventListener('click', () => deleteRecording(btn.dataset.id));
   });
 }
 
@@ -1587,6 +1606,27 @@ async function downloadRecording(sid, num, ts) {
     const stamp = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
     a.href = url; a.download = `call-${stamp}-${String(num||'').replace(/[^\d]/g,'')}.mp3`; a.click();
   } catch(e) { toast('Could not load recording'); }
+}
+
+// Deletes the recording from Twilio permanently (frees the storage cost) —
+// the call log row itself stays, it just loses its play/download buttons.
+async function deleteRecording(callId) {
+  if (!confirm('Delete this recording? This cannot be undone.')) return;
+  const call = calls.find(c => c.id === callId);
+  const sid = call?.recording_sid;
+  try {
+    await apiCall('DELETE', '/calls/' + callId + '/recording');
+    if (sid) {
+      const u = recUrlCache.get(sid); if (u) URL.revokeObjectURL(u); recUrlCache.delete(sid);
+      // If this exact recording is the one currently playing, clear its slot
+      // first — otherwise renderCallLog's "don't kill a playing recording"
+      // guard would block the re-render and leave stale delete/play buttons.
+      document.getElementById('call-audio-' + sid)?.replaceChildren();
+    }
+    if (call) { call.recording_sid = null; call.recording_duration = null; }
+    renderCallLog();
+    toast('Recording deleted');
+  } catch(e) { toast('Could not delete recording — check connection'); }
 }
 
 // ── Push notifications setup ──
