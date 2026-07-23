@@ -260,7 +260,13 @@ header {
 }
 .task-done-btn:hover { border-color: #4ade80; color: #4ade80; background: rgba(74,222,128,0.08); }
 .task-desc-dot { width: 6px; height: 6px; border-radius: 50%; background: #3a3a3a; flex-shrink: 0; margin-top: 3px; }
-.task-claude-badge { font-size: 11px; line-height: 1; flex-shrink: 0; margin-top: 2px; text-shadow: 0 0 6px rgba(140,232,112,0.5); }
+.task-claude-btn {
+  font-size: 12px; line-height: 1; flex-shrink: 0; margin-top: 1px; width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  filter: grayscale(1); opacity: 0.35; transition: filter 0.12s, opacity 0.12s;
+}
+.task-claude-btn:hover { opacity: 0.7; }
+.task-claude-btn.active { filter: none; opacity: 1; text-shadow: 0 0 6px rgba(140,232,112,0.6); }
 .task-desc-preview { font-size: 11px; color: #4a4a4a; margin-top: 3px; margin-left: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .task-checklist-preview { display: flex; align-items: center; gap: 2px; margin-top: 5px; margin-left: 24px; font-size: 11px; }
 .task-checks-done { color: #4ade80; font-weight: 600; }

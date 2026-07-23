@@ -2874,8 +2874,8 @@ function createTaskEl(task, col) {
     <div class="task-card-header">
       <input type="checkbox" class="task-select-cb" ${selectedTasks.has(task.id)?'checked':''}>
       <span class="task-title">${escHtml(task.title)}</span>
-      ${task.claude_marked ? `<span class="task-claude-badge" title="Marked for Claude Code">🤖</span>` : ''}
       ${hasDesc ? `<span class="task-desc-dot" title="Has description"></span>` : ''}
+      <button class="task-claude-btn${task.claude_marked ? ' active' : ''}" title="Mark for Claude Code">🤖</button>
       <button class="task-done-btn" title="${inDone ? 'Already done' : 'Mark as done'}">✓</button>
     </div>
     ${preview ? `<div class="task-desc-preview">${escHtml(preview)}</div>` : ''}
@@ -2896,8 +2896,9 @@ function createTaskEl(task, col) {
     }
   });
   el.querySelector('.task-done-btn').addEventListener('click', e => { e.stopPropagation(); if(!inDone) markTaskDone(task.id); });
+  el.querySelector('.task-claude-btn').addEventListener('click', e => { e.stopPropagation(); toggleClaudeMark(task, el); });
   el.addEventListener('click', e => {
-    if (e.target.closest('.task-select-cb') || e.target.closest('.task-done-btn')) return;
+    if (e.target.closest('.task-select-cb') || e.target.closest('.task-done-btn') || e.target.closest('.task-claude-btn')) return;
     openTaskModal(task);
   });
 
@@ -2930,6 +2931,14 @@ function createTaskEl(task, col) {
   });
 
   return el;
+}
+
+async function toggleClaudeMark(task, cardEl) {
+  const marked = task.claude_marked ? 0 : 1;
+  task.claude_marked = marked;
+  cardEl.querySelector('.task-claude-btn').classList.toggle('active', !!marked);
+  await idbPut('tasks', task);
+  try { await apiCall('PUT', '/tasks/'+task.id, { claude_marked: marked }); } catch(e) {}
 }
 
 async function markTaskDone(taskId) {
