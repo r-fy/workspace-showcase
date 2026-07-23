@@ -26,9 +26,11 @@ const remWeekdaySel = new Set();
 let calls = [];
 let twDevice = null;        // Twilio Voice Device (created lazily on first Calls-tab open)
 let twCall = null;          // active Call, null when idle
+let twDialing = false;      // set synchronously on Call click — twCall only exists after connect() resolves
+let twTokenAt = 0;          // when the current token was fetched (epoch ms)
 let dialerCallerId = '';
 let callTimerInt = null;
-const recUrlCache = new Map(); // recording_sid → blob object URL
+const recUrlCache = new Map(); // recording_sid → blob object URL (kept for the session — re-listens are free)
 
 let boards = [];
 let currentBoardId = null;
@@ -1402,21 +1404,34 @@ async function loadCallsTab() {
   initDialer();
 }
 
+async function refreshDialerToken() {
+  const { token, callerId } = await apiFetch('GET', '/twilio/token');
+  twTokenAt = Date.now();
+  dialerCallerId = callerId || dialerCallerId;
+  return token;
+}
+
 async function initDialer() {
   if (twDevice) return;
   if (!window.TwilioVoice) { setDialerStatus('Dialer failed to load — refresh the app'); return; }
   try {
-    const { token, callerId } = await apiFetch('GET', '/twilio/token');
-    dialerCallerId = callerId || '';
+    const token = await refreshDialerToken();
     const info = document.getElementById('calls-panel-info');
     if (info) info.innerHTML = `Calling from<br><span class="calls-panel-num">${escHtml(fmtPhone(dialerCallerId))}</span><br><br>Every call records automatically — playback in the log.`;
     twDevice = new TwilioVoice.Device(token, { logLevel: 'error' });
-    // Tokens live 1h; the SDK warns shortly before expiry — refresh in place.
+    // Tokens live 1h; during an active signaling stream the SDK warns before
+    // expiry — refresh in place. (An IDLE device never fires this — the
+    // signaling stream only exists after the first connect — so startCall
+    // also age-checks the token before dialing.)
     twDevice.on('tokenWillExpire', async () => {
-      try { const { token: t } = await apiFetch('GET', '/twilio/token'); twDevice.updateToken(t); } catch(e) {}
+      try { twDevice.updateToken(await refreshDialerToken()); } catch(e) {}
     });
-    twDevice.on('error', err => {
+    twDevice.on('error', async err => {
       console.warn('twilio device error:', err);
+      // 20101/20104 = invalid/expired token — recover in place, don't strand the tab.
+      if (err && (err.code === 20101 || err.code === 20104)) {
+        try { twDevice.updateToken(await refreshDialerToken()); setDialerStatus('Ready', 'dialer-status-ready'); return; } catch(e) {}
+      }
       setDialerStatus('Dialer error — ' + (err.message || err.code), 'dialer-status-err');
     });
     setDialerStatus('Ready', 'dialer-status-ready');
@@ -1438,6 +1453,7 @@ function startCallTimer() {
 function endCallUi() {
   clearInterval(callTimerInt); callTimerInt = null;
   twCall = null;
+  twDialing = false;
   document.getElementById('dial-call-btn')?.classList.remove('hidden');
   document.getElementById('dial-hangup-btn')?.classList.add('hidden');
   setDialerStatus('Ready', 'dialer-status-ready');
@@ -1446,10 +1462,18 @@ function endCallUi() {
 }
 
 async function startCall() {
-  if (twCall) return;
+  // twDialing guards the async window before connect() resolves — twCall
+  // alone would let a double-click place two simultaneous billable calls.
+  if (twCall || twDialing) return;
   const num = normalizeDialNumber(document.getElementById('dial-number').value);
   if (!num) { toast('Enter a valid phone number'); return; }
-  if (!twDevice) { await initDialer(); if (!twDevice) return; }
+  twDialing = true;
+  if (!twDevice) { await initDialer(); if (!twDevice) { twDialing = false; return; } }
+  // An idle Device never hears tokenWillExpire (no signaling stream until the
+  // first connect) — a stale token would fail every call until a page reload.
+  if (Date.now() - twTokenAt > 50 * 60000) {
+    try { twDevice.updateToken(await refreshDialerToken()); } catch(e) {}
+  }
   setDialerStatus('Connecting…');
   document.getElementById('dial-call-btn').classList.add('hidden');
   document.getElementById('dial-hangup-btn').classList.remove('hidden');
@@ -1474,7 +1498,12 @@ async function startCall() {
   });
 }
 
-function hangUp() { if (twCall) twCall.disconnect(); }
+// disconnectAll covers the window where connect() hasn't resolved yet —
+// otherwise Hang Up is dead exactly when a stuck "Connecting…" needs it.
+function hangUp() {
+  if (twCall) twCall.disconnect();
+  else if (twDevice) { twDevice.disconnectAll(); endCallUi(); }
+}
 
 // Keypad: appends digits while idle, sends DTMF tones (phone-tree navigation)
 // while a call is live.
@@ -1487,6 +1516,7 @@ function dialKeyPress(k) {
 
 const CALL_STATUS_LABEL = {
   'completed': { label: 'Completed', cls: 'call-status-ok' },
+  'answered':  { label: 'Completed', cls: 'call-status-ok' },
   'no-answer': { label: 'No answer', cls: 'call-status-bad' },
   'busy':      { label: 'Busy',      cls: 'call-status-bad' },
   'failed':    { label: 'Failed',    cls: 'call-status-bad' },
@@ -1497,6 +1527,10 @@ const CALL_STATUS_LABEL = {
 function renderCallLog() {
   const log = document.getElementById('call-log');
   if (!log) return;
+  // The 2s sync poll re-renders on ANY data change (notes, reminders, …) —
+  // an innerHTML rebuild would silently kill a recording mid-playback. Hold
+  // the re-render while a player is open; it catches up once it's closed.
+  if (log.querySelector('audio')) return;
   if (!calls.length) {
     log.innerHTML = '<div class="agenda-empty">No calls yet — dial a number above</div>';
     return;
@@ -3141,6 +3175,10 @@ document.querySelectorAll('.nav-menu-item').forEach(b => b.addEventListener('cli
     if (!Array.isArray(order)) return;
     const rows = new Map([...nav.querySelectorAll('.nav-row')].map(r => [r.dataset.tab, r]));
     order.forEach(tab => { const r = rows.get(tab); if (r) nav.appendChild(r); });
+    // A tab added after the order was saved (e.g. Calls landing on a 4-tab
+    // list) would otherwise be left stranded ABOVE the reordered rows —
+    // new tabs belong at the bottom until the user places them.
+    rows.forEach((r, tab) => { if (!order.includes(tab)) nav.appendChild(r); });
   }
   function saveNavOrder() {
     localStorage.setItem('nav-tab-order', JSON.stringify([...nav.querySelectorAll('.nav-row')].map(r => r.dataset.tab)));

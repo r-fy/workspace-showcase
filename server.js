@@ -783,9 +783,14 @@ function normalizeE164(raw) {
 app.post('/api/twilio/voice', twilioWebhook, (req, res) => {
   const twiml = new twilio.twiml.VoiceResponse();
   const from = String(req.body.From || '');
-  const userId = from.startsWith('client:') ? from.slice(7) : 'owner';
+  const userId = from.startsWith('client:') ? from.slice(7) : '';
   const to = normalizeE164(req.body.To);
-  if (!to) {
+  // Only the browser SDK (From=client:<known user>) may trigger a dial — a
+  // signed request from any other Twilio path (e.g. someone calling the
+  // number inbound if it ever gets pointed here) must not place calls.
+  if (!userId || !Object.values(USERS).includes(userId)) {
+    twiml.reject();
+  } else if (!to) {
     twiml.say('Invalid number.');
   } else {
     db.prepare(`INSERT OR IGNORE INTO calls (id, user_id, call_sid, to_number, from_number, status, started_at, created_at)
@@ -793,6 +798,7 @@ app.post('/api/twilio/voice', twilioWebhook, (req, res) => {
       .run(uid(), userId, req.body.CallSid || null, to, TWILIO_CALLER_ID, now(), now());
     const dial = twiml.dial({
       callerId: TWILIO_CALLER_ID,
+      answerOnBridge: true,                        // browser leg stays "ringing" until the callee answers
       record: 'record-from-answer-dual',           // two clean tracks: you / them
       recordingStatusCallback: '/api/twilio/recording-status',
       recordingStatusCallbackEvent: 'completed',

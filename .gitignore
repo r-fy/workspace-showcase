@@ -7,6 +7,9 @@ node_modules/
 public/editor.bundle.js
 public/dialer.bundle.js
 
+# Build specs may contain live credentials — never commit
+fable5*.md
+
 # Bank statement exports — never commit transaction history
 *.csv
 *.CSV
