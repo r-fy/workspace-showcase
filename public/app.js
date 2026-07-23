@@ -1560,8 +1560,8 @@ function renderCallLog() {
       </div>
       ${c.recording_sid ? `
         <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" title="Play recording">▶</button>
-        <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>
-        <button class="call-del-btn" data-id="${escHtml(c.id)}" title="Delete recording">🗑</button>` : ''}
+        <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>` : ''}
+      <button class="call-del-btn" data-id="${escHtml(c.id)}" title="Delete call">🗑</button>
     </div>`;
   }).join('');
   log.querySelectorAll('.call-play-btn').forEach(btn => {
@@ -1571,7 +1571,7 @@ function renderCallLog() {
     btn.addEventListener('click', () => downloadRecording(btn.dataset.sid, btn.dataset.num, +btn.dataset.ts));
   });
   log.querySelectorAll('.call-del-btn').forEach(btn => {
-    btn.addEventListener('click', () => deleteRecording(btn.dataset.id));
+    btn.addEventListener('click', () => deleteCall(btn.dataset.id));
   });
 }
 
@@ -1608,25 +1608,26 @@ async function downloadRecording(sid, num, ts) {
   } catch(e) { toast('Could not load recording'); }
 }
 
-// Deletes the recording from Twilio permanently (frees the storage cost) —
-// the call log row itself stays, it just loses its play/download buttons.
-async function deleteRecording(callId) {
-  if (!confirm('Delete this recording? This cannot be undone.')) return;
+// Deletes the whole call log entry — if it has a recording, that's deleted
+// from Twilio permanently first (frees the storage cost), then the row
+// itself disappears from the list.
+async function deleteCall(callId) {
+  if (!confirm('Delete this call and its recording? This cannot be undone.')) return;
   const call = calls.find(c => c.id === callId);
   const sid = call?.recording_sid;
   try {
-    await apiCall('DELETE', '/calls/' + callId + '/recording');
+    await apiCall('DELETE', '/calls/' + callId);
     if (sid) {
       const u = recUrlCache.get(sid); if (u) URL.revokeObjectURL(u); recUrlCache.delete(sid);
       // If this exact recording is the one currently playing, clear its slot
       // first — otherwise renderCallLog's "don't kill a playing recording"
-      // guard would block the re-render and leave stale delete/play buttons.
+      // guard would block the re-render and leave the deleted row on screen.
       document.getElementById('call-audio-' + sid)?.replaceChildren();
     }
-    if (call) { call.recording_sid = null; call.recording_duration = null; }
+    calls = calls.filter(c => c.id !== callId);
     renderCallLog();
-    toast('Recording deleted');
-  } catch(e) { toast('Could not delete recording — check connection'); }
+    toast('Call deleted');
+  } catch(e) { toast('Could not delete — check connection'); }
 }
 
 // ── Push notifications setup ──

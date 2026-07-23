@@ -845,27 +845,28 @@ app.get('/api/calls', auth, (req, res) => {
   res.json(db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId));
 });
 
-// Deletes the recording from Twilio's storage (permanent, frees the recording
-// minutes cost) but keeps the call log row itself — date/number/duration/
-// outcome stays as history, it just loses playback.
-app.delete('/api/calls/:id/recording', auth, async (req, res) => {
-  if (!twilioEnabled) return res.status(503).json({ error: 'twilio not configured' });
+// Deletes the call log entry entirely — if it has a recording, that's
+// deleted from Twilio's storage first (permanent, frees the cost), then the
+// row itself is removed so nothing lingers in the list.
+app.delete('/api/calls/:id', auth, async (req, res) => {
   const call = db.prepare('SELECT * FROM calls WHERE id=? AND user_id=?').get(req.params.id, req.userId);
   if (!call) return res.status(404).json({ error: 'Not found' });
-  if (!call.recording_sid) return res.status(400).json({ error: 'no recording on this call' });
-  try {
-    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Recordings/${call.recording_sid}.json`, {
-      method: 'DELETE',
-      headers: { Authorization: 'Basic ' + Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64') },
-    });
-    // 404 = already gone on Twilio's side (e.g. deleted from the console) —
-    // treat as success rather than leaving a dead recording_sid behind.
-    if (!r.ok && r.status !== 404) return res.status(502).json({ error: 'Twilio delete failed: ' + r.status });
-  } catch (err) {
-    console.warn('recording delete failed:', err.message);
-    return res.status(502).json({ error: 'could not reach Twilio' });
+  if (call.recording_sid) {
+    if (!twilioEnabled) return res.status(503).json({ error: 'twilio not configured' });
+    try {
+      const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Recordings/${call.recording_sid}.json`, {
+        method: 'DELETE',
+        headers: { Authorization: 'Basic ' + Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64') },
+      });
+      // 404 = already gone on Twilio's side (e.g. deleted from the console) —
+      // treat as success rather than blocking the row delete on it.
+      if (!r.ok && r.status !== 404) return res.status(502).json({ error: 'Twilio delete failed: ' + r.status });
+    } catch (err) {
+      console.warn('recording delete failed:', err.message);
+      return res.status(502).json({ error: 'could not reach Twilio' });
+    }
   }
-  db.prepare('UPDATE calls SET recording_sid=NULL, recording_duration=NULL WHERE id=?').run(call.id);
+  db.prepare('DELETE FROM calls WHERE id=?').run(call.id);
   res.json({ ok: true });
 });
 
