@@ -651,6 +651,9 @@ header {
 .expense-entry-note { font-size: 12px; color: #4a4a4a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-source { font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-frequency { font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expense-entry-direction { font-size: 11px; white-space: nowrap; }
+.expense-entry-direction.is-withdrawal { color: #999; }
+.expense-entry-direction.is-deposit { color: #8ce870; }
 .expense-entry-amount { font-size: 13px; font-weight: 500; color: #e0e0e0; text-align: right; }
 
 /* Expense left panel */

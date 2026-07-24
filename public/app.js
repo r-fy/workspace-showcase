@@ -713,9 +713,10 @@ const EXPENSE_COL_DEFS = {
   note:      { label: 'Note',      width: '1fr' },
   source:    { label: 'Source',    width: '72px' },
   frequency: { label: 'Frequency', width: '90px' },
+  direction: { label: 'Type',      width: '100px' },
   amount:    { label: 'Amount',    width: '80px' },
 };
-const EXPENSE_COL_DEFAULT = ['date','category','payee','note','source','frequency','amount'];
+const EXPENSE_COL_DEFAULT = ['date','category','payee','note','source','frequency','direction','amount'];
 let expenseColOrder = (() => {
   try {
     const s = localStorage.getItem('expense-col-order');
@@ -738,7 +739,7 @@ let expenseDragCol = null;
 const COL_CELL_CLASS = {
   date: 'expense-entry-date', category: 'expense-entry-cat', payee: 'expense-entry-payee',
   note: 'expense-entry-note', source: 'expense-entry-source', frequency: 'expense-entry-frequency',
-  amount: 'expense-entry-amount',
+  direction: 'expense-entry-direction', amount: 'expense-entry-amount',
 };
 
 function getColWidth(key) {
@@ -759,6 +760,10 @@ function expenseEntryCell(e, key) {
     case 'note':     return `<span class="expense-entry-note">${escHtml(e.note || '')}</span>`;
     case 'source':    return `<span class="expense-entry-source">${escHtml(e.source || '')}</span>`;
     case 'frequency': return `<span class="expense-entry-frequency">${escHtml(e.frequency || '')}</span>`;
+    case 'direction': {
+      const isDeposit = e.direction === 'deposit';
+      return `<span class="expense-entry-direction ${isDeposit ? 'is-deposit' : 'is-withdrawal'}">${isDeposit ? '↑ Deposit' : '↓ Withdrawal'}</span>`;
+    }
     case 'amount':    return `<span class="expense-entry-amount">${escHtml(fmtAmount(e.amount))}</span>`;
     default: return '';
   }
@@ -803,7 +808,7 @@ function fmtCompact(v) {
 function computeExpenseChartData(filtered) {
   const bySource = {};
   for (const e of filtered) {
-    if (!e.date || !EXPENSE_CHART_SOURCES.some(s => s.key === e.source)) continue;
+    if (!e.date || e.direction === 'deposit' || !EXPENSE_CHART_SOURCES.some(s => s.key === e.source)) continue;
     (bySource[e.source] ??= {})[e.date.slice(0, 7)] = (bySource[e.source]?.[e.date.slice(0, 7)] || 0) + e.amount;
   }
   const allSeries = EXPENSE_CHART_SOURCES.filter(s => bySource[s.key]);
@@ -1283,6 +1288,7 @@ function openExpenseModal(expense = null) {
   document.getElementById('exp-date').value = isoToMdy(dateVal);
   dpInit(dateVal);
   document.getElementById('exp-amount').value = expense ? expense.amount : '';
+  document.getElementById('exp-direction').value = expense?.direction || 'withdrawal';
   document.getElementById('exp-category').value = expense?.category || '';
   document.getElementById('exp-payee').value = expense?.payee || '';
   document.getElementById('exp-source').value = expense?.source || '';
@@ -1302,6 +1308,7 @@ function closeExpenseModal() {
 async function saveExpense() {
   const date = document.getElementById('exp-date').value;
   const amount = parseFloat(document.getElementById('exp-amount').value);
+  const direction = document.getElementById('exp-direction').value;
   const category = document.getElementById('exp-category').value.trim();
   const payee = document.getElementById('exp-payee').value.trim();
   const source = document.getElementById('exp-source').value.trim();
@@ -1317,7 +1324,7 @@ async function saveExpense() {
       expenseCategories.push(cat);
     } catch(e) {}
   }
-  const body = { amount, date: isoDate, category, payee, source, frequency, note };
+  const body = { amount, date: isoDate, category, payee, source, frequency, direction, note };
   try {
     if (isEdit) {
       const updated = await apiCall('PUT', '/expenses/' + currentExpenseId, body);
@@ -2161,23 +2168,22 @@ function parseChaseCSV(text) {
       const desc     = f[2]?.trim() || '';
       const amount   = parseFloat(f[3]);
       const type     = f[4]?.trim() || '';
-      if (type === 'ACCT_XFER') continue;
-      if (details === 'CREDIT' || details === 'DSLIP') continue;
+      if (type === 'ACCT_XFER') continue; // internal transfer between your own accounts, not real income/spend
       if (!postDate || isNaN(amount)) continue;
       rows.push({ date: mdyToIsoDate(postDate), amount: Math.abs(amount),
         payee: cleanChaseCheckingPayee(desc), category: autoCheckingCategory(desc, type),
-        source: 'Chase Debit', note: '' });
+        source: 'Chase Debit', direction: amount < 0 ? 'withdrawal' : 'deposit', note: '' });
     } else {
       const txDate = f[0]?.trim();
       const desc   = f[2]?.trim() || '';
       const chaseCat = f[3]?.trim() || '';
       const type   = f[4]?.trim() || '';
       const amount = parseFloat(f[5]);
-      if (type === 'Payment') continue;
+      if (type === 'Payment') continue; // card payment already captured as a checking-side withdrawal
       if (!txDate || isNaN(amount)) continue;
       rows.push({ date: mdyToIsoDate(txDate), amount: Math.abs(amount),
         payee: cleanChaseCreditPayee(desc), category: autoCreditCategory(desc, chaseCat),
-        source: 'Chase Credit', note: '' });
+        source: 'Chase Credit', direction: amount < 0 ? 'withdrawal' : 'deposit', note: '' });
     }
   }
   return { format, rows };
@@ -2190,9 +2196,10 @@ function openChaseImportPreview(rows, format) {
   const modal   = document.getElementById('chase-import-modal');
   const label   = document.getElementById('chase-import-label');
   const preview = document.getElementById('chase-import-preview');
-  const total   = rows.reduce((s, r) => s + r.amount, 0);
+  const withdrawals = rows.filter(r => r.direction === 'withdrawal').reduce((s, r) => s + r.amount, 0);
+  const deposits     = rows.filter(r => r.direction === 'deposit').reduce((s, r) => s + r.amount, 0);
   const byCat   = {};
-  rows.forEach(r => { const k = r.category || 'Uncategorized'; byCat[k] = (byCat[k] || 0) + r.amount; });
+  rows.filter(r => r.direction === 'withdrawal').forEach(r => { const k = r.category || 'Uncategorized'; byCat[k] = (byCat[k] || 0) + r.amount; });
   const catRows = Object.entries(byCat).sort((a, b) => b[1] - a[1])
     .map(([cat, amt]) => `<div class="chase-preview-cat"><span>${escHtml(cat)}</span><span>${escHtml(fmtAmount(amt))}</span></div>`)
     .join('');
@@ -2200,7 +2207,7 @@ function openChaseImportPreview(rows, format) {
   preview.innerHTML = `
     <div class="chase-preview-meta">
       <span>${rows.length} transactions</span>
-      <span class="chase-preview-total">${escHtml(fmtAmount(total))}</span>
+      <span class="chase-preview-total">−${escHtml(fmtAmount(withdrawals))} / +${escHtml(fmtAmount(deposits))}</span>
     </div>
     <div class="chase-preview-cats">${catRows}</div>`;
   modal.classList.remove('hidden');
@@ -2212,8 +2219,8 @@ async function confirmChaseImport() {
   chaseImportPending = null;
   document.getElementById('chase-import-modal').classList.add('hidden');
   const csvField = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-  const lines = ['date,amount,category,payee,source,note'];
-  for (const r of rows) lines.push([r.date, r.amount, r.category, r.payee, r.source, r.note].map(csvField).join(','));
+  const lines = ['date,amount,category,payee,source,direction,note'];
+  for (const r of rows) lines.push([r.date, r.amount, r.category, r.payee, r.source, r.direction, r.note].map(csvField).join(','));
   try {
     const result = await apiCall('POST', '/expenses/import', { csv: lines.join('\n') });
     const newCats = [...new Set(rows.map(r => r.category).filter(Boolean))];
