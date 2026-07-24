@@ -19,6 +19,8 @@ let expenseSortCols = [];
 const selectedExpenses = new Set();
 let lastClickedExpenseId = null;
 let expenseChartVisible = localStorage.getItem('expense-chart-visible') !== '0';
+let expenseFilterYear = localStorage.getItem('expense-filter-year') || 'all';
+let expenseFilterMonth = localStorage.getItem('expense-filter-month') || 'all';
 
 let reminders = [];
 let currentReminderId = null;
@@ -767,7 +769,13 @@ const EXPENSE_CHART_SOURCES = [
   { key: 'Chase Debit',  color: '#4caf32' },
   { key: 'Chase Credit', color: '#4a90e0' },
 ];
-const EXPENSE_CHART_MONTH_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', year: '2-digit' });
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// "Jul '24", never "Jul 24" — the latter reads as a day-of-month, not a year.
+function fmtMonthYear(mk) {
+  const [y, m] = mk.split('-');
+  return `${MONTH_ABBR[Number(m) - 1]} '${y.slice(2)}`;
+}
+const expenseChartHiddenSeries = new Set();
 
 function monthsBetween(minKey, maxKey) {
   const months = [];
@@ -798,16 +806,17 @@ function computeExpenseChartData(filtered) {
     if (!e.date || !EXPENSE_CHART_SOURCES.some(s => s.key === e.source)) continue;
     (bySource[e.source] ??= {})[e.date.slice(0, 7)] = (bySource[e.source]?.[e.date.slice(0, 7)] || 0) + e.amount;
   }
-  const series = EXPENSE_CHART_SOURCES.filter(s => bySource[s.key]);
-  if (!series.length) return null;
+  const allSeries = EXPENSE_CHART_SOURCES.filter(s => bySource[s.key]);
+  if (!allSeries.length) return null;
+  const visibleSeries = allSeries.filter(s => !expenseChartHiddenSeries.has(s.key));
 
-  const allKeys = series.flatMap(s => Object.keys(bySource[s.key]));
+  const allKeys = allSeries.flatMap(s => Object.keys(bySource[s.key]));
   const minKey = allKeys.reduce((a, b) => a < b ? a : b);
   const maxKey = allKeys.reduce((a, b) => a > b ? a : b);
   const months = monthsBetween(minKey, maxKey);
 
   let maxVal = 0;
-  for (const s of series) for (const mk of months) maxVal = Math.max(maxVal, bySource[s.key][mk] || 0);
+  for (const s of visibleSeries) for (const mk of months) maxVal = Math.max(maxVal, bySource[s.key][mk] || 0);
   const niceMax = niceCeil(maxVal || 1);
 
   const W = 900, H = 260, padL = 56, padR = 16, padT = 16, padB = 30;
@@ -815,13 +824,13 @@ function computeExpenseChartData(filtered) {
   const xFor = i => padL + (months.length > 1 ? (i / (months.length - 1)) * plotW : plotW / 2);
   const yFor = v => padT + plotH - (v / niceMax) * plotH;
 
-  return { bySource, series, months, niceMax, W, H, padL, padR, padT, padB, plotW, plotH, xFor, yFor };
+  return { bySource, allSeries, visibleSeries, months, niceMax, W, H, padL, padR, padT, padB, plotW, plotH, xFor, yFor };
 }
 
 function expenseChartHtml(filtered) {
   const d = computeExpenseChartData(filtered);
-  if (!d) return '<div class="expense-chart-empty">No Chase Debit/Credit data to chart yet.</div>';
-  const { bySource, series, months, niceMax, W, H, padL, padR, padT, padB, plotW, xFor, yFor } = d;
+  if (!d) return '<div class="expense-chart-empty">No Chase Debit/Credit data in this period.</div>';
+  const { bySource, allSeries, visibleSeries, months, niceMax, W, H, padL, padR, padT, padB, plotW, xFor, yFor } = d;
 
   let gridLines = '', yLabels = '';
   const gridSteps = 4;
@@ -833,23 +842,25 @@ function expenseChartHtml(filtered) {
   }
 
   let xLabels = '';
+  const labelStep = months.length > 8 ? 3 : 1;
   months.forEach((mk, i) => {
-    if (i % 3 !== 0 && i !== months.length - 1) return;
-    const [y, m] = mk.split('-').map(Number);
-    xLabels += `<text x="${xFor(i)}" y="${H - 8}" class="exp-chart-axis-label" text-anchor="middle">${EXPENSE_CHART_MONTH_FMT.format(new Date(y, m - 1, 1))}</text>`;
+    if (i % labelStep !== 0 && i !== months.length - 1) return;
+    const isJan = mk.endsWith('-01');
+    xLabels += `<text x="${xFor(i)}" y="${H - 8}" class="exp-chart-axis-label${isJan ? ' exp-chart-axis-label-year' : ''}" text-anchor="middle">${fmtMonthYear(mk)}</text>`;
   });
 
   let paths = '';
-  series.forEach(s => {
+  visibleSeries.forEach(s => {
     const pts = months.map((mk, i) => `${xFor(i)},${yFor(bySource[s.key][mk] || 0)}`).join(' ');
     const lastI = months.length - 1;
     paths += `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
     paths += `<circle cx="${xFor(lastI)}" cy="${yFor(bySource[s.key][months[lastI]] || 0)}" r="5" fill="${s.color}" stroke="#161616" stroke-width="2"/>`;
   });
 
-  const legend = series.map(s =>
-    `<span class="exp-chart-legend-item"><span class="exp-chart-legend-swatch" style="background:${s.color}"></span>${escHtml(s.key)}</span>`
-  ).join('');
+  const legend = allSeries.map(s => {
+    const hidden = expenseChartHiddenSeries.has(s.key);
+    return `<span class="exp-chart-legend-item${hidden ? ' hidden-series' : ''}" data-source="${escHtml(s.key)}" title="Click to ${hidden ? 'show' : 'isolate/hide'}"><span class="exp-chart-legend-swatch" style="background:${s.color}"></span>${escHtml(s.key)}</span>`;
+  }).join('');
 
   return `
     <div class="expense-chart-wrap">
@@ -868,11 +879,20 @@ function wireExpenseChart(area, filtered) {
   if (!wrap) return;
   const d = computeExpenseChartData(filtered);
   if (!d) return;
-  const { bySource, series, months, xFor } = d;
+  const { bySource, visibleSeries, months, xFor } = d;
   const svg = wrap.querySelector('.exp-chart-svg');
   const hit = wrap.querySelector('.exp-chart-hit');
   const crosshair = wrap.querySelector('.exp-chart-crosshair');
   const tooltip = wrap.querySelector('.exp-chart-tooltip');
+
+  wrap.querySelectorAll('.exp-chart-legend-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const src = el.dataset.source;
+      if (expenseChartHiddenSeries.has(src)) expenseChartHiddenSeries.delete(src);
+      else expenseChartHiddenSeries.add(src);
+      renderExpensesList();
+    });
+  });
 
   const nearestIdx = clientX => {
     const pt = svg.createSVGPoint();
@@ -889,11 +909,10 @@ function wireExpenseChart(area, filtered) {
     const x = xFor(i);
     crosshair.setAttribute('x1', x); crosshair.setAttribute('x2', x);
     crosshair.classList.remove('hidden');
-    const [y, m] = mk.split('-').map(Number);
-    const rows = series.map(s =>
+    const rows = visibleSeries.map(s =>
       `<div class="exp-chart-tooltip-row"><span class="exp-chart-tooltip-key" style="background:${s.color}"></span><span class="exp-chart-tooltip-val">${fmtAmount(bySource[s.key][mk] || 0)}</span><span class="exp-chart-tooltip-name">${escHtml(s.key)}</span></div>`
     ).join('');
-    tooltip.innerHTML = `<div class="exp-chart-tooltip-month">${escHtml(EXPENSE_CHART_MONTH_FMT.format(new Date(y, m - 1, 1)))}</div>${rows}`;
+    tooltip.innerHTML = `<div class="exp-chart-tooltip-month">${escHtml(fmtMonthYear(mk))}</div>${rows}`;
     tooltip.classList.remove('hidden');
     const wrapRect = wrap.getBoundingClientRect();
     const svgRect = svg.getBoundingClientRect();
@@ -906,10 +925,35 @@ function wireExpenseChart(area, filtered) {
   });
 }
 
+function expenseTimeFilterHtml() {
+  const years = [...new Set(expenses.map(e => e.date?.slice(0, 4)).filter(Boolean))].sort();
+  const monthOpts = MONTH_ABBR.map((name, i) => {
+    const v = String(i + 1).padStart(2, '0');
+    return `<option value="${v}" ${expenseFilterMonth === v ? 'selected' : ''}>${name}</option>`;
+  }).join('');
+  const yearOpts = years.map(y => `<option value="${y}" ${expenseFilterYear === y ? 'selected' : ''}>${y}</option>`).join('');
+  const hasFilter = expenseFilterYear !== 'all' || expenseFilterMonth !== 'all';
+  return `
+    <div class="expense-time-filter">
+      <span class="expense-time-filter-label">Period</span>
+      <select id="expense-year-select" class="expense-time-select">
+        <option value="all" ${expenseFilterYear === 'all' ? 'selected' : ''}>All years</option>
+        ${yearOpts}
+      </select>
+      <select id="expense-month-select" class="expense-time-select" ${expenseFilterYear === 'all' ? 'disabled' : ''}>
+        <option value="all" ${expenseFilterMonth === 'all' ? 'selected' : ''}>All months</option>
+        ${monthOpts}
+      </select>
+      ${hasFilter ? '<button id="expense-time-clear-btn" class="expense-time-clear-btn">Clear</button>' : ''}
+    </div>`;
+}
+
 function renderExpensesList() {
   const area = document.getElementById('expenses-list-area');
   if (!area) return;
   let filtered = activeExpenseCat ? expenses.filter(e => e.category === activeExpenseCat) : expenses;
+  if (expenseFilterYear !== 'all') filtered = filtered.filter(e => e.date?.slice(0, 4) === expenseFilterYear);
+  if (expenseFilterMonth !== 'all') filtered = filtered.filter(e => e.date?.slice(5, 7) === expenseFilterMonth);
 
   filtered = [...filtered].sort((a, b) => {
     for (const key of expenseColOrder) {
@@ -967,6 +1011,7 @@ function renderExpensesList() {
           <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
         </span>
       </div>
+      ${expenseTimeFilterHtml()}
       ${expenseChartVisible ? expenseChartHtml(filtered) : ''}
       ${filtered.length ? headerRow : ''}
     </div>
@@ -989,6 +1034,28 @@ function renderExpensesList() {
   if (chartToggleBtn) chartToggleBtn.addEventListener('click', () => {
     expenseChartVisible = !expenseChartVisible;
     localStorage.setItem('expense-chart-visible', expenseChartVisible ? '1' : '0');
+    renderExpensesList();
+  });
+
+  const yearSel = area.querySelector('#expense-year-select');
+  if (yearSel) yearSel.addEventListener('change', () => {
+    expenseFilterYear = yearSel.value;
+    if (expenseFilterYear === 'all') expenseFilterMonth = 'all';
+    localStorage.setItem('expense-filter-year', expenseFilterYear);
+    localStorage.setItem('expense-filter-month', expenseFilterMonth);
+    renderExpensesList();
+  });
+  const monthSel = area.querySelector('#expense-month-select');
+  if (monthSel) monthSel.addEventListener('change', () => {
+    expenseFilterMonth = monthSel.value;
+    localStorage.setItem('expense-filter-month', expenseFilterMonth);
+    renderExpensesList();
+  });
+  const timeClearBtn = area.querySelector('#expense-time-clear-btn');
+  if (timeClearBtn) timeClearBtn.addEventListener('click', () => {
+    expenseFilterYear = 'all'; expenseFilterMonth = 'all';
+    localStorage.setItem('expense-filter-year', 'all');
+    localStorage.setItem('expense-filter-month', 'all');
     renderExpensesList();
   });
 
