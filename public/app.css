@@ -547,6 +547,44 @@ header {
   transition: background 0.12s, border-color 0.12s;
 }
 .expense-add-btn:hover { background: #22501a; border-color: #3a7a2a; }
+.expense-chart-toggle-btn {
+  padding: 5px 14px; font-size: 13px; background: #1a1a1a; color: #ccc;
+  border: 1px solid #2a2a2a; border-radius: 5px; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.expense-chart-toggle-btn:hover { background: #202020; border-color: #3a3a3a; }
+
+/* Spending-over-time chart */
+.expense-chart-empty {
+  padding: 24px 20px; color: #555; font-size: 13px; text-align: center;
+}
+.expense-chart-wrap { position: relative; padding: 14px 20px 4px; }
+.exp-chart-legend { display: flex; gap: 18px; margin-bottom: 6px; }
+.exp-chart-legend-item {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: #ccc;
+}
+.exp-chart-legend-swatch { width: 12px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+.exp-chart-svg { width: 100%; height: 220px; display: block; }
+.exp-chart-grid { stroke: #2a2a2a; stroke-width: 1; }
+.exp-chart-axis-label { fill: #555; font-size: 10px; font-family: inherit; }
+.exp-chart-hit { cursor: crosshair; }
+.exp-chart-crosshair { stroke: #3a3a3a; stroke-width: 1; }
+.exp-chart-crosshair.hidden { display: none; }
+.exp-chart-tooltip {
+  position: absolute; top: 34px; pointer-events: none;
+  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 5px;
+  padding: 8px 10px; font-size: 12px; min-width: 150px; z-index: 6;
+}
+.exp-chart-tooltip.hidden { display: none; }
+.exp-chart-tooltip-month { color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+.exp-chart-tooltip-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.exp-chart-tooltip-key { width: 10px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+.exp-chart-tooltip-val { color: #e0e0e0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.exp-chart-tooltip-name { color: #999; }
+@media (max-width: 640px) {
+  .expense-list-header { flex-wrap: wrap; gap: 8px; }
+  .exp-chart-svg { height: 180px; }
+}
 /* shared grid — template driven by --exp-grid CSS var set by JS */
 .expense-header-row, .expense-entry {
   display: grid;

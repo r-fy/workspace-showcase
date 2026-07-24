@@ -18,6 +18,7 @@ let currentExpenseId = null;
 let expenseSortCols = [];
 const selectedExpenses = new Set();
 let lastClickedExpenseId = null;
+let expenseChartVisible = localStorage.getItem('expense-chart-visible') !== '0';
 
 let reminders = [];
 let currentReminderId = null;
@@ -761,6 +762,150 @@ function expenseEntryCell(e, key) {
   }
 }
 
+// ── Spending-over-time chart ────────────────────────────────────
+const EXPENSE_CHART_SOURCES = [
+  { key: 'Chase Debit',  color: '#4caf32' },
+  { key: 'Chase Credit', color: '#4a90e0' },
+];
+const EXPENSE_CHART_MONTH_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', year: '2-digit' });
+
+function monthsBetween(minKey, maxKey) {
+  const months = [];
+  let [y, m] = minKey.split('-').map(Number);
+  const [ey, em] = maxKey.split('-').map(Number);
+  while (y < ey || (y === ey && m <= em)) {
+    months.push(`${y}-${String(m).padStart(2, '0')}`);
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return months;
+}
+
+function niceCeil(v) {
+  const mag = Math.pow(10, Math.floor(Math.log10(v || 1)));
+  const n = v / mag;
+  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return step * mag;
+}
+
+function fmtCompact(v) {
+  if (v >= 1000) return '$' + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'K';
+  return '$' + Math.round(v);
+}
+
+function computeExpenseChartData(filtered) {
+  const bySource = {};
+  for (const e of filtered) {
+    if (!e.date || !EXPENSE_CHART_SOURCES.some(s => s.key === e.source)) continue;
+    (bySource[e.source] ??= {})[e.date.slice(0, 7)] = (bySource[e.source]?.[e.date.slice(0, 7)] || 0) + e.amount;
+  }
+  const series = EXPENSE_CHART_SOURCES.filter(s => bySource[s.key]);
+  if (!series.length) return null;
+
+  const allKeys = series.flatMap(s => Object.keys(bySource[s.key]));
+  const minKey = allKeys.reduce((a, b) => a < b ? a : b);
+  const maxKey = allKeys.reduce((a, b) => a > b ? a : b);
+  const months = monthsBetween(minKey, maxKey);
+
+  let maxVal = 0;
+  for (const s of series) for (const mk of months) maxVal = Math.max(maxVal, bySource[s.key][mk] || 0);
+  const niceMax = niceCeil(maxVal || 1);
+
+  const W = 900, H = 260, padL = 56, padR = 16, padT = 16, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xFor = i => padL + (months.length > 1 ? (i / (months.length - 1)) * plotW : plotW / 2);
+  const yFor = v => padT + plotH - (v / niceMax) * plotH;
+
+  return { bySource, series, months, niceMax, W, H, padL, padR, padT, padB, plotW, plotH, xFor, yFor };
+}
+
+function expenseChartHtml(filtered) {
+  const d = computeExpenseChartData(filtered);
+  if (!d) return '<div class="expense-chart-empty">No Chase Debit/Credit data to chart yet.</div>';
+  const { bySource, series, months, niceMax, W, H, padL, padR, padT, padB, plotW, xFor, yFor } = d;
+
+  let gridLines = '', yLabels = '';
+  const gridSteps = 4;
+  for (let i = 0; i <= gridSteps; i++) {
+    const val = niceMax * i / gridSteps;
+    const y = yFor(val);
+    gridLines += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" class="exp-chart-grid"/>`;
+    yLabels += `<text x="${padL - 8}" y="${y + 4}" class="exp-chart-axis-label" text-anchor="end">${fmtCompact(val)}</text>`;
+  }
+
+  let xLabels = '';
+  months.forEach((mk, i) => {
+    if (i % 3 !== 0 && i !== months.length - 1) return;
+    const [y, m] = mk.split('-').map(Number);
+    xLabels += `<text x="${xFor(i)}" y="${H - 8}" class="exp-chart-axis-label" text-anchor="middle">${EXPENSE_CHART_MONTH_FMT.format(new Date(y, m - 1, 1))}</text>`;
+  });
+
+  let paths = '';
+  series.forEach(s => {
+    const pts = months.map((mk, i) => `${xFor(i)},${yFor(bySource[s.key][mk] || 0)}`).join(' ');
+    const lastI = months.length - 1;
+    paths += `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    paths += `<circle cx="${xFor(lastI)}" cy="${yFor(bySource[s.key][months[lastI]] || 0)}" r="5" fill="${s.color}" stroke="#161616" stroke-width="2"/>`;
+  });
+
+  const legend = series.map(s =>
+    `<span class="exp-chart-legend-item"><span class="exp-chart-legend-swatch" style="background:${s.color}"></span>${escHtml(s.key)}</span>`
+  ).join('');
+
+  return `
+    <div class="expense-chart-wrap">
+      <div class="exp-chart-legend">${legend}</div>
+      <svg class="exp-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        ${gridLines}${yLabels}${xLabels}${paths}
+        <rect class="exp-chart-hit" x="${padL}" y="${padT}" width="${plotW}" height="${H - padT - padB}" fill="transparent"/>
+        <line class="exp-chart-crosshair hidden" x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}"/>
+      </svg>
+      <div class="exp-chart-tooltip hidden"></div>
+    </div>`;
+}
+
+function wireExpenseChart(area, filtered) {
+  const wrap = area.querySelector('.expense-chart-wrap');
+  if (!wrap) return;
+  const d = computeExpenseChartData(filtered);
+  if (!d) return;
+  const { bySource, series, months, xFor } = d;
+  const svg = wrap.querySelector('.exp-chart-svg');
+  const hit = wrap.querySelector('.exp-chart-hit');
+  const crosshair = wrap.querySelector('.exp-chart-crosshair');
+  const tooltip = wrap.querySelector('.exp-chart-tooltip');
+
+  const nearestIdx = clientX => {
+    const pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = 0;
+    const svgX = pt.matrixTransform(svg.getScreenCTM().inverse()).x;
+    let best = 0, bestDist = Infinity;
+    months.forEach((mk, i) => { const dist = Math.abs(xFor(i) - svgX); if (dist < bestDist) { bestDist = dist; best = i; } });
+    return best;
+  };
+
+  hit.addEventListener('pointermove', e => {
+    const i = nearestIdx(e.clientX);
+    const mk = months[i];
+    const x = xFor(i);
+    crosshair.setAttribute('x1', x); crosshair.setAttribute('x2', x);
+    crosshair.classList.remove('hidden');
+    const [y, m] = mk.split('-').map(Number);
+    const rows = series.map(s =>
+      `<div class="exp-chart-tooltip-row"><span class="exp-chart-tooltip-key" style="background:${s.color}"></span><span class="exp-chart-tooltip-val">${fmtAmount(bySource[s.key][mk] || 0)}</span><span class="exp-chart-tooltip-name">${escHtml(s.key)}</span></div>`
+    ).join('');
+    tooltip.innerHTML = `<div class="exp-chart-tooltip-month">${escHtml(EXPENSE_CHART_MONTH_FMT.format(new Date(y, m - 1, 1)))}</div>${rows}`;
+    tooltip.classList.remove('hidden');
+    const wrapRect = wrap.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    const px = svgRect.left - wrapRect.left + (x / d.W) * svgRect.width;
+    tooltip.style.left = Math.min(px, wrapRect.width - 160) + 'px';
+  });
+  hit.addEventListener('pointerleave', () => {
+    crosshair.classList.add('hidden');
+    tooltip.classList.add('hidden');
+  });
+}
+
 function renderExpensesList() {
   const area = document.getElementById('expenses-list-area');
   if (!area) return;
@@ -818,9 +963,11 @@ function renderExpensesList() {
         <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
         <span class="expense-list-header-right">
           ${filtered.length ? `<span class="exp-source-totals">${sourceSummary}</span>` : ''}
+          <button class="expense-chart-toggle-btn" id="expense-chart-toggle-btn">${expenseChartVisible ? '📈 Hide chart' : '📈 Chart'}</button>
           <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
         </span>
       </div>
+      ${expenseChartVisible ? expenseChartHtml(filtered) : ''}
       ${filtered.length ? headerRow : ''}
     </div>
     ${filtered.length ? `
@@ -836,6 +983,14 @@ function renderExpensesList() {
   `;
 
   updateExpenseGrid();
+  if (expenseChartVisible) wireExpenseChart(area, filtered);
+
+  const chartToggleBtn = area.querySelector('#expense-chart-toggle-btn');
+  if (chartToggleBtn) chartToggleBtn.addEventListener('click', () => {
+    expenseChartVisible = !expenseChartVisible;
+    localStorage.setItem('expense-chart-visible', expenseChartVisible ? '1' : '0');
+    renderExpensesList();
+  });
 
   // Select-all checkbox
   const selectAllCb = area.querySelector('.exp-select-all');
