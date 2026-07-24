@@ -832,6 +832,27 @@ function expenseChartHtml(filtered) {
   if (!d) return '<div class="expense-chart-empty">No Chase Debit/Credit data in this period.</div>';
   const { bySource, allSeries, visibleSeries, months, niceMax, W, H, padL, padR, padT, padB, plotW, xFor, yFor } = d;
 
+  const legend = allSeries.map(s => {
+    const hidden = expenseChartHiddenSeries.has(s.key);
+    return `<span class="exp-chart-legend-item${hidden ? ' hidden-series' : ''}" data-source="${escHtml(s.key)}" title="Click to ${hidden ? 'show' : 'isolate/hide'}"><span class="exp-chart-legend-swatch" style="background:${s.color}"></span>${escHtml(s.key)}</span>`;
+  }).join('');
+
+  // A single month has no "over time" to plot — a line chart of one point is just
+  // two dots on empty axes. Show the totals as stat tiles instead.
+  if (months.length < 2) {
+    const mk = months[0];
+    const stats = visibleSeries.map(s => `
+      <div class="exp-chart-stat">
+        <span class="exp-chart-stat-val">${escHtml(fmtAmount(bySource[s.key][mk] || 0))}</span>
+        <span class="exp-chart-stat-label"><span class="exp-chart-stat-swatch" style="background:${s.color}"></span>${escHtml(s.key)}</span>
+      </div>`).join('');
+    return `
+      <div class="expense-chart-wrap">
+        <div class="exp-chart-legend">${legend}</div>
+        <div class="exp-chart-stats">${stats || '<span class="expense-chart-empty">All lines hidden.</span>'}</div>
+      </div>`;
+  }
+
   let gridLines = '', yLabels = '';
   const gridSteps = 4;
   for (let i = 0; i <= gridSteps; i++) {
@@ -857,11 +878,6 @@ function expenseChartHtml(filtered) {
     paths += `<circle cx="${xFor(lastI)}" cy="${yFor(bySource[s.key][months[lastI]] || 0)}" r="5" fill="${s.color}" stroke="#161616" stroke-width="2"/>`;
   });
 
-  const legend = allSeries.map(s => {
-    const hidden = expenseChartHiddenSeries.has(s.key);
-    return `<span class="exp-chart-legend-item${hidden ? ' hidden-series' : ''}" data-source="${escHtml(s.key)}" title="Click to ${hidden ? 'show' : 'isolate/hide'}"><span class="exp-chart-legend-swatch" style="background:${s.color}"></span>${escHtml(s.key)}</span>`;
-  }).join('');
-
   return `
     <div class="expense-chart-wrap">
       <div class="exp-chart-legend">${legend}</div>
@@ -880,10 +896,6 @@ function wireExpenseChart(area, filtered) {
   const d = computeExpenseChartData(filtered);
   if (!d) return;
   const { bySource, visibleSeries, months, xFor } = d;
-  const svg = wrap.querySelector('.exp-chart-svg');
-  const hit = wrap.querySelector('.exp-chart-hit');
-  const crosshair = wrap.querySelector('.exp-chart-crosshair');
-  const tooltip = wrap.querySelector('.exp-chart-tooltip');
 
   wrap.querySelectorAll('.exp-chart-legend-item').forEach(el => {
     el.addEventListener('click', () => {
@@ -893,6 +905,12 @@ function wireExpenseChart(area, filtered) {
       renderExpensesList();
     });
   });
+
+  const svg = wrap.querySelector('.exp-chart-svg');
+  if (!svg) return; // single-month stat-tile view has no crosshair/tooltip to wire
+  const hit = wrap.querySelector('.exp-chart-hit');
+  const crosshair = wrap.querySelector('.exp-chart-crosshair');
+  const tooltip = wrap.querySelector('.exp-chart-tooltip');
 
   const nearestIdx = clientX => {
     const pt = svg.createSVGPoint();
@@ -968,20 +986,6 @@ function renderExpensesList() {
     return 0;
   });
 
-  const sourceTotals = {};
-  let grandTotal = 0;
-  for (const e of filtered) {
-    const src = e.source || 'Unknown';
-    sourceTotals[src] = (sourceTotals[src] || 0) + e.amount;
-    grandTotal += e.amount;
-  }
-  const sourceSummary = [
-    ...Object.entries(sourceTotals)
-      .sort((a, b) => b[1] - a[1])
-      .map(([src, amt]) => `<span class="exp-source-total"><span class="exp-source-name">${escHtml(src)}</span><span class="exp-source-amt">${escHtml(fmtAmount(amt))}</span></span>`),
-    `<span class="exp-source-divider"></span><span class="exp-source-total exp-source-grand"><span class="exp-source-name">Total</span><span class="exp-source-amt">${escHtml(fmtAmount(grandTotal))}</span></span>`
-  ].join('');
-
   const allFilteredIds = filtered.map(e => e.id);
   const allSelected = allFilteredIds.length > 0 && allFilteredIds.every(id => selectedExpenses.has(id));
   const anySelected = selectedExpenses.size > 0;
@@ -1006,7 +1010,6 @@ function renderExpensesList() {
       <div class="expense-list-header">
         <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
         <span class="expense-list-header-right">
-          ${filtered.length ? `<span class="exp-source-totals">${sourceSummary}</span>` : ''}
           <button class="expense-chart-toggle-btn" id="expense-chart-toggle-btn">${expenseChartVisible ? '📈 Hide chart' : '📈 Chart'}</button>
           <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
         </span>

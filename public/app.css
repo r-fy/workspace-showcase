@@ -535,12 +535,6 @@ header {
 }
 .expense-list-label { font-size: 13px; color: #555; }
 .expense-list-header-right { display: flex; align-items: center; gap: 14px; }
-.exp-source-totals { display: flex; gap: 16px; align-items: center; }
-.exp-source-total { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
-.exp-source-name { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
-.exp-source-amt { font-size: 14px; font-weight: 600; color: #e0e0e0; }
-.exp-source-grand .exp-source-amt { color: #8ce870; }
-.exp-source-divider { width: 1px; height: 28px; background: #2a2a2a; flex-shrink: 0; }
 .expense-add-btn {
   padding: 5px 14px; font-size: 13px; background: #1a3a13; color: #8ce870;
   border: 1px solid #2a5a20; border-radius: 5px; cursor: pointer;
@@ -577,6 +571,11 @@ header {
   padding: 24px 20px; color: #555; font-size: 13px; text-align: center;
 }
 .expense-chart-wrap { position: relative; padding: 14px 20px 4px; }
+.exp-chart-stats { display: flex; gap: 36px; padding: 12px 4px 28px; flex-wrap: wrap; }
+.exp-chart-stat { display: flex; flex-direction: column; gap: 6px; }
+.exp-chart-stat-val { font-size: 28px; font-weight: 600; color: #e0e0e0; }
+.exp-chart-stat-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #999; }
+.exp-chart-stat-swatch { width: 12px; height: 2px; border-radius: 1px; flex-shrink: 0; }
 .exp-chart-legend { display: flex; gap: 18px; margin-bottom: 6px; }
 .exp-chart-legend-item {
   display: flex; align-items: center; gap: 6px; font-size: 12px; color: #ccc;
