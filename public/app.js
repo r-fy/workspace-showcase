@@ -2,6 +2,7 @@
 
 // ── Config ────────────────────────────────────────────────────
 const API = '/api';
+const CLAUDE_ICON_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="10.5" y="2" width="3" height="20" rx="1.5"/><rect x="10.5" y="2" width="3" height="20" rx="1.5" transform="rotate(30 12 12)"/><rect x="10.5" y="2" width="3" height="20" rx="1.5" transform="rotate(60 12 12)"/><rect x="10.5" y="2" width="3" height="20" rx="1.5" transform="rotate(90 12 12)"/><rect x="10.5" y="2" width="3" height="20" rx="1.5" transform="rotate(120 12 12)"/><rect x="10.5" y="2" width="3" height="20" rx="1.5" transform="rotate(150 12 12)"/></svg>';
 let authHeader = null;
 
 // ── State ─────────────────────────────────────────────────────
@@ -42,6 +43,8 @@ let selectedTasks = new Set();
 let modalTaskId = null;
 let newTaskColId = null;
 let modalClaudeMarked = false;
+let modalTaskTags = [];   // array of tag names being edited in the open task modal
+let activeTaskTag = null; // Projects tag filter, scoped to the current board
 let dragColId = null;
 let dragBoardId = null;
 let dragNoteId = null;
@@ -2481,6 +2484,192 @@ function renderTagEditor() {
   input?.addEventListener('blur', () => setTimeout(closeDropdown, 120));
 }
 
+// ── Task tags (separate namespace from note tags) ──────────────
+function taskTags(task) {
+  return (task && task.tags ? task.tags : '').split(',').map(t => t.trim()).filter(Boolean);
+}
+
+function taskTagColor(name) {
+  const stored = JSON.parse(localStorage.getItem('task-tag-colors') || '{}');
+  if (stored[name]) return stored[name];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return hslToHex(h % 360, 55, 55);
+}
+
+function setTaskTagColor(name, color) {
+  const stored = JSON.parse(localStorage.getItem('task-tag-colors') || '{}');
+  stored[name] = color;
+  localStorage.setItem('task-tag-colors', JSON.stringify(stored));
+  renderTaskTagsBar(); renderKanban(); renderTaskTagEditor();
+}
+
+async function allTaskTagNames() {
+  const all = new Set();
+  currentBoardData.forEach(col => col.tasks.forEach(t => taskTags(t).forEach(x => all.add(x))));
+  (await idbGetAll('tasks')).forEach(t => taskTags(t).forEach(x => all.add(x)));
+  return [...all].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+function renderTaskTagsBar() {
+  const bar = document.getElementById('task-tags-bar');
+  if (!bar) return;
+  const allTags = new Set();
+  currentBoardData.forEach(col => col.tasks.forEach(t => taskTags(t).forEach(x => allTags.add(x))));
+  if (!allTags.size) { bar.innerHTML = ''; bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  bar.innerHTML = [...allTags].sort().map(t => {
+    const c = taskTagColor(t);
+    return `<span class="tag-filter-pill${t === activeTaskTag ? ' active' : ''}" data-tag="${escHtml(t)}" style="--tag-c:${c}">${escHtml(t)}</span>`;
+  }).join('') + (activeTaskTag ? `<span class="tag-filter-clear" id="task-tag-clear">✕</span>` : '');
+  bar.querySelectorAll('.tag-filter-pill').forEach(el => {
+    el.addEventListener('click', () => {
+      activeTaskTag = el.dataset.tag === activeTaskTag ? null : el.dataset.tag;
+      renderTaskTagsBar(); renderKanban();
+    });
+  });
+  document.getElementById('task-tag-clear')?.addEventListener('click', () => {
+    activeTaskTag = null; renderTaskTagsBar(); renderKanban();
+  });
+}
+
+async function renameTaskTagGlobally(oldName, newName) {
+  if (!newName || newName === oldName) return;
+  const colors = JSON.parse(localStorage.getItem('task-tag-colors') || '{}');
+  if (colors[oldName]) { colors[newName] = colors[oldName]; delete colors[oldName]; }
+  localStorage.setItem('task-tag-colors', JSON.stringify(colors));
+  const rename = list => list.includes(oldName) ? list.map(t => t === oldName ? newName : t).join(',') : null;
+  const idbTasks = await idbGetAll('tasks');
+  for (const t of idbTasks) {
+    const merged = rename(taskTags(t));
+    if (merged === null) continue;
+    t.tags = merged; t.updated_at = Date.now();
+    await idbPut('tasks', t);
+    try { await apiCall('PUT', '/tasks/'+t.id, { tags: t.tags }); } catch(e) {}
+  }
+  currentBoardData.forEach(col => col.tasks.forEach(t => {
+    const merged = rename(taskTags(t));
+    if (merged !== null) t.tags = merged;
+  }));
+  if (modalTaskTags.includes(oldName)) modalTaskTags = modalTaskTags.map(t => t === oldName ? newName : t);
+}
+
+function addTagToModal(val) {
+  val = (val || '').replace(/,/g, '').trim();
+  if (!val || modalTaskTags.includes(val)) return false;
+  modalTaskTags = [...modalTaskTags, val];
+  renderTaskTagEditor();
+  return true;
+}
+
+function renderTaskTagEditor() {
+  const el = document.getElementById('task-tag-editor');
+  if (!el) return;
+  el.innerHTML = modalTaskTags.map(t => {
+    const c = taskTagColor(t);
+    return `<span class="note-tag editable" style="--tag-c:${c}"><span class="tag-color-dot" data-tag="${escHtml(t)}" style="background:${c}" title="Change color"></span><span class="tag-name" data-tag="${escHtml(t)}" title="Double-click to rename">${escHtml(t)}</span><button class="tag-remove-btn" data-tag="${escHtml(t)}">×</button></span>`;
+  }).join('') + `<span class="tag-add-wrap" id="task-tag-add-wrap"><input class="tag-input" id="task-tag-input" placeholder="tag" autocomplete="off"><button class="tag-add-btn" id="task-tag-add-btn" title="Pick an existing tag">+</button><div class="tag-dropdown" id="task-tag-dropdown" hidden></div></span>`;
+  el.querySelectorAll('.tag-color-dot').forEach(dot => {
+    dot.addEventListener('click', () => {
+      const inp = document.createElement('input');
+      inp.type = 'color';
+      inp.value = taskTagColor(dot.dataset.tag);
+      inp.addEventListener('input', () => setTaskTagColor(dot.dataset.tag, inp.value));
+      inp.click();
+    });
+  });
+  el.querySelectorAll('.tag-name').forEach(nameEl => {
+    nameEl.addEventListener('dblclick', () => {
+      const oldName = nameEl.dataset.tag;
+      const inp = document.createElement('input');
+      inp.className = 'tag-rename-input';
+      inp.value = oldName;
+      nameEl.replaceWith(inp);
+      inp.focus();
+      inp.select();
+      const commit = async () => {
+        const newName = inp.value.replace(/,/g, '').trim();
+        await renameTaskTagGlobally(oldName, newName || oldName);
+        renderTaskTagEditor(); renderTaskTagsBar(); renderKanban();
+      };
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        if (e.key === 'Escape') { renderTaskTagEditor(); }
+      });
+      inp.addEventListener('blur', commit);
+    });
+  });
+  el.querySelectorAll('.tag-remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      modalTaskTags = modalTaskTags.filter(t => t !== btn.dataset.tag);
+      renderTaskTagEditor();
+    });
+  });
+  const input = document.getElementById('task-tag-input');
+  const dropdown = document.getElementById('task-tag-dropdown');
+  const addBtn = document.getElementById('task-tag-add-btn');
+
+  let opts = [];
+  let activeIndex = -1;
+
+  const highlight = () => {
+    dropdown?.querySelectorAll('.tag-dropdown-item').forEach((item, i) => {
+      item.classList.toggle('active', i === activeIndex);
+    });
+    if (activeIndex >= 0) dropdown?.querySelectorAll('.tag-dropdown-item')[activeIndex]?.scrollIntoView({ block: 'nearest' });
+  };
+
+  const renderDropdown = async () => {
+    if (!dropdown) return;
+    const q = (input?.value || '').trim().toLowerCase();
+    const all = await allTaskTagNames();
+    opts = all.filter(t => !modalTaskTags.includes(t) && t.toLowerCase().includes(q));
+    activeIndex = -1;
+    if (!opts.length) {
+      dropdown.innerHTML = `<div class="tag-dropdown-empty">${q ? 'No matching tags' : 'No other tags yet'}</div>`;
+      return;
+    }
+    dropdown.innerHTML = opts.map(t =>
+      `<div class="tag-dropdown-item" data-tag="${escHtml(t)}"><span class="tag-color-dot" style="background:${taskTagColor(t)}"></span>${escHtml(t)}</div>`
+    ).join('');
+    dropdown.querySelectorAll('.tag-dropdown-item').forEach((item, i) => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault();
+        addTagToModal(item.dataset.tag);
+      });
+      item.addEventListener('mousemove', () => { activeIndex = i; highlight(); });
+    });
+  };
+  const openDropdown = () => { if (dropdown) { renderDropdown(); dropdown.hidden = false; } };
+  const closeDropdown = () => { if (dropdown) { dropdown.hidden = true; activeIndex = -1; } };
+
+  addBtn?.addEventListener('click', e => {
+    e.stopPropagation();
+    if (dropdown.hidden) { openDropdown(); input?.focus(); } else { closeDropdown(); }
+  });
+  input?.addEventListener('focus', openDropdown);
+  input?.addEventListener('input', () => { if (dropdown?.hidden) openDropdown(); else renderDropdown(); });
+  input?.addEventListener('keydown', e => {
+    const open = dropdown && !dropdown.hidden;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!open) { openDropdown(); }
+      if (opts.length) { activeIndex = (activeIndex + 1) % opts.length; highlight(); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (open && opts.length) { activeIndex = (activeIndex <= 0 ? opts.length : activeIndex) - 1; highlight(); }
+    } else if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      if (open && activeIndex >= 0 && opts[activeIndex]) { addTagToModal(opts[activeIndex]); return; }
+      if (addTagToModal(e.target.value)) return;
+      e.target.value = '';
+    } else if (e.key === 'Escape') {
+      closeDropdown();
+    }
+  });
+  input?.addEventListener('blur', () => setTimeout(closeDropdown, 120));
+}
+
 function renderEditor(note) {
   const area = document.getElementById('note-editor-area');
   WEditor.destroy(noteEditor);
@@ -2837,7 +3026,7 @@ async function deleteCurrentBoard() {
   deleteBoard(currentBoardId);
 }
 async function selectBoard(id) {
-  currentBoardId = id; selectedTasks.clear(); updateBulkActions();
+  currentBoardId = id; selectedTasks.clear(); updateBulkActions(); activeTaskTag = null;
   mobileColIdx = 0; renderBoardsBar(); await loadBoard(id);
 }
 async function loadBoard(id) {
@@ -2880,6 +3069,7 @@ function goToMobileCol(idx) {
 // ── Kanban render ──────────────────────────────────────────────
 function renderKanban() {
   const area = document.getElementById('kanban-area');
+  renderTaskTagsBar();
 
   // Preserve horizontal scroll position across re-renders
   const prevBoard = area.querySelector('.kanban-board');
@@ -2920,6 +3110,7 @@ function renderKanban() {
 function isDoneCol(col) { return /\bdone\b/i.test(col.name); }
 
 function createColEl(col) {
+  const visibleTasks = activeTaskTag ? col.tasks.filter(t => taskTags(t).includes(activeTaskTag)) : col.tasks;
   const el = document.createElement('div');
   el.className = 'kanban-col' + (isDoneCol(col) ? ' col-done' : '');
   el.dataset.colId = col.id;
@@ -2929,7 +3120,7 @@ function createColEl(col) {
     <div class="col-header">
       <input type="checkbox" class="col-select-all-cb" title="Select all in column">
       <span class="col-name" title="Click to rename">${escHtml(col.name)}</span>
-      <span class="col-count">${col.tasks.length}</span>
+      <span class="col-count">${visibleTasks.length}</span>
       <button class="icon-btn add-task-btn" title="Add task">+</button>
       <button class="col-delete-btn" title="Delete column">✕</button>
     </div>
@@ -3000,7 +3191,7 @@ function createColEl(col) {
     if (taskId) reorderTask(taskId, col.id, null, false);
   });
 
-  col.tasks.forEach(task => tasksList.appendChild(createTaskEl(task, col)));
+  visibleTasks.forEach(task => tasksList.appendChild(createTaskEl(task, col)));
   return el;
 }
 
@@ -3105,14 +3296,16 @@ function createTaskEl(task, col) {
   const checks = countTaskChecks(task.description);
   const preview = taskDescPreview(task.description);
   const hasDesc = !!(task.description?.trim());
+  const tags = taskTags(task);
   el.innerHTML = `
     <div class="task-card-header">
       <input type="checkbox" class="task-select-cb" ${selectedTasks.has(task.id)?'checked':''}>
       <span class="task-title">${escHtml(task.title)}</span>
       ${hasDesc ? `<span class="task-desc-dot" title="Has description"></span>` : ''}
-      <button class="task-claude-btn${task.claude_marked ? ' active' : ''}" title="Mark for Claude Code">🤖</button>
+      <button class="task-claude-btn${task.claude_marked ? ' active' : ''}" title="Mark for Claude Code">${CLAUDE_ICON_SVG}</button>
       <button class="task-done-btn" title="${inDone ? 'Already done' : 'Mark as done'}">✓</button>
     </div>
+    ${tags.length ? `<div class="note-item-tags">${tags.map(t=>`<span class="note-tag" style="--tag-c:${taskTagColor(t)}">${escHtml(t)}</span>`).join('')}</div>` : ''}
     ${preview ? `<div class="task-desc-preview">${escHtml(preview)}</div>` : ''}
     ${checks ? `<div class="task-checklist-preview"><span class="task-checks-done">${checks.done}</span><span class="task-checks-sep">/</span><span class="task-checks-total">${checks.total}</span></div>` : ''}
   `;
@@ -3250,6 +3443,8 @@ function openTaskModal(task) {
   modalTaskId = task.id;
   newTaskColId = null;
   setClaudeMarkBtn(task.claude_marked);
+  modalTaskTags = taskTags(task);
+  renderTaskTagEditor();
   document.getElementById('modal-title').value = task.title;
   document.getElementById('task-modal').classList.remove('hidden');
   const mount = document.getElementById('modal-editor-mount');
@@ -3263,6 +3458,8 @@ function openNewTaskModal(colId) {
   newTaskColId = colId;
   modalTaskId = 'new';
   setClaudeMarkBtn(false);
+  modalTaskTags = [];
+  renderTaskTagEditor();
   document.getElementById('modal-title').value = '';
   document.getElementById('task-modal').classList.remove('hidden');
   const mount = document.getElementById('modal-editor-mount');
@@ -3278,18 +3475,19 @@ async function persistTaskModal() {
   if (!title) return;
   const description = WEditor.getText(taskEditor);
   const claude_marked = modalClaudeMarked ? 1 : 0;
+  const tags = modalTaskTags.join(',');
 
   if (modalTaskId === 'new') {
     const col = currentBoardData.find(c => c.id === newTaskColId);
     if (!col) return;
     try {
-      const task = await apiCall('POST', '/tasks', { column_id: newTaskColId, title, description, claude_marked });
+      const task = await apiCall('POST', '/tasks', { column_id: newTaskColId, title, description, claude_marked, tags });
       col.tasks.push(task); await idbPut('tasks', task);
     } catch(e) {
       const id = 'local_'+Date.now(), t = Date.now();
-      const task = { id, column_id: newTaskColId, title, description, claude_marked, position: col.tasks.length, created_at: t, updated_at: t };
+      const task = { id, column_id: newTaskColId, title, description, claude_marked, tags, position: col.tasks.length, created_at: t, updated_at: t };
       col.tasks.push(task); await idbPut('tasks', task);
-      await enqueueOp({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description, claude_marked } });
+      await enqueueOp({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description, claude_marked, tags } });
     }
     renderKanban();
   } else {
@@ -3306,7 +3504,7 @@ async function persistTaskModal() {
         col.tasks.splice(tidx, 1);
       } else {
         const t = col.tasks[tidx];
-        t.title = title; t.description = description; t.claude_marked = claude_marked;
+        t.title = title; t.description = description; t.claude_marked = claude_marked; t.tags = tags;
         if (newColId && newColId !== col.id) {
           const moved = { ...t, column_id: newColId };
           col.tasks.splice(tidx, 1);
@@ -3319,13 +3517,13 @@ async function persistTaskModal() {
     renderKanban();
     if (crossBoard) {
       await idbDelete('tasks', id);
-      try { await apiCall('PUT', '/tasks/'+id, { title, description, claude_marked, column_id: newColId }); } catch(e) {}
+      try { await apiCall('PUT', '/tasks/'+id, { title, description, claude_marked, tags, column_id: newColId }); } catch(e) {}
     } else {
       const colChanged = newColId && newColId !== oldColId;
       const updated = await idbGet('tasks', id);
-      const merged = { ...updated, title, description, claude_marked, ...(colChanged ? { column_id: newColId } : {}) };
+      const merged = { ...updated, title, description, claude_marked, tags, ...(colChanged ? { column_id: newColId } : {}) };
       if (updated) await idbPut('tasks', merged);
-      try { await apiCall('PUT', '/tasks/'+id, { title, description, claude_marked, ...(colChanged ? { column_id: newColId } : {}) }); } catch(e) {}
+      try { await apiCall('PUT', '/tasks/'+id, { title, description, claude_marked, tags, ...(colChanged ? { column_id: newColId } : {}) }); } catch(e) {}
     }
   }
 }
@@ -3333,7 +3531,7 @@ async function persistTaskModal() {
 function destroyTaskModal() {
   WEditor.destroy(taskEditor); taskEditor = null;
   document.getElementById('task-modal').classList.add('hidden');
-  modalTaskId = null; newTaskColId = null; modalClaudeMarked = false;
+  modalTaskId = null; newTaskColId = null; modalClaudeMarked = false; modalTaskTags = [];
 }
 
 async function saveTaskModal() {

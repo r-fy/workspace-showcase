@@ -113,6 +113,7 @@ try { db.exec(`ALTER TABLE columns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'own
 try { db.exec(`ALTER TABLE tasks   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
 // Claude mark: flags a task as greenlit for Claude Code to work on (read via direct DB query)
 try { db.exec(`ALTER TABLE tasks ADD COLUMN claude_marked INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
+try { db.exec(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 try { db.exec(`ALTER TABLE notes ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
 // Initialize note positions (newest first) when all are at the default 0
 {
@@ -474,12 +475,12 @@ app.delete('/api/columns/:id', auth, (req, res) => {
 
 // ── Tasks ─────────────────────────────────────────────────────
 app.post('/api/tasks', auth, (req, res) => {
-  const { column_id, title, description = '', claude_marked = 0 } = req.body;
+  const { column_id, title, description = '', claude_marked = 0, tags = '' } = req.body;
   if (!column_id || !title) return res.status(400).json({ error: 'column_id and title required' });
   const maxPos = db.prepare('SELECT COALESCE(MAX(position),-1) AS m FROM tasks WHERE column_id=? AND user_id=? AND deleted_at IS NULL').get(column_id, req.userId).m;
   const id = uid(), t = now();
-  db.prepare('INSERT INTO tasks (id, column_id, title, description, position, claude_marked, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, column_id, title, description, maxPos + 1, claude_marked ? 1 : 0, req.userId, t, t);
+  db.prepare('INSERT INTO tasks (id, column_id, title, description, position, claude_marked, tags, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, column_id, title, description, maxPos + 1, claude_marked ? 1 : 0, tags, req.userId, t, t);
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(id));
 });
 
@@ -489,10 +490,10 @@ app.put('/api/tasks/:id', auth, (req, res) => {
   const {
     title = task.title, description = task.description,
     column_id = task.column_id, position = task.position,
-    claude_marked = task.claude_marked
+    claude_marked = task.claude_marked, tags = task.tags
   } = req.body;
-  db.prepare('UPDATE tasks SET title=?, description=?, column_id=?, position=?, claude_marked=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(title, description, column_id, position, claude_marked ? 1 : 0, now(), req.params.id, req.userId);
+  db.prepare('UPDATE tasks SET title=?, description=?, column_id=?, position=?, claude_marked=?, tags=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(title, description, column_id, position, claude_marked ? 1 : 0, tags, now(), req.params.id, req.userId);
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id));
 });
 

@@ -261,12 +261,13 @@ header {
 .task-done-btn:hover { border-color: #4ade80; color: #4ade80; background: rgba(74,222,128,0.08); }
 .task-desc-dot { width: 6px; height: 6px; border-radius: 50%; background: #3a3a3a; flex-shrink: 0; margin-top: 3px; }
 .task-claude-btn {
-  font-size: 12px; line-height: 1; flex-shrink: 0; margin-top: 1px; width: 20px; height: 20px;
+  flex-shrink: 0; margin-top: 1px; width: 20px; height: 20px; color: #da7756;
   display: flex; align-items: center; justify-content: center;
   filter: grayscale(1); opacity: 0.35; transition: filter 0.12s, opacity 0.12s;
 }
+.task-claude-btn svg { width: 14px; height: 14px; }
 .task-claude-btn:hover { opacity: 0.7; }
-.task-claude-btn.active { filter: none; opacity: 1; text-shadow: 0 0 6px rgba(140,232,112,0.6); }
+.task-claude-btn.active { filter: grayscale(0) drop-shadow(0 0 6px rgba(218,119,86,0.6)); opacity: 1; }
 .task-desc-preview { font-size: 11px; color: #4a4a4a; margin-top: 3px; margin-left: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .task-checklist-preview { display: flex; align-items: center; gap: 2px; margin-top: 5px; margin-left: 24px; font-size: 11px; }
 .task-checks-done { color: #4ade80; font-weight: 600; }
@@ -292,11 +293,13 @@ header {
 .modal-title-input::placeholder { color: #555; }
 .modal-close-btn { color: #777; font-size: 18px; }
 .modal-close-btn:hover { color: #ccc; }
-.claude-mark-btn { font-size: 16px; flex-shrink: 0; filter: grayscale(1); opacity: 0.4; transition: filter 0.12s, opacity 0.12s; }
+.claude-mark-btn { flex-shrink: 0; color: #da7756; filter: grayscale(1); opacity: 0.4; transition: filter 0.12s, opacity 0.12s; }
+.claude-mark-btn svg { width: 18px; height: 18px; display: block; }
 .claude-mark-btn:hover { opacity: 0.7; }
-.claude-mark-btn.active { filter: none; opacity: 1; text-shadow: 0 0 8px rgba(140,232,112,0.6); }
+.claude-mark-btn.active { filter: grayscale(0) drop-shadow(0 0 8px rgba(218,119,86,0.6)); opacity: 1; }
 .modal-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 .modal-section-label { font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 0.07em; padding: 10px 16px 4px; flex-shrink: 0; }
+#task-tag-editor { flex: 0 0 auto; padding: 0 16px 8px; }
 #modal-editor-mount {
   flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
   background: #0d0d0d;
