@@ -445,6 +445,37 @@ function renderNotesList(q = '') {
       reorderNotes(fromId, el.dataset.id, insertBefore);
     });
   });
+  renderNotesEmpty();
+}
+
+// When no note is open, fill the empty editor area with a card per note
+// (all notes, most-recently-edited first) instead of leaving it blank.
+function renderNotesEmpty() {
+  if (currentNoteId) return; // editor owns the area
+  const area = document.getElementById('note-editor-area');
+  if (!area) return;
+  if (!notes.length) {
+    area.innerHTML = '<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
+    return;
+  }
+  const sorted = [...notes].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  area.innerHTML = `<div class="notes-empty-grid">` + sorted.map(n => {
+    const f = notesFullCache[n.id] || n;
+    const tags = noteTags(f);
+    let snippet = '';
+    if (f.content) snippet = f.content.replace(/[#*`_>~]/g, '').replace(/\n+/g, ' ').trim().slice(0, 90);
+    return `<div class="notes-empty-card" data-id="${n.id}">
+      <div class="notes-empty-card-title">${escHtml(n.title || 'Untitled')}</div>
+      ${snippet ? `<div class="notes-empty-card-snippet">${escHtml(snippet)}</div>` : ''}
+      <div class="notes-empty-card-foot">
+        <span class="notes-empty-card-date">${fmtDate(n.updated_at)}</span>
+        ${tags.length ? `<div class="note-item-tags">${tags.map(t => `<span class="note-tag" style="--tag-c:${tagColor(t)}">${escHtml(t)}</span>`).join('')}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('') + `</div>`;
+  area.querySelectorAll('.notes-empty-card').forEach(el => {
+    el.addEventListener('click', () => openNote(el.dataset.id));
+  });
 }
 
 let searchDebTimer = null;
@@ -2796,9 +2827,7 @@ async function deleteCurrentNote() {
   notes = notes.filter(n => n.id !== id); delete notesFullCache[id];
   await idbDelete('notes', id); currentNoteId = null;
   WEditor.destroy(noteEditor); noteEditor = null;
-  renderNotesList(); renderTagsBar();
-  const area = document.getElementById('note-editor-area');
-  if (area) area.innerHTML = '<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
+  renderNotesList(); renderTagsBar(); // renderNotesList repopulates the empty-state grid
   try { await apiCall('DELETE', '/notes/'+id); } catch(e) {}
 }
 

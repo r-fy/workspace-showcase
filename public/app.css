@@ -125,6 +125,24 @@ header {
 
 /* ── Note editor ────────────────────────────────────────────── */
 .note-editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.notes-empty-grid {
+  height: 100%; overflow-y: auto; padding: 20px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px;
+  align-content: start;
+}
+.notes-empty-card {
+  background: #1a1a1a; border: 1px solid #252525; border-radius: 6px;
+  padding: 12px 14px; cursor: pointer; transition: border-color 0.12s, background 0.12s;
+  display: flex; flex-direction: column; gap: 6px; min-height: 84px;
+}
+.notes-empty-card:hover { border-color: #555; background: #1e1e1e; }
+.notes-empty-card-title { font-size: 13px; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-empty-card-snippet { font-size: 11px; color: #666; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; flex: 1; }
+.notes-empty-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; flex-wrap: wrap; }
+.notes-empty-card-date { font-size: 10px; color: #444; flex-shrink: 0; }
+@media (max-width: 640px) {
+  .notes-empty-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); padding: 12px; gap: 8px; }
+}
 .editor-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px; border-bottom: 1px solid #1a1a1a; background: #111; flex-shrink: 0; }
 .tb-btn { flex-shrink: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 .tb-icon { font-size: 13px; line-height: 1; }
