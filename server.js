@@ -360,15 +360,6 @@ app.use('/api', (req, res, next) => {
 // ── Auth check ──────────────────────────────────────────────
 app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
 
-// The login keypad draws one dot per digit and submits on the last one, so it needs the
-// configured PIN length. Length only, never the PIN. Unauthenticated by necessity (it's
-// needed before login) and harmless: the dot count is visible on the lock screen anyway,
-// and what actually stops brute force is the 10-strikes / 5-minute lockout above.
-// With several PINs of different lengths this reports the longest — shorter ones then need
-// the keypad's ✓ button rather than auto-submitting.
-const PIN_LENGTH = Math.max(...Object.keys(USERS).map(p => p.length));
-app.get('/api/auth/pinlen', (req, res) => res.json({ length: PIN_LENGTH }));
-
 // ── Audits ───────────────────────────────────────────────────
 app.get('/api/audits', auth, (req, res) => {
   res.json(db.prepare('SELECT id, business_name, status, updated_at FROM audits WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId));

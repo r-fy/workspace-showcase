@@ -275,34 +275,21 @@ async function tryLogin(pin) {
 }
 
 // ── PIN pad ────────────────────────────────────────────────────
-// Dot count and auto-submit length come from the server (GET /api/auth/pinlen) instead of
-// being hardcoded, so changing AUTH_USERS to a longer PIN needs no frontend change. 4 is
-// only the pre-fetch default; the ✓ key submits early if a PIN is shorter than the longest.
+// Deliberately does NOT know or ask the server how long the PIN is — that would let
+// anyone learn the length from the network tab (or by watching the dot count) before
+// typing a single digit. Dots are grown one at a time as you type instead of a fixed
+// row revealing the total up front, and there's no auto-submit-at-N-digits (which would
+// require knowing N) — you submit with ✓ or Enter whenever you're done.
+const PIN_MAX = 16; // sane upper bound on buffer growth, not the real PIN's length
 let pinBuffer = '';
-let pinLength = 4;
-function renderPinDots() {
+function updatePinDots() {
   const wrap = document.getElementById('pin-dots');
   if (!wrap) return;
-  wrap.innerHTML = Array.from({ length: pinLength }, (_, i) => `<span class="pin-dot" id="pd-${i}"></span>`).join('');
-  updatePinDots();
-}
-async function initPinPad() {
-  try {
-    const res = await fetch(API + '/auth/pinlen');
-    const j = await res.json();
-    if (Number.isInteger(j.length) && j.length >= 4 && j.length <= 12) pinLength = j.length;
-  } catch (e) {}
-  renderPinDots();
-}
-function updatePinDots() {
-  for (let i = 0; i < pinLength; i++) {
-    document.getElementById('pd-' + i)?.classList.toggle('filled', i < pinBuffer.length);
-  }
+  wrap.innerHTML = Array.from({ length: pinBuffer.length }, () => `<span class="pin-dot filled"></span>`).join('');
 }
 function pinDigit(d) {
-  if (pinBuffer.length >= pinLength) return;
+  if (pinBuffer.length >= PIN_MAX) return;
   pinBuffer += d; updatePinDots();
-  if (pinBuffer.length === pinLength) setTimeout(() => tryLogin(pinBuffer), 80);
 }
 function pinBack() { pinBuffer = pinBuffer.slice(0, -1); updatePinDots(); }
 function pinSubmit() { if (pinBuffer.length) tryLogin(pinBuffer); }
@@ -3643,7 +3630,6 @@ document.addEventListener('click', e => {
 document.querySelectorAll('.pin-key[data-d]').forEach(btn => btn.addEventListener('click', () => pinDigit(btn.dataset.d)));
 document.getElementById('pin-back').addEventListener('click', pinBack);
 document.getElementById('pin-ok').addEventListener('click', pinSubmit);
-initPinPad();
 document.getElementById('add-board-btn').addEventListener('click', promptNewBoard);
 document.getElementById('trash-btn').addEventListener('click', () => switchTab('trash'));
 document.getElementById('lock-btn').addEventListener('click', showLogin);

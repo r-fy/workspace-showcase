@@ -21,7 +21,8 @@
   <div class="login-box">
     <h1>Workspace</h1>
     <div id="login-error" class="login-error hidden"></div>
-    <!-- Dots are rebuilt by initPinPad() to match the server's configured PIN length. -->
+    <!-- Starts empty on purpose — one dot is added per digit typed, never a fixed
+         row revealing the PIN's length before you start typing. -->
     <div class="pin-dots" id="pin-dots"></div>
     <div class="pin-pad">
       <button class="pin-key" data-d="1">1</button>
@@ -438,6 +439,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=130"></script>
+<script src="/app.js?v=131"></script>
 </body>
 </html>
