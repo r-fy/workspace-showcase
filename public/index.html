@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=115">
+<link rel="stylesheet" href="/app.css?v=116">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -21,12 +21,8 @@
   <div class="login-box">
     <h1>Workspace</h1>
     <div id="login-error" class="login-error hidden"></div>
-    <div class="pin-dots" id="pin-dots">
-      <span class="pin-dot" id="pd-0"></span>
-      <span class="pin-dot" id="pd-1"></span>
-      <span class="pin-dot" id="pd-2"></span>
-      <span class="pin-dot" id="pd-3"></span>
-    </div>
+    <!-- Dots are rebuilt by initPinPad() to match the server's configured PIN length. -->
+    <div class="pin-dots" id="pin-dots"></div>
     <div class="pin-pad">
       <button class="pin-key" data-d="1">1</button>
       <button class="pin-key" data-d="2">2</button>
@@ -39,7 +35,7 @@
       <button class="pin-key" data-d="9">9</button>
       <button class="pin-key pin-back" id="pin-back">←</button>
       <button class="pin-key" data-d="0">0</button>
-      <div></div>
+      <button class="pin-key pin-ok" id="pin-ok" title="Unlock">✓</button>
     </div>
   </div>
 </div>
@@ -442,6 +438,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=129"></script>
+<script src="/app.js?v=130"></script>
 </body>
 </html>

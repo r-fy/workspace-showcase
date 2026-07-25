@@ -19,8 +19,11 @@ a:hover { text-decoration: underline; }
 .login-box { width: 280px; padding: 40px 28px; background: #161616; border: 1px solid #2a2a2a; border-radius: 12px; text-align: center; }
 .login-box h1 { font-size: 18px; font-weight: 600; margin-bottom: 28px; }
 .login-error { color: #f87171; font-size: 13px; margin-bottom: 14px; }
-.pin-dots { display: flex; justify-content: center; gap: 14px; margin-bottom: 28px; }
-.pin-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #3a3a3a; transition: background 0.12s, border-color 0.12s; }
+/* gap 12 + wrap + min-height: the dot count is now driven by the configured PIN length,
+   so 8 dots still fit the 280px box and more would wrap instead of overflowing. min-height
+   reserves the row before JS fills it in, so the pad doesn't jump on load. */
+.pin-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-bottom: 28px; min-height: 18px; }
+.pin-dot { flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #3a3a3a; transition: background 0.12s, border-color 0.12s; }
 .pin-dot.filled { background: #5fc83b; border-color: #5fc83b; }
 .pin-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .pin-key {
@@ -30,6 +33,7 @@ a:hover { text-decoration: underline; }
 .pin-key:hover { background: #2a2a2a; color: #fff; }
 .pin-key:active { background: #555; }
 .pin-back { font-size: 16px; color: #777; }
+.pin-ok { font-size: 16px; color: #5fc83b; }
 
 /* ── App shell ──────────────────────────────────────────────── */
 #app { display: flex; flex-direction: column; height: 100vh; }

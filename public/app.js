@@ -275,18 +275,37 @@ async function tryLogin(pin) {
 }
 
 // ── PIN pad ────────────────────────────────────────────────────
+// Dot count and auto-submit length come from the server (GET /api/auth/pinlen) instead of
+// being hardcoded, so changing AUTH_USERS to a longer PIN needs no frontend change. 4 is
+// only the pre-fetch default; the ✓ key submits early if a PIN is shorter than the longest.
 let pinBuffer = '';
+let pinLength = 4;
+function renderPinDots() {
+  const wrap = document.getElementById('pin-dots');
+  if (!wrap) return;
+  wrap.innerHTML = Array.from({ length: pinLength }, (_, i) => `<span class="pin-dot" id="pd-${i}"></span>`).join('');
+  updatePinDots();
+}
+async function initPinPad() {
+  try {
+    const res = await fetch(API + '/auth/pinlen');
+    const j = await res.json();
+    if (Number.isInteger(j.length) && j.length >= 4 && j.length <= 12) pinLength = j.length;
+  } catch (e) {}
+  renderPinDots();
+}
 function updatePinDots() {
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < pinLength; i++) {
     document.getElementById('pd-' + i)?.classList.toggle('filled', i < pinBuffer.length);
   }
 }
 function pinDigit(d) {
-  if (pinBuffer.length >= 4) return;
+  if (pinBuffer.length >= pinLength) return;
   pinBuffer += d; updatePinDots();
-  if (pinBuffer.length === 4) setTimeout(() => tryLogin(pinBuffer), 80);
+  if (pinBuffer.length === pinLength) setTimeout(() => tryLogin(pinBuffer), 80);
 }
 function pinBack() { pinBuffer = pinBuffer.slice(0, -1); updatePinDots(); }
+function pinSubmit() { if (pinBuffer.length) tryLogin(pinBuffer); }
 
 // ── Mobile sidebar ─────────────────────────────────────────────
 let currentTab = 'notes';
@@ -3623,6 +3642,8 @@ document.addEventListener('click', e => {
 // PIN pad
 document.querySelectorAll('.pin-key[data-d]').forEach(btn => btn.addEventListener('click', () => pinDigit(btn.dataset.d)));
 document.getElementById('pin-back').addEventListener('click', pinBack);
+document.getElementById('pin-ok').addEventListener('click', pinSubmit);
+initPinPad();
 document.getElementById('add-board-btn').addEventListener('click', promptNewBoard);
 document.getElementById('trash-btn').addEventListener('click', () => switchTab('trash'));
 document.getElementById('lock-btn').addEventListener('click', showLogin);
@@ -3630,6 +3651,7 @@ document.addEventListener('keydown', e => {
   if (!document.getElementById('login-overlay').classList.contains('hidden')) {
     if (e.key >= '0' && e.key <= '9') pinDigit(e.key);
     else if (e.key === 'Backspace') pinBack();
+    else if (e.key === 'Enter') pinSubmit();
   }
 });
 // Mobile search toggle
@@ -4020,7 +4042,10 @@ function renderAuditEditor() {
         ${auditFieldRow('Closing CTA', 'narrative.closing_cta', d.narrative.closing_cta, { textarea: true, placeholder: "I can start in 24 hours, or I hand you the checklist and you'll know exactly what to do." })}
       </div>
       <div class="audit-preview-pane">
-        <iframe class="audit-preview-frame" id="audit-preview-frame"></iframe>
+        <!-- allow-scripts for the template's Export-as-PDF onclick, allow-modals so
+             window.print() isn't blocked. No allow-same-origin: the preview gets an
+             opaque origin, so audit text can never reach this page's DOM or storage. -->
+        <iframe class="audit-preview-frame" id="audit-preview-frame" sandbox="allow-scripts allow-modals"></iframe>
       </div>
     </div>
   `;
@@ -4124,6 +4149,14 @@ async function saveCurrentAudit() {
   }
 }
 
+// The preview iframe is sandboxed without allow-same-origin, so the parent can't read
+// or set its scroll position directly (v128's fix used to). The frame reports its scroll
+// back by postMessage instead, and each re-render bakes the last value in to restore it.
+let auditPreviewScroll = 0;
+window.addEventListener('message', (e) => {
+  if (e.data && typeof e.data.auditScroll === 'number') auditPreviewScroll = e.data.auditScroll;
+});
+
 async function refreshAuditPreview() {
   const frame = document.getElementById('audit-preview-frame');
   if (!frame || !currentAudit) return;
@@ -4134,9 +4167,8 @@ async function refreshAuditPreview() {
       body: JSON.stringify({ data: currentAudit.data }),
     });
     const html = await res.text();
-    const scrollY = frame.contentWindow?.scrollY || 0;
-    frame.addEventListener('load', () => { frame.contentWindow.scrollTo(0, scrollY); }, { once: true });
-    frame.srcdoc = html;
+    frame.srcdoc = html + '<script>addEventListener("load",function(){window.scrollTo(0,'
+      + auditPreviewScroll + ')});addEventListener("scroll",function(){parent.postMessage({auditScroll:window.scrollY},"*")})<\/script>';
   } catch (e) {}
 }
 

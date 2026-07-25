@@ -11,7 +11,19 @@ function escape(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Same allowlist as safeUrl() in src/editor.js — duplicated rather than shared because
+// that file is a browser ESM bundle entry and this is CommonJS on the server.
+// Anything not http(s)/mailto//uploads renders as inert text instead of a link.
+function safeUrl(url) {
+  const u = String(url || '').trim();
+  if (/^(https?:|mailto:)/i.test(u)) return u;
+  if (u.startsWith('/uploads/')) return u;
+  return null;
 }
 
 function todayStr() {
@@ -20,11 +32,15 @@ function todayStr() {
 
 function renderHeatmaps(heatmaps) {
   if (!heatmaps || !heatmaps.length) return '';
-  const blocks = heatmaps.map(h => `
+  const blocks = heatmaps.map(h => {
+    const img = safeUrl(h.image);
+    const link = safeUrl(h.link);
+    return `
     <div class="heatmap-block">
-      <img src="${escape(h.image)}" alt="Ranking heatmap for ${escape(h.keyword)}">
-      <p class="heatmap-caption">Where you rank for "${escape(h.keyword)}" across the area${h.link ? ` &middot; <a href="${escape(h.link)}" target="_blank" rel="noopener">full report</a>` : ''}</p>
-    </div>`).join('');
+      ${img ? `<img src="${escape(img)}" alt="Ranking heatmap for ${escape(h.keyword)}">` : ''}
+      <p class="heatmap-caption">Where you rank for "${escape(h.keyword)}" across the area${link ? ` &middot; <a href="${escape(link)}" target="_blank" rel="noopener">full report</a>` : ''}</p>
+    </div>`;
+  }).join('');
   return `<h2>${escape(CONFIG.heatmap_section_title || 'Where you rank across the map')}</h2>${blocks}`;
 }
 
@@ -55,8 +71,9 @@ function renderAuditHtml(data) {
         </tr>`).join('');
 
   const situationRows = (data.current_situation || []).map(r => {
-    const value = r.link
-      ? `<a href="${escape(r.link)}" target="_blank" rel="noopener" contenteditable="true" spellcheck="false">${escape(r.value)}</a>`
+    const link = safeUrl(r.link);
+    const value = link
+      ? `<a href="${escape(link)}" target="_blank" rel="noopener" contenteditable="true" spellcheck="false">${escape(r.value)}</a>`
       : `<span contenteditable="true" spellcheck="false">${escape(r.value)}</span>`;
     return `<tr><td contenteditable="true" spellcheck="false">${escape(r.label)}</td><td>${value}</td></tr>`;
   }).join('\n      ');
@@ -85,11 +102,10 @@ function renderAuditHtml(data) {
     color_dot_green: CONFIG.colors.dot_green,
   };
 
-  let html = TEMPLATE;
-  for (const [key, val] of Object.entries(fields)) {
-    html = html.split(`{{${key}}}`).join(val ?? '');
-  }
-  return html;
+  // Single pass: a value that itself contains "{{other_field}}" can't be re-substituted,
+  // and an unknown placeholder is left alone rather than half-replaced.
+  return TEMPLATE.replace(/\{\{(\w+)\}\}/g, (m, key) =>
+    Object.hasOwn(fields, key) ? String(fields[key] ?? '') : m);
 }
 
 module.exports = { renderAuditHtml };

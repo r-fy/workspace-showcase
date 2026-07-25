@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const multer = require('multer');
+const net = require('net');
 const { advance, computeInitialNextFire } = require('./recurrence');
 // web-push is in package.json (Docker installs it); tolerate a local checkout
 // without node_modules so the server still boots for dev/testing.
@@ -33,6 +34,9 @@ const USERS = (() => {
   if (process.env.AUTH_PASSWORD) return { [process.env.AUTH_PASSWORD]: 'owner' };
   return {};
 })();
+// Null prototype so a PIN of "__proto__"/"constructor"/"toString" can't look up an
+// inherited Object member and pass as a valid user.
+Object.setPrototypeOf(USERS, null);
 if (!Object.keys(USERS).length) {
   console.error('FATAL: no auth configured. Set AUTH_USERS ("user:pin,user:pin") or AUTH_PASSWORD.');
   process.exit(1);
@@ -230,9 +234,53 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ponytail: in-memory per-IP counter — resets on restart, plenty for a family app.
 const FAILS = new Map(); // ip -> { count, until }
 const MAX_FAILS = 10, LOCK_MS = 5 * 60 * 1000;
+// Cloudflare's published edge ranges — https://www.cloudflare.com/ips-v4 and /ips-v6
+// (fetched 2026-07-24). Only used to decide whether CF-Connecting-IP is trustworthy;
+// refresh if Cloudflare ever publishes new ranges (they change rarely).
+const CF_RANGES = [
+  '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+  '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+  '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+  '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+  '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+  '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+];
+const CF_BLOCKLIST = new net.BlockList();
+for (const cidr of CF_RANGES) {
+  const [addr, prefix] = cidr.split('/');
+  CF_BLOCKLIST.addSubnet(addr, parseInt(prefix), addr.includes(':') ? 'ipv6' : 'ipv4');
+}
+function isCloudflare(ip) {
+  const clean = String(ip || '').replace(/^::ffff:/, '');
+  const v = net.isIP(clean);
+  return v === 4 ? CF_BLOCKLIST.check(clean, 'ipv4')
+       : v === 6 ? CF_BLOCKLIST.check(clean, 'ipv6') : false;
+}
+
+// The identity used for login lockout, so one attacker can't be counted as many people.
+// Request chain is: real client -> Cloudflare -> Caddy (loopback) -> here. Node's own
+// socket peer is always Caddy, so the address to vet is the LAST X-Forwarded-For entry —
+// that one is appended by Caddy and is the TCP peer Caddy actually saw. Only if that hop
+// is a published Cloudflare edge IP do we believe CF-Connecting-IP; otherwise we fall back
+// to the raw socket/hop address. X-Forwarded-For's client-supplied entries are never
+// trusted — anyone can send a fresh fake one on every guess and never get locked out.
+function isLoopback(ip) {
+  const clean = String(ip || '').replace(/^::ffff:/, '');
+  return clean === '::1' || clean.startsWith('127.');
+}
 function clientIp(req) {
-  // Caddy fronts the app and sets X-Forwarded-For; direct socket addr is the fallback.
-  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+  // X-Forwarded-For is only worth reading at all if the connection came from our own
+  // reverse proxy on loopback. A direct hit on the app port gets judged by its socket
+  // address, headers ignored.
+  const sock = req.socket.remoteAddress;
+  if (!isLoopback(sock)) return sock || '?';
+  const hops = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  const peer = hops.length ? hops[hops.length - 1] : sock;
+  if (isCloudflare(peer)) {
+    const cf = String(req.headers['cf-connecting-ip'] || '').trim();
+    if (net.isIP(cf)) return cf;
+  }
+  return peer || req.socket.remoteAddress || '?';
 }
 function lockedOut(ip) {
   const f = FAILS.get(ip);
@@ -289,8 +337,37 @@ app.use('/uploads', uploadsAuth, express.static(UPLOADS_DIR));
 function uid() { return crypto.randomBytes(8).toString('hex'); }
 function now() { return Date.now(); }
 
+// ── Rate limit ───────────────────────────────────────────────
+// ponytail: fixed-window per-IP counter, same in-memory shape as the login lockout above —
+// no extra dependency. Ceiling is deliberately generous: the app polls /api/sync every 2s
+// (~30 req/min per open tab), so 300/min leaves room for ~10 tabs plus bursts. Per-process
+// and resets on restart; swap in express-rate-limit only if this ever runs multi-instance.
+const RATE = new Map(); // ip -> { count, start }
+const RATE_MAX = 300, RATE_WINDOW_MS = 60 * 1000;
+app.use('/api', (req, res, next) => {
+  const ip = clientIp(req);
+  const t = Date.now();
+  let r = RATE.get(ip);
+  if (!r || t - r.start > RATE_WINDOW_MS) { r = { count: 0, start: t }; RATE.set(ip, r); }
+  if (RATE.size > 5000) for (const [k, v] of RATE) { if (t - v.start > RATE_WINDOW_MS) RATE.delete(k); }
+  if (++r.count > RATE_MAX) {
+    res.set('Retry-After', String(Math.ceil((r.start + RATE_WINDOW_MS - t) / 1000)));
+    return res.status(429).json({ error: 'Rate limit exceeded — slow down' });
+  }
+  next();
+});
+
 // ── Auth check ──────────────────────────────────────────────
 app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
+
+// The login keypad draws one dot per digit and submits on the last one, so it needs the
+// configured PIN length. Length only, never the PIN. Unauthenticated by necessity (it's
+// needed before login) and harmless: the dot count is visible on the lock screen anyway,
+// and what actually stops brute force is the 10-strikes / 5-minute lockout above.
+// With several PINs of different lengths this reports the longest — shorter ones then need
+// the keypad's ✓ button rather than auto-submitting.
+const PIN_LENGTH = Math.max(...Object.keys(USERS).map(p => p.length));
+app.get('/api/auth/pinlen', (req, res) => res.json({ length: PIN_LENGTH }));
 
 // ── Audits ───────────────────────────────────────────────────
 app.get('/api/audits', auth, (req, res) => {
@@ -547,7 +624,9 @@ function extractUploadFilenames(content) {
 
 function deleteUploadFiles(filenames) {
   for (const name of filenames) {
-    try { fs.unlinkSync(path.join(UPLOADS_DIR, name)); } catch(e) {}
+    // basename() strips any directory part, so a note body with
+    // ![x](/uploads/../../etc/something) can only ever delete inside UPLOADS_DIR.
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, path.basename(name))); } catch(e) {}
   }
 }
 
