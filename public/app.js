@@ -3794,6 +3794,9 @@ function renderAuditEditor() {
         ${auditFieldRow('Niche', 'identity.niche', d.identity.niche)}
         ${auditFieldRow('Primary keyword', 'identity.primary_keyword', d.identity.primary_keyword)}
 
+        <div class="audit-section-title">WIIFM hook</div>
+        ${auditFieldRow('WIIFM hook', 'narrative.wiifm_hook', d.narrative.wiifm_hook, { textarea: true })}
+
         <div class="audit-section-title">Where you stand right now (GBP + ranking)</div>
         ${d.current_situation.map(auditSituationRowHtml).join('')}
         <button class="audit-add-btn" data-add="current_situation">+ Row</button>
@@ -3806,6 +3809,9 @@ function renderAuditEditor() {
         ${d.findings.map(auditFindingRowHtml).join('')}
         <button class="audit-add-btn" data-add="findings">+ Finding</button>
 
+        <div class="audit-section-title">Biggest opportunity</div>
+        ${auditFieldRow('Biggest opportunity', 'narrative.biggest_opportunity', d.narrative.biggest_opportunity, { textarea: true })}
+
         <div class="audit-section-title">Search Console</div>
         <div class="audit-field-row">
           <label>Available</label>
@@ -3815,9 +3821,7 @@ function renderAuditEditor() {
         <button class="audit-add-btn" data-add="gsc.top_queries">+ Query</button>
         ${auditFieldRow('GSC notes', 'gsc.notes', d.gsc.notes, { textarea: true })}
 
-        <div class="audit-section-title">Narrative</div>
-        ${auditFieldRow('WIIFM hook', 'narrative.wiifm_hook', d.narrative.wiifm_hook, { textarea: true })}
-        ${auditFieldRow('Biggest opportunity', 'narrative.biggest_opportunity', d.narrative.biggest_opportunity, { textarea: true })}
+        <div class="audit-section-title">Closing CTA</div>
         ${auditFieldRow('Closing CTA', 'narrative.closing_cta', d.narrative.closing_cta, { textarea: true, placeholder: "I can start in 24 hours, or I hand you the checklist and you'll know exactly what to do." })}
       </div>
       <div class="audit-preview-pane">
