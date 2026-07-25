@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{business_name}} - Local SEO Audit</title>
+<style>
+  @page { size: Letter; margin: 0.55in; }
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0; padding: 40px 24px; background: #f4f6f8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a1a1a; line-height: 1.5;
+  }
+  .sheet { max-width: 760px; margin: 0 auto; background: #fff; padding: 48px 40px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  h1 { font-size: 24px; margin: 0 0 4px; color: {{color_accent}}; }
+  .subtitle { color: #5a6472; font-size: 14px; margin: 0 0 28px; }
+  h2 { font-size: 17px; color: {{color_accent}}; margin: 32px 0 12px; border-bottom: 2px solid {{color_accent}}; padding-bottom: 6px; break-after: avoid; page-break-after: avoid; }
+  .hook { font-size: 15px; background: {{color_hook_bg}}; border-left: 4px solid {{color_hook_border}}; padding: 14px 18px; border-radius: 4px; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .situation td { padding: 10px 12px; border-bottom: 1px solid #eee; }
+  .situation td:first-child { font-weight: 600; width: 45%; color: #333; }
+  .situation tr:nth-child(even) { background: #fafbfc; }
+  .findings thead { display: table-header-group; }
+  .findings thead td { background: {{color_accent}}; color: #fff; font-weight: 600; padding: 10px 12px; }
+  .findings tbody td { padding: 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+  .findings tbody tr:last-child td { border-bottom: none; }
+  .area-cell { width: 32%; white-space: nowrap; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
+  .dot.red { background: {{color_dot_red}}; }
+  .dot.yellow { background: {{color_dot_yellow}}; }
+  .dot.green { background: {{color_dot_green}}; }
+  .callout { background: {{color_callout_bg}}; border-left: 4px solid {{color_callout_border}}; padding: 14px 18px; border-radius: 4px; font-size: 15px; margin-top: 8px; }
+  .cta { margin-top: 36px; padding: 20px; background: {{color_accent}}; color: #fff; border-radius: 6px; font-size: 15px; text-align: center; }
+  .gsc-note { font-size: 14px; color: #5a6472; margin-top: 4px; }
+  .heatmap-block { margin-bottom: 20px; }
+  .heatmap-block img { width: 100%; border-radius: 6px; border: 1px solid #eee; display: block; }
+  .heatmap-caption { font-size: 13px; color: #5a6472; margin-top: 6px; }
+  .heatmap-caption a { color: {{color_accent}}; }
+  .footer { margin-top: 32px; font-size: 12px; color: #9aa4af; text-align: center; }
+  tr, .heatmap-block, .hook, .callout, .cta, .gsc-note {
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .sheet { box-shadow: none; border-radius: 0; padding: 0; max-width: 100%; }
+    .no-print { display: none !important; }
+    [contenteditable]:hover, [contenteditable]:focus { outline: none !important; background: transparent !important; }
+  }
+  .edit-bar {
+    max-width: 760px; margin: 0 auto 16px; background: {{color_accent}}; color: #fff;
+    padding: 12px 18px; border-radius: 8px; font-size: 13px; display: flex;
+    align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .edit-bar button {
+    font: inherit; font-weight: 600; padding: 7px 14px; border-radius: 6px; border: none;
+    background: #fff; color: {{color_accent}}; cursor: pointer;
+  }
+  [contenteditable="true"] { border-radius: 3px; }
+  [contenteditable="true"]:hover { background: rgba(47,111,237,0.08); outline: 1px dashed rgba(47,111,237,0.4); }
+  [contenteditable="true"]:focus { background: rgba(47,111,237,0.08); outline: 1px dashed {{color_hook_border}}; }
+</style>
+</head>
+<body>
+  <div class="edit-bar no-print">
+    <span>Click any text to edit it. When it looks right, press <strong>&#8984;P</strong> (or Ctrl+P) and save as PDF.</span>
+    <button onclick="window.print()">Export as PDF</button>
+  </div>
+  <div class="sheet">
+    <h1 contenteditable="true" spellcheck="false">{{business_name}}</h1>
+    <p class="subtitle" contenteditable="true" spellcheck="false">Local SEO Audit &middot; {{city}} &middot; {{date}}</p>
+
+    <div class="hook" contenteditable="true" spellcheck="false">{{wiifm_hook}}</div>
+
+    <h2>{{section_1_title}}</h2>
+    <table class="situation">
+      {{situation_rows}}
+    </table>
+
+    {{heatmap_section}}
+
+    <h2>{{section_2_title}}</h2>
+    <table class="findings">
+      <thead><tr><td class="area-cell">Area</td><td>Finding</td></tr></thead>
+      <tbody>
+        {{findings_rows}}
+      </tbody>
+    </table>
+
+    <h2>{{biggest_opportunity_title}}</h2>
+    <div class="callout" contenteditable="true" spellcheck="false">{{biggest_opportunity}}</div>
+
+    {{gsc_section}}
+
+    <div class="cta" contenteditable="true" spellcheck="false">{{closing_cta}}</div>
+
+    <p class="footer">Prepared for {{business_name}} &middot; {{date}}</p>
+  </div>
+</body>
+</html>

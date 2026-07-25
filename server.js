@@ -13,6 +13,7 @@ try { webpush = require('web-push'); } catch (e) {}
 // twilio powers the Calls tab (browser dialer) — same tolerance as web-push.
 let twilio = null;
 try { twilio = require('twilio'); } catch (e) {}
+const { renderAuditHtml } = require('./audit_render');
 const { Readable } = require('stream');
 const app = express();
 const PORT = parseInt(process.env.PORT || '4000');
@@ -200,6 +201,24 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id, started_at);
 `);
 
+// Audits tab: one JSON blob per audit (identity, current_situation, findings
+// with sources, heatmaps, gsc, narrative — same shape as AUTOMATED_AUDITS'
+// input_template.json), matching how notes.content already stores a blob
+// rather than a relational split.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS audits (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    business_name TEXT NOT NULL DEFAULT 'Untitled audit',
+    status TEXT NOT NULL DEFAULT 'draft',
+    data TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_audits_user ON audits(user_id, updated_at);
+`);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -271,6 +290,52 @@ function now() { return Date.now(); }
 
 // ── Auth check ──────────────────────────────────────────────
 app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
+
+// ── Audits ───────────────────────────────────────────────────
+app.get('/api/audits', auth, (req, res) => {
+  res.json(db.prepare('SELECT id, business_name, status, updated_at FROM audits WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId));
+});
+
+app.get('/api/audits/:id', auth, (req, res) => {
+  const a = db.prepare('SELECT * FROM audits WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!a) return res.status(404).json({ error: 'Not found' });
+  res.json({ ...a, data: JSON.parse(a.data) });
+});
+
+app.post('/api/audits', auth, (req, res) => {
+  const { business_name = 'Untitled audit', data = {} } = req.body;
+  const id = uid(), t = now();
+  db.prepare('INSERT INTO audits (id, business_name, status, data, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, business_name, 'draft', JSON.stringify(data), req.userId, t, t);
+  res.json({ id, business_name, status: 'draft', data, created_at: t, updated_at: t });
+});
+
+app.put('/api/audits/:id', auth, (req, res) => {
+  const { business_name, status, data } = req.body;
+  const t = now();
+  const a = db.prepare('SELECT * FROM audits WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!a) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE audits SET business_name=?, status=?, data=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(business_name ?? a.business_name, status ?? a.status, JSON.stringify(data ?? JSON.parse(a.data)), t, req.params.id, req.userId);
+  const updated = db.prepare('SELECT * FROM audits WHERE id = ?').get(req.params.id);
+  res.json({ ...updated, data: JSON.parse(updated.data) });
+});
+
+app.delete('/api/audits/:id', auth, (req, res) => {
+  db.prepare('UPDATE audits SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+// Stateless render — used for the live preview + the printable/exportable
+// document. Takes data straight from the request so unsaved edits preview
+// immediately, no round trip through the DB.
+app.post('/api/audits/render', auth, (req, res) => {
+  try {
+    res.type('html').send(renderAuditHtml(req.body.data || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 // ── Notes ────────────────────────────────────────────────────
 app.get('/api/notes', auth, (req, res) => {

@@ -11,7 +11,7 @@ RUN npm install
 
 # Copy source and bundle the editor
 COPY src/ ./src/
-COPY server.js recurrence.js ./
+COPY server.js recurrence.js audit_render.js audit_config.json audit_template.html ./
 COPY public/ ./public/
 
 # Bundle CodeMirror 6 into a single file

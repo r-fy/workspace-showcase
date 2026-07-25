@@ -1,0 +1,16 @@
+{
+  "section_1_title": "Where you stand right now (what your Google Business Profile shows)",
+  "section_2_title": "What's holding you back (what you're doing right and what could be adjusted)",
+  "biggest_opportunity_title": "Biggest opportunity",
+  "default_closing_cta": "I can start in 24 hours, or I hand you the checklist and you'll know exactly what to do.",
+  "colors": {
+    "accent": "#0b1f3a",
+    "hook_bg": "#eef3fb",
+    "hook_border": "#2f6fed",
+    "callout_bg": "#fff7ec",
+    "callout_border": "#e0a63f",
+    "dot_red": "#e04b3f",
+    "dot_yellow": "#e0a63f",
+    "dot_green": "#3fae5c"
+  }
+}

@@ -307,16 +307,19 @@ function switchTab(tab) {
   document.getElementById('calendar-view')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('calls-view')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
+  document.getElementById('audits-view')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-panel')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('calls-panel')?.classList.toggle('hidden', tab !== 'calls');
+  document.getElementById('audits-panel')?.classList.toggle('hidden', tab !== 'audits');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
   if (tab === 'calls') loadCallsTab();
+  if (tab === 'audits') loadAudits();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
 
@@ -3587,6 +3590,7 @@ document.getElementById('dial-back').addEventListener('click', () => {
   i.value = i.value.slice(0, -1); i.focus();
 });
 document.getElementById('dial-call-btn').addEventListener('click', startCall);
+document.getElementById('new-audit-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('audits'); newAudit(); });
 document.getElementById('dial-hangup-btn').addEventListener('click', hangUp);
 document.getElementById('dial-number').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); startCall(); }
@@ -3602,6 +3606,338 @@ document.getElementById('modal-board-select')?.addEventListener('change', e => {
   populateColSelectForBoard(e.target.value, currentCol);
 });
 document.getElementById('task-modal').addEventListener('click',e=>{if(e.target===document.getElementById('task-modal'))closeTaskModal();});
+
+// ── Audits ───────────────────────────────────────────────────
+// Data blob shape mirrors AUTOMATED_AUDITS/input_template.json: identity,
+// current_situation, findings (each with sources), heatmaps, gsc, narrative.
+// The form below is the source of truth; the iframe just renders it via the
+// server's /api/audits/render (same audit_render.js the report PDF pipeline
+// uses), including that template's own contenteditable + "Export as PDF"
+// button — clicking Export inside the preview prints just that iframe.
+let audits = [];
+let currentAuditId = null;
+let currentAudit = null; // full record: {id, business_name, status, data, updated_at}
+let saveAuditTimer = null;
+let previewAuditTimer = null;
+
+function emptyAuditData() {
+  return {
+    identity: { business_name: '', website: '', city: '', niche: '', primary_keyword: '' },
+    current_situation: [
+      { label: 'Star rating', value: '' },
+      { label: 'Google reviews', value: '' },
+      { label: 'Primary category', value: '' },
+      { label: 'Average ranking', value: '', link: '' },
+    ],
+    findings: [{ area: '', status: 'red', finding: '', sources: [{ label: '', url: '' }] }],
+    heatmaps: [],
+    gsc: { available: false, top_queries: [], notes: '' },
+    narrative: { wiifm_hook: '', biggest_opportunity: '', closing_cta: '' },
+  };
+}
+
+function auditPath(obj, path) {
+  const parts = path.split('.');
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = /^\d+$/.test(parts[i]) ? +parts[i] : parts[i];
+    if (cur[k] == null) cur[k] = /^\d+$/.test(parts[i + 1]) ? [] : {};
+    cur = cur[k];
+  }
+  return { obj: cur, key: /^\d+$/.test(parts[parts.length - 1]) ? +parts[parts.length - 1] : parts[parts.length - 1] };
+}
+function setAuditPath(root, path, value) {
+  const { obj, key } = auditPath(root, path);
+  obj[key] = value;
+}
+
+async function loadAudits() {
+  try { audits = await apiCall('GET', '/audits'); } catch (e) { toast('Could not load audits'); return; }
+  renderAuditsList();
+}
+
+function renderAuditsList() {
+  const area = document.getElementById('audits-list');
+  if (!area) return;
+  if (!audits.length) { area.innerHTML = '<div class="note-item-snippet" style="padding:8px 12px;">No audits yet.</div>'; return; }
+  area.innerHTML = audits.map(a => `
+    <div class="audit-item${a.id === currentAuditId ? ' active' : ''}" data-id="${a.id}">
+      <div class="audit-item-name">${escHtml(a.business_name || 'Untitled audit')}</div>
+      <div class="audit-item-meta">
+        <span class="audit-status-pill${a.status === 'sent' ? ' status-sent' : ''}">${escHtml(a.status)}</span>
+        <span>${fmtDate(a.updated_at)}</span>
+      </div>
+    </div>`).join('');
+  area.querySelectorAll('.audit-item').forEach(el => el.addEventListener('click', () => openAudit(el.dataset.id)));
+}
+
+async function newAudit() {
+  const data = emptyAuditData();
+  try {
+    const created = await apiCall('POST', '/audits', { business_name: 'Untitled audit', data });
+    audits.unshift({ id: created.id, business_name: created.business_name, status: created.status, updated_at: created.updated_at });
+    currentAuditId = created.id;
+    currentAudit = created;
+    renderAuditsList();
+    renderAuditEditor();
+  } catch (e) { toast('Could not create audit'); }
+}
+
+async function openAudit(id) {
+  try { currentAudit = await apiCall('GET', '/audits/' + id); } catch (e) { toast('Could not load audit'); return; }
+  currentAuditId = id;
+  renderAuditsList();
+  renderAuditEditor();
+  if (isMobile()) closeSidebar();
+}
+
+async function deleteCurrentAudit() {
+  if (!currentAuditId) return;
+  if (!confirm('Delete this audit?')) return;
+  const id = currentAuditId;
+  audits = audits.filter(a => a.id !== id);
+  currentAuditId = null; currentAudit = null;
+  renderAuditsList();
+  document.getElementById('audit-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">Select an audit, or hit + to start a new one.</div>`;
+  try { await apiCall('DELETE', '/audits/' + id); } catch (e) {}
+}
+
+function auditFieldRow(label, path, value, opts) {
+  opts = opts || {};
+  const tag = opts.textarea ? 'textarea' : 'input';
+  const attrs = opts.textarea ? '' : ` type="text"`;
+  const val = opts.textarea ? escHtml(value || '') : '';
+  const valueAttr = opts.textarea ? '' : ` value="${escHtml(value || '')}"`;
+  return `<div class="audit-field-row">
+    <label>${escHtml(label)}</label>
+    <${tag}${attrs} data-path="${path}" placeholder="${escHtml(opts.placeholder || '')}"${valueAttr}>${val}</${tag}>
+  </div>`;
+}
+
+function auditSituationRowHtml(r, i) {
+  return `<div class="audit-array-row" data-row="current_situation.${i}">
+    <div class="audit-array-row-head">
+      <input type="text" data-path="current_situation.${i}.label" placeholder="Label" value="${escHtml(r.label || '')}">
+      <input type="text" data-path="current_situation.${i}.value" placeholder="Value" value="${escHtml(r.value || '')}">
+      <input type="text" data-path="current_situation.${i}.link" placeholder="Link (optional)" value="${escHtml(r.link || '')}">
+      <button class="audit-remove-btn" data-remove="current_situation.${i}">✕</button>
+    </div>
+  </div>`;
+}
+
+function auditFindingRowHtml(f, i) {
+  const sources = (f.sources || []).map((s, j) => `
+    <div class="audit-source-row" data-row="findings.${i}.sources.${j}">
+      <input type="text" data-path="findings.${i}.sources.${j}.label" placeholder="Source label" value="${escHtml(s.label || '')}">
+      <input type="text" data-path="findings.${i}.sources.${j}.url" placeholder="URL (optional)" value="${escHtml(s.url || '')}">
+      <button class="audit-remove-btn" data-remove="findings.${i}.sources.${j}">✕</button>
+    </div>`).join('');
+  return `<div class="audit-array-row" data-row="findings.${i}">
+    <div class="audit-array-row-head">
+      <input type="text" data-path="findings.${i}.area" placeholder="Area (e.g. NAP consistency)" value="${escHtml(f.area || '')}">
+      <select data-path="findings.${i}.status">
+        <option value="red"${f.status === 'red' ? ' selected' : ''}>Red</option>
+        <option value="yellow"${f.status === 'yellow' ? ' selected' : ''}>Yellow</option>
+        <option value="green"${f.status === 'green' ? ' selected' : ''}>Green</option>
+      </select>
+      <button class="audit-remove-btn" data-remove="findings.${i}">✕</button>
+    </div>
+    <textarea data-path="findings.${i}.finding" placeholder="Finding text" style="margin-top:8px;width:100%;min-height:44px;background:#161616;border:1px solid #2a2a2a;border-radius:4px;padding:6px 10px;font-size:13px;color:#e0e0e0;font-family:inherit;">${escHtml(f.finding || '')}</textarea>
+    <div class="audit-sources-list">
+      ${sources}
+      <button class="audit-add-btn" data-add="findings.${i}.sources">+ Source</button>
+    </div>
+  </div>`;
+}
+
+function auditHeatmapRowHtml(h, i) {
+  return `<div class="audit-array-row" data-row="heatmaps.${i}">
+    <div class="audit-array-row-head">
+      ${h.image ? `<img class="audit-heatmap-thumb" src="${escHtml(h.image)}">` : ''}
+      <input type="text" data-path="heatmaps.${i}.keyword" placeholder="Keyword" value="${escHtml(h.keyword || '')}">
+      <input type="text" data-path="heatmaps.${i}.link" placeholder="LocalRankGuru link (optional)" value="${escHtml(h.link || '')}">
+      <label class="audit-add-btn" style="cursor:pointer;">Upload image<input type="file" accept="image/*" data-upload="heatmaps.${i}.image" style="display:none;"></label>
+      <button class="audit-remove-btn" data-remove="heatmaps.${i}">✕</button>
+    </div>
+  </div>`;
+}
+
+function auditQueryRowHtml(q, i) {
+  return `<div class="audit-array-row" data-row="gsc.top_queries.${i}">
+    <div class="audit-array-row-head">
+      <input type="text" data-path="gsc.top_queries.${i}.query" placeholder="Query" value="${escHtml(q.query || '')}">
+      <input type="text" data-path="gsc.top_queries.${i}.clicks" placeholder="Clicks" value="${escHtml(q.clicks || '')}">
+      <input type="text" data-path="gsc.top_queries.${i}.position" placeholder="Avg position" value="${escHtml(q.position || '')}">
+      <button class="audit-remove-btn" data-remove="gsc.top_queries.${i}">✕</button>
+    </div>
+  </div>`;
+}
+
+function renderAuditEditor() {
+  const area = document.getElementById('audit-editor-area');
+  if (!currentAudit) return;
+  const d = currentAudit.data;
+  area.innerHTML = `
+    <div class="audit-toolbar">
+      <input type="text" id="audit-business-name" placeholder="Business name" value="${escHtml(d.identity.business_name || '')}">
+      <select id="audit-status-select">
+        ${['draft', 'sent', 'won', 'lost'].map(s => `<option value="${s}"${currentAudit.status === s ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}
+      </select>
+      <span class="audit-save-status" id="audit-save-status"></span>
+      <button class="danger-btn" id="audit-delete-btn">Delete</button>
+    </div>
+    <div class="audit-body">
+      <div class="audit-form-pane">
+        <div class="audit-section-title">Identity</div>
+        ${auditFieldRow('Website', 'identity.website', d.identity.website)}
+        ${auditFieldRow('City', 'identity.city', d.identity.city)}
+        ${auditFieldRow('Niche', 'identity.niche', d.identity.niche)}
+        ${auditFieldRow('Primary keyword', 'identity.primary_keyword', d.identity.primary_keyword)}
+
+        <div class="audit-section-title">Where you stand right now (GBP + ranking)</div>
+        ${d.current_situation.map(auditSituationRowHtml).join('')}
+        <button class="audit-add-btn" data-add="current_situation">+ Row</button>
+
+        <div class="audit-section-title">Heatmaps</div>
+        ${d.heatmaps.map(auditHeatmapRowHtml).join('')}
+        <button class="audit-add-btn" data-add="heatmaps">+ Heatmap</button>
+
+        <div class="audit-section-title">Findings</div>
+        ${d.findings.map(auditFindingRowHtml).join('')}
+        <button class="audit-add-btn" data-add="findings">+ Finding</button>
+
+        <div class="audit-section-title">Search Console</div>
+        <div class="audit-field-row">
+          <label>Available</label>
+          <input type="checkbox" id="audit-gsc-available" data-checkbox="gsc.available"${d.gsc.available ? ' checked' : ''} style="flex:0;width:16px;">
+        </div>
+        ${d.gsc.top_queries.map(auditQueryRowHtml).join('')}
+        <button class="audit-add-btn" data-add="gsc.top_queries">+ Query</button>
+        ${auditFieldRow('GSC notes', 'gsc.notes', d.gsc.notes, { textarea: true })}
+
+        <div class="audit-section-title">Narrative</div>
+        ${auditFieldRow('WIIFM hook', 'narrative.wiifm_hook', d.narrative.wiifm_hook, { textarea: true })}
+        ${auditFieldRow('Biggest opportunity', 'narrative.biggest_opportunity', d.narrative.biggest_opportunity, { textarea: true })}
+        ${auditFieldRow('Closing CTA', 'narrative.closing_cta', d.narrative.closing_cta, { textarea: true, placeholder: "I can start in 24 hours, or I hand you the checklist and you'll know exactly what to do." })}
+      </div>
+      <div class="audit-preview-pane">
+        <iframe class="audit-preview-frame" id="audit-preview-frame"></iframe>
+      </div>
+    </div>
+  `;
+  wireAuditEditorEvents();
+  refreshAuditPreview();
+}
+
+function wireAuditEditorEvents() {
+  const area = document.getElementById('audit-editor-area');
+
+  document.getElementById('audit-business-name').addEventListener('input', e => {
+    setAuditPath(currentAudit.data, 'identity.business_name', e.target.value);
+    currentAudit.business_name = e.target.value;
+    onAuditChanged();
+  });
+  document.getElementById('audit-status-select').addEventListener('change', e => {
+    currentAudit.status = e.target.value;
+    onAuditChanged();
+  });
+  document.getElementById('audit-delete-btn').addEventListener('click', deleteCurrentAudit);
+
+  area.querySelectorAll('[data-path]').forEach(el => {
+    const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, e => { setAuditPath(currentAudit.data, el.dataset.path, e.target.value); onAuditChanged(); });
+  });
+  area.querySelectorAll('[data-checkbox]').forEach(el => {
+    el.addEventListener('change', e => { setAuditPath(currentAudit.data, el.dataset.checkbox, e.target.checked); onAuditChanged(); });
+  });
+  area.querySelectorAll('[data-add]').forEach(el => {
+    el.addEventListener('click', () => {
+      const path = el.dataset.add;
+      const arrayRef = getAuditArray(currentAudit.data, path);
+      const blank = {
+        'current_situation': { label: '', value: '', link: '' },
+        'findings': { area: '', status: 'red', finding: '', sources: [] },
+        'heatmaps': { keyword: '', image: '', link: '' },
+        'gsc.top_queries': { query: '', clicks: '', position: '' },
+      };
+      const subBlank = path.endsWith('.sources') ? { label: '', url: '' } : blank[path];
+      arrayRef.push(subBlank);
+      onAuditChanged(true);
+    });
+  });
+  area.querySelectorAll('[data-remove]').forEach(el => {
+    el.addEventListener('click', () => {
+      const path = el.dataset.remove;
+      const lastDot = path.lastIndexOf('.');
+      const arrPath = path.slice(0, lastDot);
+      const idx = +path.slice(lastDot + 1);
+      getAuditArray(currentAudit.data, arrPath).splice(idx, 1);
+      onAuditChanged(true);
+    });
+  });
+  area.querySelectorAll('[data-upload]').forEach(el => {
+    el.addEventListener('change', async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const url = await uploadImage(file);
+        setAuditPath(currentAudit.data, el.dataset.upload, url);
+        onAuditChanged(true);
+      } catch (err) { toast('Upload failed'); }
+    });
+  });
+}
+
+function getAuditArray(root, path) {
+  const { obj } = auditPath(root, path + '.0');
+  return Array.isArray(obj) ? obj : [];
+}
+
+function onAuditChanged(rebuild) {
+  if (rebuild) { renderAuditEditor(); } // rebuild also re-renders the preview itself
+  const status = document.getElementById('audit-save-status');
+  if (status) status.textContent = 'Saving…';
+  clearTimeout(saveAuditTimer);
+  saveAuditTimer = setTimeout(saveCurrentAudit, 600);
+  if (!rebuild) {
+    clearTimeout(previewAuditTimer);
+    previewAuditTimer = setTimeout(refreshAuditPreview, 500);
+  }
+}
+
+async function saveCurrentAudit() {
+  if (!currentAuditId) return;
+  const id = currentAuditId;
+  try {
+    const saved = await apiCall('PUT', '/audits/' + id, {
+      business_name: currentAudit.data.identity.business_name || 'Untitled audit',
+      status: currentAudit.status,
+      data: currentAudit.data,
+    });
+    const idx = audits.findIndex(a => a.id === id);
+    if (idx >= 0) audits[idx] = { id: saved.id, business_name: saved.business_name, status: saved.status, updated_at: saved.updated_at };
+    renderAuditsList();
+    const status = document.getElementById('audit-save-status');
+    if (status) status.textContent = 'Saved';
+  } catch (e) {
+    const status = document.getElementById('audit-save-status');
+    if (status) status.textContent = 'Save failed';
+  }
+}
+
+async function refreshAuditPreview() {
+  const frame = document.getElementById('audit-preview-frame');
+  if (!frame || !currentAudit) return;
+  try {
+    const res = await fetch(API + '/audits/render', {
+      method: 'POST',
+      headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: currentAudit.data }),
+    });
+    frame.srcdoc = await res.text();
+  } catch (e) {}
+}
+
 
 // ── Init ───────────────────────────────────────────────────────
 (async () => {
