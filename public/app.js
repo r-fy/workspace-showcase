@@ -3934,7 +3934,10 @@ async function refreshAuditPreview() {
       headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify({ data: currentAudit.data }),
     });
-    frame.srcdoc = await res.text();
+    const html = await res.text();
+    const scrollY = frame.contentWindow?.scrollY || 0;
+    frame.addEventListener('load', () => { frame.contentWindow.scrollTo(0, scrollY); }, { once: true });
+    frame.srcdoc = html;
   } catch (e) {}
 }
 
