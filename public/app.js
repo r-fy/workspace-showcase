@@ -3788,13 +3788,11 @@ function renderAuditEditor() {
     </div>
     <div class="audit-body">
       <div class="audit-form-pane">
-        <div class="audit-section-title">Identity</div>
         ${auditFieldRow('Website', 'identity.website', d.identity.website)}
         ${auditFieldRow('City', 'identity.city', d.identity.city)}
         ${auditFieldRow('Niche', 'identity.niche', d.identity.niche)}
         ${auditFieldRow('Primary keyword', 'identity.primary_keyword', d.identity.primary_keyword)}
 
-        <div class="audit-section-title">WIIFM hook</div>
         ${auditFieldRow('WIIFM hook', 'narrative.wiifm_hook', d.narrative.wiifm_hook, { textarea: true })}
 
         <div class="audit-section-title">Where you stand right now (GBP + ranking)</div>
@@ -3821,7 +3819,6 @@ function renderAuditEditor() {
         <button class="audit-add-btn" data-add="gsc.top_queries">+ Query</button>
         ${auditFieldRow('GSC notes', 'gsc.notes', d.gsc.notes, { textarea: true })}
 
-        <div class="audit-section-title">Closing CTA</div>
         ${auditFieldRow('Closing CTA', 'narrative.closing_cta', d.narrative.closing_cta, { textarea: true, placeholder: "I can start in 24 hours, or I hand you the checklist and you'll know exactly what to do." })}
       </div>
       <div class="audit-preview-pane">
