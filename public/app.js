@@ -4138,14 +4138,22 @@ function wireAuditEditorEvents() {
     });
   });
   area.querySelectorAll('[data-upload]').forEach(el => {
-    el.addEventListener('change', async e => {
+    el.addEventListener('change', e => {
       const file = e.target.files[0];
       if (!file) return;
-      try {
-        const url = await uploadImage(file);
-        setAuditPath(currentAudit.data, el.dataset.upload, url);
+      // Embed as a data URI rather than uploading to /uploads: the preview
+      // renders in a sandboxed iframe with no allow-same-origin, so it can't
+      // carry the auth cookie an /uploads/... image would need — the image
+      // would 401 silently. A data URI needs no fetch at all, so it works
+      // in the sandboxed preview, the exported PDF, and a prospect opening
+      // that PDF with no Workspace login, all the same way.
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAuditPath(currentAudit.data, el.dataset.upload, reader.result);
         onAuditChanged(true);
-      } catch (err) { toast('Upload failed'); }
+      };
+      reader.onerror = () => toast('Upload failed');
+      reader.readAsDataURL(file);
     });
   });
 }
