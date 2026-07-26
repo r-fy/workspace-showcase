@@ -1011,6 +1011,7 @@ header {
 .audit-item-meta { font-size: 11px; color: #555; margin-top: 2px; display: flex; gap: 6px; }
 .audit-status-pill { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: #262626; color: #999; text-transform: capitalize; }
 .audit-status-pill.status-sent { background: #123018; color: #5fc83b; }
+.audit-type-pill { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: #1a2233; color: #7fa8e0; }
 
 #audit-editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .audit-toolbar {

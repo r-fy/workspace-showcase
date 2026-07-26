@@ -3857,6 +3857,7 @@ let previewAuditTimer = null;
 
 function emptyAuditData() {
   return {
+    report_type: 'seo',
     identity: { business_name: '', website: '', city: '', niche: '', primary_keyword: '' },
     current_situation: [
       { label: 'Star rating', value: '' },
@@ -3900,6 +3901,7 @@ function renderAuditsList() {
       <div class="audit-item-name">${escHtml(a.business_name || 'Untitled audit')}</div>
       <div class="audit-item-meta">
         <span class="audit-status-pill${a.status === 'sent' ? ' status-sent' : ''}">${escHtml(a.status)}</span>
+        <span class="audit-type-pill">${a.report_type === 'ads' ? 'Google Ads' : 'Local SEO'}</span>
         <span>${fmtDate(a.updated_at)}</span>
       </div>
     </div>`).join('');
@@ -3910,7 +3912,7 @@ async function newAudit() {
   const data = emptyAuditData();
   try {
     const created = await apiCall('POST', '/audits', { business_name: 'Untitled audit', data });
-    audits.unshift({ id: created.id, business_name: created.business_name, status: created.status, updated_at: created.updated_at });
+    audits.unshift({ id: created.id, business_name: created.business_name, status: created.status, report_type: data.report_type, updated_at: created.updated_at });
     currentAuditId = created.id;
     currentAudit = created;
     renderAuditsList();
@@ -4012,11 +4014,25 @@ function renderAuditEditor() {
   const area = document.getElementById('audit-editor-area');
   if (!currentAudit) return;
   const d = currentAudit.data;
+  // Defensive: external producers (e.g. the auto-audit-from-positive-reply
+  // script) may omit fields unused by their own render path. Normalize here
+  // so the form never throws on a missing array and silently renders blank.
+  d.identity = d.identity || {};
+  d.narrative = d.narrative || {};
+  d.current_situation = d.current_situation || [];
+  d.heatmaps = d.heatmaps || [];
+  d.findings = d.findings || [];
+  d.gsc = d.gsc || { available: false, top_queries: [], notes: '' };
+  d.gsc.top_queries = d.gsc.top_queries || [];
   area.innerHTML = `
     <div class="audit-toolbar">
       <input type="text" id="audit-business-name" placeholder="Business name" value="${escHtml(d.identity.business_name || '')}">
       <select id="audit-status-select">
         ${['draft', 'sent', 'won', 'lost'].map(s => `<option value="${s}"${currentAudit.status === s ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}
+      </select>
+      <select data-path="report_type">
+        <option value="seo"${(d.report_type || 'seo') === 'seo' ? ' selected' : ''}>Local SEO</option>
+        <option value="ads"${d.report_type === 'ads' ? ' selected' : ''}>Google Ads</option>
       </select>
       <span class="audit-save-status" id="audit-save-status"></span>
       <button class="danger-btn" id="audit-delete-btn">Delete</button>
@@ -4058,9 +4074,11 @@ function renderAuditEditor() {
       </div>
       <div class="audit-preview-pane">
         <!-- allow-scripts for the template's Export-as-PDF onclick, allow-modals so
-             window.print() isn't blocked. No allow-same-origin: the preview gets an
-             opaque origin, so audit text can never reach this page's DOM or storage. -->
-        <iframe class="audit-preview-frame" id="audit-preview-frame" sandbox="allow-scripts allow-modals"></iframe>
+             window.print() isn't blocked, allow-popups(-to-escape-sandbox) so the
+             source links (target="_blank") actually open. No allow-same-origin: the
+             preview gets an opaque origin, so audit text can never reach this page's
+             DOM or storage. -->
+        <iframe class="audit-preview-frame" id="audit-preview-frame" sandbox="allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox"></iframe>
       </div>
     </div>
   `;
@@ -4077,6 +4095,11 @@ function wireAuditEditorEvents() {
     onAuditChanged();
   });
   document.getElementById('audit-status-select').addEventListener('change', e => {
+    if (e.target.value === 'sent' && /\[FILL IN:/i.test(JSON.stringify(currentAudit.data))) {
+      e.target.value = currentAudit.status;
+      toast('Fill in the highlighted numbers before marking this as sent');
+      return;
+    }
     currentAudit.status = e.target.value;
     onAuditChanged();
   });
@@ -4154,7 +4177,7 @@ async function saveCurrentAudit() {
       data: currentAudit.data,
     });
     const idx = audits.findIndex(a => a.id === id);
-    if (idx >= 0) audits[idx] = { id: saved.id, business_name: saved.business_name, status: saved.status, updated_at: saved.updated_at };
+    if (idx >= 0) audits[idx] = { id: saved.id, business_name: saved.business_name, status: saved.status, report_type: currentAudit.data.report_type || 'seo', updated_at: saved.updated_at };
     renderAuditsList();
     const status = document.getElementById('audit-save-status');
     if (status) status.textContent = 'Saved';

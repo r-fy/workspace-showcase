@@ -362,7 +362,12 @@ app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
 
 // ── Audits ───────────────────────────────────────────────────
 app.get('/api/audits', auth, (req, res) => {
-  res.json(db.prepare('SELECT id, business_name, status, updated_at FROM audits WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId));
+  const rows = db.prepare('SELECT id, business_name, status, data, updated_at FROM audits WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
+  res.json(rows.map(r => {
+    let report_type = 'seo';
+    try { report_type = JSON.parse(r.data).report_type || 'seo'; } catch {}
+    return { id: r.id, business_name: r.business_name, status: r.status, report_type, updated_at: r.updated_at };
+  }));
 });
 
 app.get('/api/audits/:id', auth, (req, res) => {

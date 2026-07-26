@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>{{business_name}} - Local SEO Audit</title>
+<title>{{business_name}} - {{report_type_label}}</title>
 <style>
   @page { size: Letter; margin: 0.55in; }
   :root { color-scheme: light; }
@@ -16,22 +16,24 @@
   h1 { font-size: 24px; margin: 0 0 4px; color: {{color_accent}}; }
   .subtitle { color: #5a6472; font-size: 14px; margin: 0 0 28px; }
   h2 { font-size: 17px; color: {{color_accent}}; margin: 32px 0 12px; border-bottom: 2px solid {{color_accent}}; padding-bottom: 6px; break-after: avoid; page-break-after: avoid; }
-  .hook { font-size: 15px; background: {{color_hook_bg}}; border-left: 4px solid {{color_hook_border}}; padding: 14px 18px; border-radius: 4px; margin-bottom: 8px; }
+  .hook { font-size: 15px; background: {{color_hook_bg}}; border-left: 4px solid {{color_hook_border}}; padding: 14px 18px; border-radius: 4px; margin-bottom: 8px; white-space: pre-wrap; }
+  .fillin { color: #b8560f; font-weight: 700; background: rgba(184,86,15,0.08); border-radius: 3px; padding: 0 2px; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .situation td { padding: 10px 12px; border-bottom: 1px solid #eee; }
   .situation td:first-child { font-weight: 600; width: 45%; color: #333; }
   .situation tr:nth-child(even) { background: #fafbfc; }
   .findings thead { display: table-header-group; }
   .findings thead td { background: {{color_accent}}; color: #fff; font-weight: 600; padding: 10px 12px; }
-  .findings tbody td { padding: 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+  .findings tbody td { padding: 12px; border-bottom: 1px solid #eee; vertical-align: top; white-space: pre-wrap; }
   .findings tbody tr:last-child td { border-bottom: none; }
   .area-cell { width: 32%; white-space: nowrap; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
   .dot.red { background: {{color_dot_red}}; }
   .dot.yellow { background: {{color_dot_yellow}}; }
   .dot.green { background: {{color_dot_green}}; }
-  .callout { background: {{color_callout_bg}}; border-left: 4px solid {{color_callout_border}}; padding: 14px 18px; border-radius: 4px; font-size: 15px; margin-top: 8px; }
-  .cta { margin-top: 36px; padding: 20px; background: {{color_accent}}; color: #fff; border-radius: 6px; font-size: 15px; text-align: center; }
+  .callout { background: {{color_callout_bg}}; border-left: 4px solid {{color_callout_border}}; padding: 14px 18px; border-radius: 4px; font-size: 15px; margin-top: 8px; white-space: pre-wrap; }
+  .cta { margin-top: 36px; padding: 20px; background: {{color_accent}}; color: #fff; border-radius: 6px; font-size: 15px; text-align: center; white-space: pre-wrap; }
+  .cta .fillin { color: #ffe4b3; background: rgba(255,255,255,0.12); }
   .gsc-note { font-size: 14px; color: #5a6472; margin-top: 4px; }
   .heatmap-block { margin-bottom: 20px; }
   .heatmap-block img { width: 100%; border-radius: 6px; border: 1px solid #eee; display: block; }
@@ -56,19 +58,18 @@
     font: inherit; font-weight: 600; padding: 7px 14px; border-radius: 6px; border: none;
     background: #fff; color: {{color_accent}}; cursor: pointer;
   }
+  .edit-bar-blocked { background: #b8560f; }
+  .edit-bar-blocked button { opacity: 0.5; cursor: not-allowed; }
   [contenteditable="true"] { border-radius: 3px; }
   [contenteditable="true"]:hover { background: rgba(47,111,237,0.08); outline: 1px dashed rgba(47,111,237,0.4); }
   [contenteditable="true"]:focus { background: rgba(47,111,237,0.08); outline: 1px dashed {{color_hook_border}}; }
 </style>
 </head>
 <body>
-  <div class="edit-bar no-print">
-    <span>Click any text to edit it. When it looks right, press <strong>&#8984;P</strong> (or Ctrl+P) and save as PDF.</span>
-    <button onclick="window.print()">Export as PDF</button>
-  </div>
+  {{edit_bar}}
   <div class="sheet">
     <h1 contenteditable="true" spellcheck="false">{{business_name}}</h1>
-    <p class="subtitle" contenteditable="true" spellcheck="false">Local SEO Audit &middot; {{city}} &middot; {{date}}</p>
+    <p class="subtitle" contenteditable="true" spellcheck="false">{{report_type_label}} &middot; {{city}} &middot; {{date}}</p>
 
     <div class="hook" contenteditable="true" spellcheck="false">{{wiifm_hook}}</div>
 

@@ -1,0 +1,18 @@
+{
+  "report_type_label": "Google Ads Opportunity Report",
+  "section_1_title": "Where you stand right now (Google Ads snapshot)",
+  "section_2_title": "What's happening in your market (what's working and what's open)",
+  "biggest_opportunity_title": "Biggest opportunity",
+  "default_closing_cta": "We can hop on a quick video call where I'll walk through the checklist of exactly what I'd look at.\n\nIf it's not for you, no worries, you'll know exactly what to check yourself.",
+  "colors": {
+    "accent": "#0b1f3a",
+    "hook_bg": "#eef3fb",
+    "hook_border": "#2f6fed",
+    "callout_bg": "#fff7ec",
+    "callout_border": "#e0a63f",
+    "dot_red": "#e04b3f",
+    "dot_yellow": "#e0a63f",
+    "dot_green": "#3fae5c"
+  },
+  "heatmap_section_title": "Proof: what's showing right now on the Google Ads Transparency Center"
+}
