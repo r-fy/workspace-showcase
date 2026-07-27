@@ -927,7 +927,19 @@ header {
 
 .calendar-view-header {
   display: flex; justify-content: flex-end; padding: 10px 16px;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid #1a1a1a; flex-shrink: 0;
+}
+.calendar-view-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* ≥900px: room for agenda + month grid side by side — calendar shows by
+   default, the header button just hides/shows the month pane. Below this,
+   there's only room for one pane, so it stays a full-view toggle. */
+@media (min-width: 900px) {
+  .calendar-view-body { flex-direction: row; }
+  .calendar-view-body #agenda-list { flex: 0 0 380px; max-width: 380px; border-right: 1px solid #1a1a1a; }
+  .calendar-view-body #month-cal-view { flex: 1; max-width: none; }
+  /* Calendar pane hidden — let the agenda use the freed-up width instead of leaving a gap. */
+  .calendar-view-body.cal-collapsed #agenda-list { flex: 1; max-width: none; border-right: none; }
 }
 
 /* ── Month calendar ── */

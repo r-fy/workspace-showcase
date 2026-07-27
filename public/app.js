@@ -27,6 +27,7 @@ let reminders = [];
 let currentReminderId = null;
 const remWeekdaySel = new Set();
 let calendarViewMode = localStorage.getItem('calendar-view-mode') === 'month' ? 'month' : 'agenda';
+let calendarMonthVisible = localStorage.getItem('calendar-month-visible') !== '0';
 
 let calls = [];
 let twDevice = null;        // Twilio Voice Device (created lazily on first Calls-tab open)
@@ -1431,12 +1432,31 @@ async function loadCalendar() {
   updateNotifsButton();
 }
 
-// Agenda and Month share the same `reminders` array; only the visible one
-// needs to actually render on each data refresh.
+// ≥900px there's room for agenda + month side by side — the header button
+// just hides/shows the month pane (calendarMonthVisible). Below that only
+// one pane fits, so the button swaps between them instead (calendarViewMode).
+const CAL_SPLIT_MQ = window.matchMedia('(min-width: 900px)');
+
+// Agenda and Month share the same `reminders` array; only visible panes
+// actually render on each data refresh.
 function renderCalendarActive() {
-  document.getElementById('agenda-list')?.classList.toggle('hidden', calendarViewMode !== 'agenda');
-  document.getElementById('month-cal-view')?.classList.toggle('hidden', calendarViewMode !== 'month');
-  if (calendarViewMode === 'month') renderMonthCal(); else renderAgenda();
+  const split = CAL_SPLIT_MQ.matches;
+  const agendaShown = split || calendarViewMode === 'agenda';
+  const monthShown = split ? calendarMonthVisible : calendarViewMode === 'month';
+  document.getElementById('agenda-list')?.classList.toggle('hidden', !agendaShown);
+  document.getElementById('month-cal-view')?.classList.toggle('hidden', !monthShown);
+  document.getElementById('calendar-view-body')?.classList.toggle('cal-collapsed', split && !monthShown);
+  if (agendaShown) renderAgenda();
+  if (monthShown) renderMonthCal();
+  updateCalToggleBtn();
+}
+
+function updateCalToggleBtn() {
+  const btn = document.getElementById('calendar-view-toggle-btn');
+  if (!btn) return;
+  btn.textContent = CAL_SPLIT_MQ.matches
+    ? (calendarMonthVisible ? '🗓 Hide calendar' : '🗓 Show calendar')
+    : (calendarViewMode === 'agenda' ? '🗓 Month' : '📋 Agenda');
 }
 
 function recurLabel(r) {
@@ -3904,13 +3924,18 @@ document.getElementById('chase-import-modal')?.addEventListener('click', e => { 
 // Calendar / reminders
 document.getElementById('add-reminder-btn').addEventListener('click', () => { switchTab('calendar'); openReminderModal(); });
 const calToggleBtn = document.getElementById('calendar-view-toggle-btn');
-calToggleBtn.textContent = calendarViewMode === 'agenda' ? '🗓 Month' : '📋 Agenda';
+updateCalToggleBtn();
 calToggleBtn.addEventListener('click', () => {
-  calendarViewMode = calendarViewMode === 'agenda' ? 'month' : 'agenda';
-  localStorage.setItem('calendar-view-mode', calendarViewMode);
-  calToggleBtn.textContent = calendarViewMode === 'agenda' ? '🗓 Month' : '📋 Agenda';
+  if (CAL_SPLIT_MQ.matches) {
+    calendarMonthVisible = !calendarMonthVisible;
+    localStorage.setItem('calendar-month-visible', calendarMonthVisible ? '1' : '0');
+  } else {
+    calendarViewMode = calendarViewMode === 'agenda' ? 'month' : 'agenda';
+    localStorage.setItem('calendar-view-mode', calendarViewMode);
+  }
   renderCalendarActive();
 });
+CAL_SPLIT_MQ.addEventListener('change', () => { if (currentTab === 'calendar') renderCalendarActive(); });
 document.getElementById('reminder-modal-close').addEventListener('click', closeReminderModal);
 document.getElementById('reminder-modal-cancel').addEventListener('click', closeReminderModal);
 document.getElementById('reminder-modal-save').addEventListener('click', saveReminder);

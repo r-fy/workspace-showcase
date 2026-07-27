@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=125">
+<link rel="stylesheet" href="/app.css?v=126">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -188,12 +188,14 @@
     </div>
 
     <!-- Calendar view -->
-    <div class="view hidden" id="calendar-view" style="flex-direction:column;overflow-y:auto;">
+    <div class="view hidden" id="calendar-view" style="flex-direction:column;">
       <div class="calendar-view-header">
         <button class="expense-chart-toggle-btn" id="calendar-view-toggle-btn">🗓 Month</button>
       </div>
-      <div id="agenda-list" class="agenda-list"></div>
-      <div id="month-cal-view" class="month-cal-view hidden"></div>
+      <div class="calendar-view-body" id="calendar-view-body">
+        <div id="agenda-list" class="agenda-list"></div>
+        <div id="month-cal-view" class="month-cal-view hidden"></div>
+      </div>
     </div>
 
     <!-- Audits view -->
@@ -584,6 +586,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=142"></script>
+<script src="/app.js?v=143"></script>
 </body>
 </html>
