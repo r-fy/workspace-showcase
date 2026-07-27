@@ -263,6 +263,23 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_cold_email_daily_unique ON cold_email_daily(user_id, date, campaign_id);
   CREATE INDEX IF NOT EXISTS idx_cold_email_daily_date ON cold_email_daily(user_id, date);
 
+  CREATE TABLE IF NOT EXISTS cold_email_replies (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    campaign_id TEXT NOT NULL DEFAULT '',
+    campaign_name TEXT NOT NULL DEFAULT '',
+    from_email TEXT NOT NULL DEFAULT '',
+    from_name TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    preview TEXT NOT NULL DEFAULT '',
+    thread_id TEXT NOT NULL DEFAULT '',
+    is_unread INTEGER NOT NULL DEFAULT 0,
+    ai_interest INTEGER DEFAULT NULL,
+    timestamp_email INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_cold_email_replies_ts ON cold_email_replies(user_id, timestamp_email);
+
   CREATE TABLE IF NOT EXISTS cold_email_account_health (
     account_email TEXT NOT NULL,
     user_id TEXT NOT NULL DEFAULT 'owner',
@@ -601,6 +618,31 @@ async function pullColdEmailStats() {
         upsertAcct.run(a.email, a.stat_warmup_score ?? null, a.daily_limit ?? null, t);
       }
     } catch (e) { console.warn('cold email: account health failed', e.message); }
+
+    try {
+      const campaignNameById = Object.fromEntries(campaigns.map(c => [c.id, c.name || '']));
+      const emailsResp = await instantlyGet('/emails?email_type=received&limit=50');
+      const emails = emailsResp.items || [];
+      const upsertReply = db.prepare(`
+        INSERT INTO cold_email_replies (id, user_id, campaign_id, campaign_name, from_email, from_name, subject, preview, thread_id, is_unread, ai_interest, timestamp_email, updated_at)
+        VALUES (?, 'owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          campaign_name=excluded.campaign_name, from_email=excluded.from_email, from_name=excluded.from_name,
+          subject=excluded.subject, preview=excluded.preview, is_unread=excluded.is_unread,
+          ai_interest=excluded.ai_interest, updated_at=excluded.updated_at
+      `);
+      for (const e of emails) {
+        const fromInfo = (e.from_address_json && e.from_address_json[0]) || {};
+        upsertReply.run(
+          e.id, e.campaign_id || '', campaignNameById[e.campaign_id] || '',
+          e.from_address_email || fromInfo.address || '', fromInfo.name || '',
+          e.subject || '', e.content_preview || '', e.thread_id || '',
+          e.is_unread ? 1 : 0, e.ai_interest_value ?? null,
+          new Date(e.timestamp_email || e.timestamp_created).getTime(), t
+        );
+      }
+    } catch (e) { console.warn('cold email: replies failed', e.message); }
+
     coldEmailLastSuccessAt = now();
     coldEmailLastError = null;
   } catch (e) {
@@ -631,6 +673,14 @@ app.post('/api/cold-email/pull', auth, async (req, res) => {
   if (!INSTANTLY_API_KEY) return res.status(503).json({ error: 'INSTANTLY_API_KEY not configured' });
   await pullColdEmailStats();
   res.json({ ok: true });
+});
+
+app.get('/api/cold-email/replies', auth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
+  const rows = db.prepare(`SELECT id, campaign_id, campaign_name, from_email, from_name, subject, preview,
+    thread_id, is_unread, ai_interest, timestamp_email
+    FROM cold_email_replies WHERE user_id=? ORDER BY timestamp_email DESC LIMIT ?`).all(req.userId, limit);
+  res.json(rows);
 });
 
 app.get('/api/cold-email/status', auth, (req, res) => {
