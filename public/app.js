@@ -26,6 +26,7 @@ let expenseFilterMonth = localStorage.getItem('expense-filter-month') || 'all';
 let reminders = [];
 let currentReminderId = null;
 const remWeekdaySel = new Set();
+let calendarViewMode = localStorage.getItem('calendar-view-mode') === 'month' ? 'month' : 'agenda';
 
 let calls = [];
 let twDevice = null;        // Twilio Voice Device (created lazily on first Calls-tab open)
@@ -129,7 +130,7 @@ async function fullSync() {
     calls = data.calls || [];
     lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
-    if (currentTab === 'calendar') renderAgenda();
+    if (currentTab === 'calendar') renderCalendarActive();
     if (currentTab === 'calls') renderCallLog();
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
@@ -179,7 +180,7 @@ async function pollSync() {
     reminders = data.reminders || [];
     calls = data.calls || [];
     renderNotesList(); renderTagsBar(); renderBoardsBar();
-    if (currentTab === 'calendar') renderAgenda();
+    if (currentTab === 'calendar') renderCalendarActive();
     if (currentTab === 'calls') renderCallLog();
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
@@ -1426,8 +1427,16 @@ const WD_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 async function loadCalendar() {
   try { reminders = await apiFetch('GET', '/reminders'); } catch(e) {}
-  renderAgenda();
+  renderCalendarActive();
   updateNotifsButton();
+}
+
+// Agenda and Month share the same `reminders` array; only the visible one
+// needs to actually render on each data refresh.
+function renderCalendarActive() {
+  document.getElementById('agenda-list')?.classList.toggle('hidden', calendarViewMode !== 'agenda');
+  document.getElementById('month-cal-view')?.classList.toggle('hidden', calendarViewMode !== 'month');
+  if (calendarViewMode === 'month') renderMonthCal(); else renderAgenda();
 }
 
 function recurLabel(r) {
@@ -1535,6 +1544,93 @@ function renderAgenda() {
   });
 }
 
+// ── Month calendar ──
+// Advance-on-fire means each reminder row only ever knows ONE future
+// occurrence, so (like the agenda) a recurring reminder plots a single ↻
+// mini-card on its next date, not every future date in the series.
+let calYear = new Date().getFullYear();
+let calMonth = new Date().getMonth();
+const CAL_MAX_SHOWN = 3;
+
+function renderMonthCal() {
+  const el = document.getElementById('month-cal-view');
+  if (!el) return;
+  const nowMs = Date.now();
+  const todayIso = dpToIso(new Date());
+
+  const byDay = {};
+  for (const r of reminders) {
+    if (r.completed_at) continue;
+    const fireAt = r.snoozed_until || r.next_fire_at || r.first_fire_at;
+    if (fireAt == null) continue;
+    const iso = dpToIso(new Date(fireAt));
+    if (!byDay[iso]) byDay[iso] = [];
+    byDay[iso].push({ r, fireAt });
+  }
+  for (const iso in byDay) byDay[iso].sort((a, b) => a.fireAt - b.fireAt);
+
+  const first = new Date(calYear, calMonth, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  let cells = [];
+  for (let i = 0; i < startDow; i++) {
+    const d = new Date(calYear, calMonth, 1 - (startDow - i));
+    cells.push({ iso: dpToIso(d), label: d.getDate(), out: true });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dt = new Date(calYear, calMonth, d);
+    cells.push({ iso: dpToIso(dt), label: d, out: false });
+  }
+  const rem = 7 - (cells.length % 7);
+  if (rem < 7) for (let d = 1; d <= rem; d++) {
+    const dt = new Date(calYear, calMonth + 1, d);
+    cells.push({ iso: dpToIso(dt), label: d, out: true });
+  }
+
+  el.innerHTML = `
+    <div class="cal-month-header">
+      <button class="cal-month-nav" id="cal-month-prev" type="button">‹</button>
+      <span class="cal-month-label">${DP_MONTHS[calMonth]} ${calYear}</span>
+      <button class="cal-month-nav" id="cal-month-next" type="button">›</button>
+    </div>
+    <div class="cal-month-grid">
+      ${DP_DAYS.map(d => `<div class="cal-month-dow">${d}</div>`).join('')}
+      ${cells.map(c => {
+        const items = byDay[c.iso] || [];
+        const shown = items.slice(0, CAL_MAX_SHOWN);
+        const overflow = items.length - shown.length;
+        return `<div class="cal-month-day${c.out ? ' cal-day-out' : ''}${c.iso === todayIso ? ' cal-day-today' : ''}" data-iso="${c.iso}">
+          <span class="cal-day-num">${c.label}</span>
+          <div class="cal-day-items">
+            ${shown.map(({ r, fireAt }) => `<div class="cal-mini-card${fireAt < nowMs ? ' cal-mini-overdue' : ''}" data-id="${r.id}" title="${escHtml(r.title)}">${r.recur_type !== 'none' ? '↻ ' : ''}${escHtml(r.title)}</div>`).join('')}
+            ${overflow > 0 ? `<div class="cal-mini-more">+${overflow} more</div>` : ''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  el.querySelector('#cal-month-prev').addEventListener('click', () => {
+    calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; } renderMonthCal();
+  });
+  el.querySelector('#cal-month-next').addEventListener('click', () => {
+    calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; } renderMonthCal();
+  });
+  el.querySelectorAll('.cal-mini-card').forEach(card => {
+    card.addEventListener('click', e => {
+      e.stopPropagation();
+      const r = reminders.find(x => x.id === card.dataset.id);
+      if (r) openReminderModal(r);
+    });
+  });
+  el.querySelectorAll('.cal-month-day').forEach(dayEl => {
+    dayEl.addEventListener('click', () => {
+      openReminderModal();
+      document.getElementById('rem-date').value = isoToMdy(dayEl.dataset.iso);
+    });
+  });
+}
+
 // ── Reminder modal ──
 function updateRecurRows() {
   const type = document.getElementById('rem-recur').value;
@@ -1618,7 +1714,7 @@ async function saveReminder() {
     } else {
       reminders.push(await apiCall('POST', '/reminders', body));
     }
-    closeReminderModal(); renderAgenda();
+    closeReminderModal(); renderCalendarActive();
     toast(isEdit ? 'Reminder updated' : 'Reminder added');
   } catch(e) {
     // apiCall queues non-GET writes while offline and replays them on
@@ -1640,7 +1736,7 @@ async function deleteReminder(id) {
   if (!confirm('Delete this reminder?')) return;
   reminders = reminders.filter(r => r.id !== id);
   if (id === currentReminderId) closeReminderModal();
-  renderAgenda();
+  renderCalendarActive();
   try { await apiCall('DELETE', '/reminders/' + id); } catch(e) {}
 }
 
@@ -3807,6 +3903,14 @@ document.getElementById('chase-import-confirm')?.addEventListener('click', confi
 document.getElementById('chase-import-modal')?.addEventListener('click', e => { if (e.target === document.getElementById('chase-import-modal')) { chaseImportPending = null; e.target.classList.add('hidden'); } });
 // Calendar / reminders
 document.getElementById('add-reminder-btn').addEventListener('click', () => { switchTab('calendar'); openReminderModal(); });
+const calToggleBtn = document.getElementById('calendar-view-toggle-btn');
+calToggleBtn.textContent = calendarViewMode === 'agenda' ? '🗓 Month' : '📋 Agenda';
+calToggleBtn.addEventListener('click', () => {
+  calendarViewMode = calendarViewMode === 'agenda' ? 'month' : 'agenda';
+  localStorage.setItem('calendar-view-mode', calendarViewMode);
+  calToggleBtn.textContent = calendarViewMode === 'agenda' ? '🗓 Month' : '📋 Agenda';
+  renderCalendarActive();
+});
 document.getElementById('reminder-modal-close').addEventListener('click', closeReminderModal);
 document.getElementById('reminder-modal-cancel').addEventListener('click', closeReminderModal);
 document.getElementById('reminder-modal-save').addEventListener('click', saveReminder);
