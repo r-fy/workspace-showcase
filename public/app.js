@@ -51,6 +51,11 @@ let dragNoteId = null;
 let mobileColIdx = 0;
 let allColumns = [];
 
+let coldEmailDaily = [];
+let coldEmailAccounts = [];
+let coldEmailDays = 30;
+const ceChartHiddenSeries = new Set();
+
 let outbox = [];
 let idb = null;
 
@@ -319,6 +324,7 @@ function switchTab(tab) {
   document.getElementById('audits-view')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
+  document.getElementById('cold-email-view')?.classList.toggle('hidden', tab !== 'cold-email');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
@@ -326,6 +332,7 @@ function switchTab(tab) {
   document.getElementById('calls-panel')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('audits-panel')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
+  document.getElementById('cold-email-panel')?.classList.toggle('hidden', tab !== 'cold-email');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
@@ -333,6 +340,7 @@ function switchTab(tab) {
   if (tab === 'calls') loadCallsTab();
   if (tab === 'audits') loadAudits();
   if (tab === 'daily-tasks') loadDailyTasks();
+  if (tab === 'cold-email') loadColdEmail();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
 
@@ -3809,6 +3817,173 @@ document.getElementById('rem-recur').addEventListener('change', updateRecurRows)
 document.getElementById('rem-lead').addEventListener('input', e => {
   document.getElementById('rem-lead-unit').disabled = !e.target.value.trim();
 });
+// ── Cold Email (Instantly daily reporting) ─────────────────────
+const CE_METRICS = [
+  { key: 'sent', label: 'Sent', color: '#4a90e0' },
+  { key: 'opens', label: 'Opens', color: '#4caf32' },
+  { key: 'replies', label: 'Replies', color: '#e0a94a' },
+  { key: 'bounces', label: 'Bounces', color: '#e05a4a' },
+];
+
+async function loadColdEmail() {
+  try {
+    [coldEmailDaily, coldEmailAccounts] = await Promise.all([
+      apiCall('GET', '/cold-email/daily?days=' + coldEmailDays),
+      apiCall('GET', '/cold-email/accounts'),
+    ]);
+  } catch (e) { toast('Could not load cold email data'); return; }
+  renderColdEmail();
+}
+
+async function refreshColdEmail() {
+  toast('Refreshing…');
+  try { await apiCall('POST', '/cold-email/pull'); } catch (e) { toast('Refresh failed — check INSTANTLY_API_KEY is configured'); }
+  await loadColdEmail();
+}
+
+function ceFmtCompact(v) {
+  if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'K';
+  return String(Math.round(v));
+}
+
+function ceFmtDateLabel(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return `${MONTH_ABBR[m - 1]} ${d}`;
+}
+
+function ceByDate(rows) {
+  const byDate = {};
+  for (const r of rows) {
+    const b = (byDate[r.date] ??= { sent: 0, opens: 0, replies: 0, bounces: 0, unread_replies: 0 });
+    b.sent += r.sent; b.opens += r.opens; b.replies += r.replies; b.bounces += r.bounces;
+    b.unread_replies += r.unread_replies;
+  }
+  return byDate;
+}
+
+function ceStatTilesHtml(rows) {
+  const totals = rows.reduce((a, r) => ({
+    sent: a.sent + r.sent, opens: a.opens + r.opens, replies: a.replies + r.replies, bounces: a.bounces + r.bounces,
+  }), { sent: 0, opens: 0, replies: 0, bounces: 0 });
+  const pct = (n, d) => d ? (100 * n / d).toFixed(1) + '%' : '—';
+  const tiles = [
+    ['Sent', totals.sent],
+    ['Open rate', pct(totals.opens, totals.sent)],
+    ['Reply rate', pct(totals.replies, totals.sent)],
+    ['Bounce rate', pct(totals.bounces, totals.sent)],
+  ];
+  return `<div class="exp-chart-stats" style="padding:0 0 24px;">${tiles.map(([label, val]) => `
+    <div class="exp-chart-stat">
+      <span class="exp-chart-stat-val">${escHtml(String(val))}</span>
+      <span class="exp-chart-stat-label">${escHtml(label)}</span>
+    </div>`).join('')}</div>`;
+}
+
+function ceChartHtml(rows) {
+  const byDate = ceByDate(rows);
+  const dates = Object.keys(byDate).sort();
+  const legend = CE_METRICS.map(m => {
+    const hidden = ceChartHiddenSeries.has(m.key);
+    return `<span class="exp-chart-legend-item${hidden ? ' hidden-series' : ''}" data-metric="${m.key}" title="Click to ${hidden ? 'show' : 'isolate/hide'}"><span class="exp-chart-legend-swatch" style="background:${m.color}"></span>${m.label}</span>`;
+  }).join('');
+  if (dates.length < 2) {
+    return `<div class="expense-chart-wrap"><div class="exp-chart-legend">${legend}</div><div class="expense-chart-empty">Not enough days of data yet — check back after the pull has run a few times.</div></div>`;
+  }
+  const visible = CE_METRICS.filter(m => !ceChartHiddenSeries.has(m.key));
+  let maxVal = 0;
+  for (const m of visible) for (const dt of dates) maxVal = Math.max(maxVal, byDate[dt][m.key] || 0);
+  const niceMax = niceCeil(maxVal || 1);
+  const W = 900, H = 260, padL = 44, padR = 16, padT = 16, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xFor = i => padL + (dates.length > 1 ? (i / (dates.length - 1)) * plotW : plotW / 2);
+  const yFor = v => padT + plotH - (v / niceMax) * plotH;
+
+  let gridLines = '', yLabels = '';
+  for (let i = 0; i <= 4; i++) {
+    const val = niceMax * i / 4, y = yFor(val);
+    gridLines += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" class="exp-chart-grid"/>`;
+    yLabels += `<text x="${padL - 8}" y="${y + 4}" class="exp-chart-axis-label" text-anchor="end">${ceFmtCompact(val)}</text>`;
+  }
+  let xLabels = '';
+  const labelStep = dates.length > 10 ? Math.ceil(dates.length / 10) : 1;
+  dates.forEach((dt, i) => {
+    if (i % labelStep !== 0 && i !== dates.length - 1) return;
+    xLabels += `<text x="${xFor(i)}" y="${H - 8}" class="exp-chart-axis-label" text-anchor="middle">${ceFmtDateLabel(dt)}</text>`;
+  });
+  let paths = '';
+  visible.forEach(m => {
+    const pts = dates.map((dt, i) => `${xFor(i)},${yFor(byDate[dt][m.key] || 0)}`).join(' ');
+    paths += `<polyline points="${pts}" fill="none" stroke="${m.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    dates.forEach((dt, i) => {
+      paths += `<circle cx="${xFor(i)}" cy="${yFor(byDate[dt][m.key] || 0)}" r="3" fill="${m.color}"><title>${ceFmtDateLabel(dt)}: ${byDate[dt][m.key] || 0} ${m.label.toLowerCase()}</title></circle>`;
+    });
+  });
+  return `
+    <div class="expense-chart-wrap">
+      <div class="exp-chart-legend">${legend}</div>
+      <svg class="exp-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        ${gridLines}${yLabels}${xLabels}${paths}
+      </svg>
+    </div>`;
+}
+
+function ceCampaignTableHtml(rows) {
+  const byCampaign = {};
+  for (const r of rows) {
+    const c = (byCampaign[r.campaign_id] ??= { name: r.campaign_name || r.campaign_id, sent: 0, replies: 0, unread: 0, lastDate: '' });
+    c.sent += r.sent; c.replies += r.replies;
+    if (r.date > c.lastDate) { c.lastDate = r.date; c.unread = r.unread_replies; }
+  }
+  const campaigns = Object.values(byCampaign).sort((a, b) => b.sent - a.sent);
+  if (!campaigns.length) return '<div class="expense-chart-empty">No campaign data yet.</div>';
+  return `<table class="ce-table"><thead><tr><th>Campaign</th><th>Sent</th><th>Replies</th><th>Unread</th></tr></thead><tbody>
+    ${campaigns.map(c => `<tr><td>${escHtml(c.name)}</td><td>${c.sent}</td><td>${c.replies}</td><td>${c.unread ? `<span class="ce-unread-badge">${c.unread}</span>` : '—'}</td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+function ceAccountTableHtml(accounts) {
+  if (!accounts.length) return '<div class="expense-chart-empty">No account health data yet.</div>';
+  return `<table class="ce-table"><thead><tr><th>Inbox</th><th>Warmup</th><th>Status</th><th>Daily limit</th></tr></thead><tbody>
+    ${accounts.map(a => `<tr><td>${escHtml(a.account_email)}</td><td>${escHtml(a.warmup_status || '—')}</td><td>${escHtml(a.ctd_status || '—')}</td><td>${a.daily_limit ?? '—'}</td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+function renderColdEmail() {
+  const area = document.getElementById('cold-email-area');
+  if (!area) return;
+  area.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h2 style="margin:0;font-size:16px;color:#e0e0e0;">Cold Email</h2>
+      <div>
+        <select id="ce-days-select" style="margin-right:8px;">
+          <option value="7"${coldEmailDays === 7 ? ' selected' : ''}>Last 7 days</option>
+          <option value="30"${coldEmailDays === 30 ? ' selected' : ''}>Last 30 days</option>
+          <option value="90"${coldEmailDays === 90 ? ' selected' : ''}>Last 90 days</option>
+        </select>
+        <button id="ce-refresh-inline-btn">↻ Refresh now</button>
+      </div>
+    </div>
+    ${ceStatTilesHtml(coldEmailDaily)}
+    ${ceChartHtml(coldEmailDaily)}
+    <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Campaigns</h3>
+    ${ceCampaignTableHtml(coldEmailDaily)}
+    <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Inbox health</h3>
+    ${ceAccountTableHtml(coldEmailAccounts)}
+  `;
+  area.querySelectorAll('.exp-chart-legend-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const key = el.dataset.metric;
+      ceChartHiddenSeries.has(key) ? ceChartHiddenSeries.delete(key) : ceChartHiddenSeries.add(key);
+      renderColdEmail();
+    });
+  });
+  document.getElementById('ce-days-select')?.addEventListener('change', e => {
+    coldEmailDays = parseInt(e.target.value, 10);
+    loadColdEmail();
+  });
+  document.getElementById('ce-refresh-inline-btn')?.addEventListener('click', refreshColdEmail);
+}
+
 document.getElementById('rem-weekdays').addEventListener('click', e => {
   const btn = e.target.closest('.rem-wd');
   if (!btn) return;
@@ -3834,6 +4009,7 @@ document.getElementById('dial-back').addEventListener('click', () => {
 document.getElementById('dial-call-btn').addEventListener('click', startCall);
 document.getElementById('new-audit-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('audits'); newAudit(); });
 document.getElementById('new-daily-task-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('daily-tasks'); newDailyTaskPaste(); });
+document.getElementById('cold-email-refresh-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('cold-email'); refreshColdEmail(); });
 document.getElementById('dial-hangup-btn').addEventListener('click', hangUp);
 document.getElementById('dial-number').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); startCall(); }

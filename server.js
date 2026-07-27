@@ -242,6 +242,38 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_daily_tasks_user ON daily_tasks(user_id, task_date);
 `);
 
+// Cold Email tab: daily rollup pulled from Instantly, one row per campaign per
+// day — relational (not a blob like audits/daily_tasks) because this data is
+// machine-pulled and time-series, the chart needs to query across dates with
+// plain SQL rather than parsing JSON blobs client-side.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cold_email_daily (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    date TEXT NOT NULL,
+    campaign_id TEXT NOT NULL,
+    campaign_name TEXT NOT NULL DEFAULT '',
+    sent INTEGER NOT NULL DEFAULT 0,
+    opens INTEGER NOT NULL DEFAULT 0,
+    replies INTEGER NOT NULL DEFAULT 0,
+    bounces INTEGER NOT NULL DEFAULT 0,
+    unread_replies INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_cold_email_daily_unique ON cold_email_daily(user_id, date, campaign_id);
+  CREATE INDEX IF NOT EXISTS idx_cold_email_daily_date ON cold_email_daily(user_id, date);
+
+  CREATE TABLE IF NOT EXISTS cold_email_account_health (
+    account_email TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    warmup_status TEXT NOT NULL DEFAULT '',
+    ctd_status TEXT NOT NULL DEFAULT '',
+    daily_limit INTEGER DEFAULT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, account_email)
+  );
+`);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -477,6 +509,110 @@ app.put('/api/daily-tasks/:id', auth, (req, res) => {
 
 app.delete('/api/daily-tasks/:id', auth, (req, res) => {
   db.prepare('UPDATE daily_tasks SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+// ── Cold Email (Instantly reporting) ──────────────────────────
+// Hits Instantly's REST API directly (this is a server process, it can't use
+// the Claude-side Instantly MCP connection that only exists in interactive
+// sessions) — same tolerate-missing-config pattern as Twilio above: without
+// the key the tab just stays empty instead of crashing.
+// ponytail: endpoint paths below are Instantly's documented v2 API shape,
+// unverified against a live key as of writing — check the first real pull's
+// console output against actual Instantly docs before trusting the numbers.
+const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY || '';
+const INSTANTLY_BASE = 'https://api.instantly.ai/api/v2';
+if (!INSTANTLY_API_KEY) console.warn('cold email pull disabled — INSTANTLY_API_KEY not configured');
+
+async function instantlyGet(path) {
+  const res = await fetch(INSTANTLY_BASE + path, { headers: { Authorization: 'Bearer ' + INSTANTLY_API_KEY } });
+  if (!res.ok) throw new Error('Instantly API ' + res.status + ' on ' + path);
+  return res.json();
+}
+
+let coldEmailPullRunning = false;
+async function pullColdEmailStats() {
+  if (!INSTANTLY_API_KEY || coldEmailPullRunning) return;
+  coldEmailPullRunning = true;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const campaignsResp = await instantlyGet('/campaigns');
+    const campaigns = campaignsResp.items || campaignsResp || [];
+    const t = now();
+    const upsertDaily = db.prepare(`
+      INSERT INTO cold_email_daily (id, user_id, date, campaign_id, campaign_name, sent, opens, replies, bounces, unread_replies, updated_at)
+      VALUES (?, 'owner', ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      ON CONFLICT(user_id, date, campaign_id) DO UPDATE SET
+        campaign_name=excluded.campaign_name, sent=excluded.sent, opens=excluded.opens,
+        replies=excluded.replies, bounces=excluded.bounces, updated_at=excluded.updated_at
+    `);
+    for (const c of campaigns) {
+      let daily = [];
+      try {
+        const analytics = await instantlyGet(`/campaigns/analytics/daily?campaign_id=${c.id}&start_date=${startDate}&end_date=${today}`);
+        daily = Array.isArray(analytics) ? analytics : (analytics.items || []);
+      } catch (e) {
+        console.warn('cold email: daily analytics failed for campaign', c.id, e.message);
+        continue;
+      }
+      for (const d of daily) {
+        upsertDaily.run(c.id + ':' + d.date, d.date, c.id, c.name || '',
+          d.sent || 0, d.opened ?? d.opens ?? 0, d.replies ?? d.reply_count ?? 0, d.bounced ?? d.bounces ?? 0, t);
+      }
+    }
+    try {
+      const unread = await instantlyGet('/emails/unread/count');
+      const count = unread.count ?? unread.unread_count ?? 0;
+      // This endpoint gives one workspace-wide number, not per-campaign — stash
+      // it against today's most-recently-touched campaign row rather than
+      // invent a campaign-less row the UI has no place to display.
+      db.prepare(`UPDATE cold_email_daily SET unread_replies=? WHERE user_id='owner' AND date=? AND campaign_id = (
+        SELECT campaign_id FROM cold_email_daily WHERE user_id='owner' AND date=? ORDER BY updated_at DESC LIMIT 1
+      )`).run(count, today, today);
+    } catch (e) { console.warn('cold email: unread count failed', e.message); }
+
+    try {
+      const accountsResp = await instantlyGet('/accounts');
+      const accounts = accountsResp.items || accountsResp || [];
+      const upsertAcct = db.prepare(`
+        INSERT INTO cold_email_account_health (account_email, user_id, warmup_status, ctd_status, daily_limit, updated_at)
+        VALUES (?, 'owner', ?, ?, ?, ?)
+        ON CONFLICT(user_id, account_email) DO UPDATE SET
+          warmup_status=excluded.warmup_status, ctd_status=excluded.ctd_status,
+          daily_limit=excluded.daily_limit, updated_at=excluded.updated_at
+      `);
+      for (const a of accounts) {
+        upsertAcct.run(a.email, a.warmup_status || (a.warmup && a.warmup.status) || '',
+          a.stat_ctd || a.ctd_status || '', a.daily_limit || null, t);
+      }
+    } catch (e) { console.warn('cold email: account health failed', e.message); }
+  } catch (e) {
+    console.warn('cold email pull failed:', e.message);
+  } finally {
+    coldEmailPullRunning = false;
+  }
+}
+setInterval(() => pullColdEmailStats().catch(err => console.warn('cold email pull tick failed:', err.message)), 60 * 60 * 1000);
+pullColdEmailStats().catch(err => console.warn('cold email startup pull failed:', err.message));
+
+app.get('/api/cold-email/daily', auth, (req, res) => {
+  const days = Math.min(parseInt(req.query.days, 10) || 30, 365);
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const rows = db.prepare(`SELECT date, campaign_id, campaign_name, sent, opens, replies, bounces, unread_replies
+    FROM cold_email_daily WHERE user_id=? AND date>=? ORDER BY date ASC`).all(req.userId, since);
+  res.json(rows);
+});
+
+app.get('/api/cold-email/accounts', auth, (req, res) => {
+  const rows = db.prepare(`SELECT account_email, warmup_status, ctd_status, daily_limit, updated_at
+    FROM cold_email_account_health WHERE user_id=? ORDER BY account_email ASC`).all(req.userId);
+  res.json(rows);
+});
+
+app.post('/api/cold-email/pull', auth, async (req, res) => {
+  if (!INSTANTLY_API_KEY) return res.status(503).json({ error: 'INSTANTLY_API_KEY not configured' });
+  await pullColdEmailStats();
   res.json({ ok: true });
 });
 
