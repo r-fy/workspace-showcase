@@ -317,6 +317,7 @@ function switchTab(tab) {
   document.getElementById('calls-view')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
   document.getElementById('audits-view')?.classList.toggle('hidden', tab !== 'audits');
+  document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
@@ -2872,6 +2873,7 @@ const COMMANDS = [
   { label: 'New Reminder',         icon: '⏰', action: () => { switchTab('calendar'); openReminderModal(); } },
   { label: 'Switch to Calls',      icon: '📞', action: () => switchTab('calls') },
   { label: 'New Call',             icon: '📞', action: () => { switchTab('calls'); setTimeout(() => document.getElementById('dial-number')?.focus(), 50); } },
+  { label: 'Switch to Tourist',    icon: '🧭', action: () => switchTab('tourist') },
   { label: 'Open Trash',           icon: '🗑', action: () => switchTab('trash') },
 ];
 
@@ -4218,6 +4220,633 @@ async function refreshAuditPreview() {
   } catch (e) {}
 }
 
+
+// ── Tourist (unit converter, migrated from tourist.rfisolns.org) ──
+// Self-contained: own IIFE so its generic helper names (clamp, r1, r2...)
+// never touch the rest of the app. Markup lives in #tourist-view; this runs
+// once at load same as the rest of the app's event wiring.
+(function () {
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function r1(n) { return Math.round(n * 10) / 10; }
+  function r0(n) { return Math.round(n); }
+
+  const NUM_INPUT_IDS = ['f-input','c-input','ft-input','in-input','cm-input',
+    'mi-input','km-input','lb-input','kg-input','usd-input','fx-input',
+    'sqft-input','sqm-input'];
+  function autoFit(input) {
+    if (!input) return;
+    const len = (input.value || '').length || 1;
+    const w = input.clientWidth || 100;
+    const base = window.matchMedia('(max-width: 700px)').matches ? 40 : 44;
+    input.style.fontSize = clamp(Math.floor((w - 6) / (len * 0.6)), 15, base) + 'px';
+  }
+  function fitAll() { NUM_INPUT_IDS.forEach(id => autoFit(document.getElementById(id))); }
+  document.addEventListener('input', fitAll);
+  window.addEventListener('resize', fitAll);
+
+  (function () {
+    const ORDER_KEY = 'tourist-order';
+    const mainEl = document.querySelector('.tourist-main');
+    if (!mainEl) return;
+
+    let order;
+    try { order = JSON.parse(localStorage.getItem(ORDER_KEY) || 'null'); } catch (e) { order = null; }
+    if (Array.isArray(order)) {
+      order.forEach(id => { const el = document.getElementById(id); if (el) mainEl.appendChild(el); });
+    }
+
+    function saveOrder() {
+      localStorage.setItem(ORDER_KEY,
+        JSON.stringify([...mainEl.querySelectorAll('.converter')].map(el => el.id)));
+    }
+
+    let dragEl = null;
+    mainEl.querySelectorAll('.conv-label').forEach(label => {
+      label.addEventListener('dragstart', e => {
+        dragEl = label.closest('.converter');
+        dragEl.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', dragEl.id);
+      });
+      label.addEventListener('dragend', () => {
+        if (dragEl) dragEl.classList.remove('dragging');
+        dragEl = null;
+        saveOrder();
+      });
+    });
+    mainEl.addEventListener('dragover', e => {
+      if (!dragEl) return;
+      e.preventDefault();
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.converter');
+      if (!target || target === dragEl) return;
+      const r = target.getBoundingClientRect();
+      const before = (e.clientX - r.left) < r.width / 2;
+      mainEl.insertBefore(dragEl, before ? target : target.nextSibling);
+    });
+  })();
+
+  class VSlider {
+    constructor(trackEl, thumbEl, min, max, initVal, onChange, opts) {
+      this.track   = trackEl;
+      this.thumb   = thumbEl;
+      this.min     = min;
+      this.max     = max;
+      this.val     = initVal;
+      this.onChange = onChange;
+      this.log     = !!(opts && opts.log);
+      this._dragging = false;
+      this._bind();
+      this._render();
+    }
+
+    setValue(v) {
+      this.val = clamp(v, this.min, this.max);
+      this._render();
+    }
+
+    _pct(v) {
+      if (this.log) {
+        const lo = Math.log(this.min), hi = Math.log(this.max);
+        return (Math.log(clamp(v, this.min, this.max)) - lo) / (hi - lo);
+      }
+      return (v - this.min) / (this.max - this.min);
+    }
+    _size()    { return this.track.offsetHeight; }
+    _vToPos(v) { return (1 - this._pct(v)) * this._size(); }
+    _posToV(p) {
+      const f = clamp(1 - p / this._size(), 0, 1);
+      if (this.log) {
+        const lo = Math.log(this.min), hi = Math.log(this.max);
+        return Math.exp(lo + f * (hi - lo));
+      }
+      return this.min + f * (this.max - this.min);
+    }
+
+    _render() {
+      this.thumb.style.top  = this._vToPos(this.val) + 'px';
+      this.thumb.style.left = '50%';
+    }
+
+    _relY(e) {
+      const r = this.track.getBoundingClientRect();
+      return (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+    }
+
+    _bind() {
+      const start = (e) => {
+        this._dragging = true;
+        this.thumb.classList.add('dragging');
+        this.val = this._posToV(this._relY(e));
+        this._render();
+        this.onChange(this.val);
+        e.preventDefault();
+      };
+      const move = (e) => {
+        if (!this._dragging) return;
+        this.val = this._posToV(this._relY(e));
+        this._render();
+        this.onChange(this.val);
+        e.preventDefault();
+      };
+      const end = () => {
+        this._dragging = false;
+        this.thumb.classList.remove('dragging');
+      };
+      this.track.addEventListener('mousedown',  start);
+      document.addEventListener('mousemove',    move);
+      document.addEventListener('mouseup',      end);
+      this.track.addEventListener('touchstart', start, { passive: false });
+      document.addEventListener('touchmove',    move,  { passive: false });
+      document.addEventListener('touchend',     end);
+    }
+  }
+
+  function buildMarkers(container, refs, min, max, side, log) {
+    if (!container) return;
+    container.innerHTML = '';
+    const total = max - min;
+    const lo = Math.log(min), hi = Math.log(max);
+    refs.forEach(ref => {
+      const el = document.createElement('div');
+      el.className = 'marker';
+      el.dataset.v = ref.v;
+      const pct = log ? (Math.log(ref.v) - lo) / (hi - lo) : (ref.v - min) / total;
+      el.style.top = ((1 - pct) * 100) + '%';
+      const tick = '<div class="marker-tick"></div>';
+      const text = `<div class="marker-text">${ref.label.replace('\n','<br>')}</div>`;
+      el.innerHTML = side === 'left' ? text + tick : tick + text;
+      container.appendChild(el);
+    });
+  }
+
+  function highlightMarkers(leftContainer, rightContainer, val, rightRefs, threshold) {
+    [leftContainer, rightContainer].forEach(c =>
+      c.querySelectorAll('.marker').forEach(el =>
+        el.classList.toggle('active', Math.abs(parseFloat(el.dataset.v) - val) < threshold)
+      )
+    );
+    const m = rightRefs.find(r => Math.abs(r.v - val) < threshold);
+    return m ? (m.note || '') : '';
+  }
+
+  const touristView = document.getElementById('tourist-view');
+  if (!touristView) return;
+
+  // TEMPERATURE
+  const TEMP_MIN = -40, TEMP_MAX = 120;
+  const tempLeftRefs = [
+    { v: 120,  label: '48.9°C' }, { v: 98.6, label: '37°C' }, { v: 72, label: '22°C' },
+    { v: 32,   label: '0°C'    }, { v: -40,  label: '−40°C' },
+  ];
+  const tempRightRefs = [
+    { v: 120,  label: '120°F',  note: 'Upper range' },
+    { v: 98.6, label: '98.6°F', note: 'Normal body temperature' },
+    { v: 72,   label: '72°F',   note: 'Room temperature' },
+    { v: 32,   label: '32°F',   note: 'Freezing point of water' },
+    { v: -40,  label: '−40°F',  note: '−40° same in both scales' },
+  ];
+  const tempMarkersLeft  = document.getElementById('temp-markers-left');
+  const tempMarkersRight = document.getElementById('temp-markers-right');
+  const tempNote         = document.getElementById('temp-note');
+  const fInput = document.getElementById('f-input'), cInput = document.getElementById('c-input');
+  buildMarkers(tempMarkersLeft,  tempLeftRefs,  TEMP_MIN, TEMP_MAX, 'left');
+  buildMarkers(tempMarkersRight, tempRightRefs, TEMP_MIN, TEMP_MAX, 'right');
+  function fToC(f) { return (f - 32) * 5 / 9; }
+  function cToF(c) { return c * 9 / 5 + 32; }
+  let tempVal = 72;
+  const tempSlider = new VSlider(document.getElementById('temp-track'), document.getElementById('temp-thumb'),
+    TEMP_MIN, TEMP_MAX, tempVal, v => { tempVal = v; renderTemp(); });
+  function renderTemp() {
+    fInput.value = r1(tempVal); cInput.value = r1(fToC(tempVal)); tempSlider.setValue(tempVal);
+    tempNote.textContent = highlightMarkers(tempMarkersLeft, tempMarkersRight, tempVal, tempRightRefs, 3);
+  }
+  fInput.addEventListener('input', () => {
+    if (fInput.value === '') return;
+    tempVal = parseFloat(fInput.value);
+    cInput.value = r1(fToC(tempVal)); tempSlider.setValue(tempVal);
+    tempNote.textContent = highlightMarkers(tempMarkersLeft, tempMarkersRight, tempVal, tempRightRefs, 3);
+  });
+  cInput.addEventListener('input', () => {
+    if (cInput.value === '') return;
+    tempVal = cToF(parseFloat(cInput.value));
+    fInput.value = r1(tempVal); tempSlider.setValue(tempVal);
+    tempNote.textContent = highlightMarkers(tempMarkersLeft, tempMarkersRight, tempVal, tempRightRefs, 3);
+  });
+  renderTemp();
+
+  // HEIGHT (slider unit: total inches)
+  const H_MIN = 48, H_MAX = 84;
+  const heightLeftRefs = [
+    { v: 84, label: '213 cm' }, { v: 72, label: '183 cm' }, { v: 67, label: '170 cm' },
+    { v: 60, label: '152 cm' }, { v: 48, label: '122 cm' },
+  ];
+  const heightRightRefs = [
+    { v: 84, label: "7'0\"", note: '7 feet' }, { v: 72, label: "6'0\"", note: '6 feet' },
+    { v: 67, label: "5'7\"", note: 'Global avg. height' }, { v: 60, label: "5'0\"", note: '5 feet' },
+    { v: 48, label: "4'0\"", note: '4 feet' },
+  ];
+  const heightMarkersLeft  = document.getElementById('height-markers-left');
+  const heightMarkersRight = document.getElementById('height-markers-right');
+  const heightNote = document.getElementById('height-note');
+  const ftInput = document.getElementById('ft-input'), inInput = document.getElementById('in-input'), cmInput = document.getElementById('cm-input');
+  buildMarkers(heightMarkersLeft,  heightLeftRefs,  H_MIN, H_MAX, 'left');
+  buildMarkers(heightMarkersRight, heightRightRefs, H_MIN, H_MAX, 'right');
+  function inchesToCm(i) { return i * 2.54; }
+  function cmToInches(c) { return c / 2.54; }
+  let heightVal = 67;
+  const heightSlider = new VSlider(document.getElementById('height-track'), document.getElementById('height-thumb'),
+    H_MIN, H_MAX, heightVal, v => { heightVal = v; renderHeight(); });
+  function renderHeight() {
+    const ft = Math.floor(heightVal / 12);
+    const inches = Math.round(heightVal % 12);
+    ftInput.value  = inches === 12 ? ft + 1 : ft;
+    inInput.value  = inches === 12 ? 0 : inches;
+    cmInput.value  = r0(inchesToCm(heightVal));
+    heightSlider.setValue(heightVal);
+    heightNote.textContent = highlightMarkers(heightMarkersLeft, heightMarkersRight, heightVal, heightRightRefs, 1.5);
+  }
+  function normalizeAndSetHeight() {
+    let ft  = parseInt(ftInput.value) || 0;
+    let ins = parseInt(inInput.value) || 0;
+    if (ins >= 12) { ft += Math.floor(ins / 12); ins = ins % 12; }
+    if (ins < 0)   { ft += Math.floor(ins / 12); ins = ((ins % 12) + 12) % 12; }
+    heightVal = ft * 12 + ins;
+    ftInput.value = Math.floor(heightVal / 12);
+    inInput.value = Math.round(heightVal % 12);
+    cmInput.value = r0(inchesToCm(heightVal));
+    heightSlider.setValue(heightVal);
+    heightNote.textContent = highlightMarkers(heightMarkersLeft, heightMarkersRight, heightVal, heightRightRefs, 1.5);
+  }
+  ftInput.addEventListener('input', normalizeAndSetHeight);
+  inInput.addEventListener('input', () => {
+    const ft  = parseInt(ftInput.value) || 0;
+    let ins   = parseInt(inInput.value);
+    if (isNaN(ins)) return;
+    if (ins >= 12) { normalizeAndSetHeight(); return; }
+    heightVal = ft * 12 + ins;
+    cmInput.value = r0(inchesToCm(heightVal));
+    heightSlider.setValue(heightVal);
+    heightNote.textContent = highlightMarkers(heightMarkersLeft, heightMarkersRight, heightVal, heightRightRefs, 1.5);
+  });
+  inInput.addEventListener('blur', normalizeAndSetHeight);
+  ftInput.addEventListener('blur', normalizeAndSetHeight);
+  cmInput.addEventListener('input', () => {
+    if (cmInput.value === '') return;
+    heightVal = cmToInches(parseFloat(cmInput.value));
+    ftInput.value = Math.floor(heightVal / 12);
+    inInput.value = Math.round(heightVal % 12);
+    heightSlider.setValue(heightVal);
+    heightNote.textContent = highlightMarkers(heightMarkersLeft, heightMarkersRight, heightVal, heightRightRefs, 1.5);
+  });
+  renderHeight();
+
+  // DISTANCE (slider unit: miles)
+  const D_MIN = 0, D_MAX = 100;
+  const distLeftRefs = [
+    { v: 100, label: '161 km' }, { v: 50, label: '80 km' }, { v: 26.2, label: '42 km' }, { v: 10, label: '16 km' },
+  ];
+  const distRightRefs = [
+    { v: 100, label: '100 mi', note: '100 miles' }, { v: 50, label: '50 mi', note: '50 miles' },
+    { v: 26.2, label: '26.2 mi', note: 'Marathon distance' }, { v: 10, label: '10 mi', note: '10 miles' },
+  ];
+  const distMarkersLeft  = document.getElementById('dist-markers-left');
+  const distMarkersRight = document.getElementById('dist-markers-right');
+  const distNote = document.getElementById('dist-note');
+  const miInput = document.getElementById('mi-input'), kmInput = document.getElementById('km-input');
+  buildMarkers(distMarkersLeft,  distLeftRefs,  D_MIN, D_MAX, 'left');
+  buildMarkers(distMarkersRight, distRightRefs, D_MIN, D_MAX, 'right');
+  function miToKm(m) { return m * 1.60934; }
+  function kmToMi(k) { return k / 1.60934; }
+  let distVal = 5;
+  const distSlider = new VSlider(document.getElementById('dist-track'), document.getElementById('dist-thumb'),
+    D_MIN, D_MAX, distVal, v => { distVal = v; renderDist(); });
+  function renderDist() {
+    miInput.value = r1(distVal); kmInput.value = r1(miToKm(distVal)); distSlider.setValue(distVal);
+    distNote.textContent = highlightMarkers(distMarkersLeft, distMarkersRight, distVal, distRightRefs, 2);
+  }
+  miInput.addEventListener('input', () => {
+    if (miInput.value === '') return;
+    distVal = parseFloat(miInput.value);
+    kmInput.value = r1(miToKm(distVal)); distSlider.setValue(distVal);
+    distNote.textContent = highlightMarkers(distMarkersLeft, distMarkersRight, distVal, distRightRefs, 2);
+  });
+  kmInput.addEventListener('input', () => {
+    if (kmInput.value === '') return;
+    distVal = kmToMi(parseFloat(kmInput.value));
+    miInput.value = r1(distVal); distSlider.setValue(distVal);
+    distNote.textContent = highlightMarkers(distMarkersLeft, distMarkersRight, distVal, distRightRefs, 2);
+  });
+  renderDist();
+
+  // WEIGHT (slider unit: pounds)
+  const W_MIN = 0, W_MAX = 300;
+  const weightLeftRefs = [
+    { v: 300, label: '136 kg' }, { v: 220, label: '100 kg' }, { v: 165, label: '75 kg' },
+    { v: 110, label: '50 kg' }, { v: 0, label: '0 kg' },
+  ];
+  const weightRightRefs = [
+    { v: 300, label: '300 lb', note: '300 pounds' }, { v: 220, label: '220 lb', note: '220 pounds' },
+    { v: 165, label: '165 lb', note: 'Global avg. adult weight' }, { v: 110, label: '110 lb', note: '110 pounds' },
+    { v: 0, label: '0 lb', note: '' },
+  ];
+  const weightMarkersLeft  = document.getElementById('weight-markers-left');
+  const weightMarkersRight = document.getElementById('weight-markers-right');
+  const weightNote = document.getElementById('weight-note');
+  const lbInput = document.getElementById('lb-input'), kgInput = document.getElementById('kg-input');
+  buildMarkers(weightMarkersLeft,  weightLeftRefs,  W_MIN, W_MAX, 'left');
+  buildMarkers(weightMarkersRight, weightRightRefs, W_MIN, W_MAX, 'right');
+  function lbToKg(l) { return l * 0.453592; }
+  function kgToLb(k) { return k / 0.453592; }
+  let weightVal = 165;
+  const weightSlider = new VSlider(document.getElementById('weight-track'), document.getElementById('weight-thumb'),
+    W_MIN, W_MAX, weightVal, v => { weightVal = v; renderWeight(); });
+  function renderWeight() {
+    lbInput.value = r1(weightVal); kgInput.value = r1(lbToKg(weightVal)); weightSlider.setValue(weightVal);
+    weightNote.textContent = highlightMarkers(weightMarkersLeft, weightMarkersRight, weightVal, weightRightRefs, 3);
+  }
+  lbInput.addEventListener('input', () => {
+    if (lbInput.value === '') return;
+    weightVal = parseFloat(lbInput.value);
+    kgInput.value = r1(lbToKg(weightVal)); weightSlider.setValue(weightVal);
+    weightNote.textContent = highlightMarkers(weightMarkersLeft, weightMarkersRight, weightVal, weightRightRefs, 3);
+  });
+  kgInput.addEventListener('input', () => {
+    if (kgInput.value === '') return;
+    weightVal = kgToLb(parseFloat(kgInput.value));
+    lbInput.value = r1(weightVal); weightSlider.setValue(weightVal);
+    weightNote.textContent = highlightMarkers(weightMarkersLeft, weightMarkersRight, weightVal, weightRightRefs, 3);
+  });
+  renderWeight();
+
+  // CURRENCY (slider unit: US dollars · live exchange rates)
+  const C_MIN = 1, C_MAX = 500;
+  const CUR_MARKS = [1, 5, 20, 100, 500];
+  const FX_FALLBACK = {
+    USD:1, EUR:0.92, GBP:0.79, JPY:157, CNY:7.2, MXN:17, CAD:1.37, AUD:1.52,
+    CHF:0.89, INR:83, THB:36, KRW:1370, BRL:5.4, ZAR:18.5, TRY:32, AED:3.67,
+    SGD:1.35, HKD:7.8, NZD:1.64, SEK:10.5, NOK:10.7, DKK:6.9, PLN:4.0, CZK:23,
+    VND:25400, IDR:16200, PHP:58, MYR:4.7, EGP:48, ARS:900, ILS:3.7, CLP:940,
+    COP:4000, ISK:138, HUF:360,
+    AMD:387, GEL:2.7, AZN:1.7, RUB:88, UAH:41, KZT:480, RSD:108, RON:4.6,
+    BGN:1.8, HRK:6.9, MAD:9.9, TND:3.1, JOD:0.71, SAR:3.75, QAR:3.64, KWD:0.31,
+    LKR:300, NPR:133, PKR:278, BDT:118, TWD:32, MOP:8,
+  };
+  const CURRENCY_NAMES = {
+    USD:'US Dollar', EUR:'Euro', GBP:'British Pound', JPY:'Japanese Yen',
+    CNY:'Chinese Yuan', AUD:'Australian Dollar', CAD:'Canadian Dollar',
+    CHF:'Swiss Franc', HKD:'Hong Kong Dollar', SGD:'Singapore Dollar',
+    NZD:'New Zealand Dollar', SEK:'Swedish Krona', NOK:'Norwegian Krone',
+    DKK:'Danish Krone', INR:'Indian Rupee', MXN:'Mexican Peso', BRL:'Brazilian Real',
+    ZAR:'South African Rand', RUB:'Russian Ruble', TRY:'Turkish Lira',
+    KRW:'South Korean Won', THB:'Thai Baht', IDR:'Indonesian Rupiah',
+    MYR:'Malaysian Ringgit', PHP:'Philippine Peso', VND:'Vietnamese Dong',
+    PLN:'Polish Zloty', CZK:'Czech Koruna', HUF:'Hungarian Forint',
+    ILS:'Israeli Shekel', AED:'UAE Dirham', SAR:'Saudi Riyal', QAR:'Qatari Riyal',
+    KWD:'Kuwaiti Dinar', BHD:'Bahraini Dinar', OMR:'Omani Rial', JOD:'Jordanian Dinar',
+    EGP:'Egyptian Pound', MAD:'Moroccan Dirham', TND:'Tunisian Dinar',
+    DZD:'Algerian Dinar', NGN:'Nigerian Naira', KES:'Kenyan Shilling',
+    GHS:'Ghanaian Cedi', UGX:'Ugandan Shilling', TZS:'Tanzanian Shilling',
+    ETB:'Ethiopian Birr', XOF:'West African CFA Franc', XAF:'Central African CFA Franc',
+    ARS:'Argentine Peso', CLP:'Chilean Peso', COP:'Colombian Peso', PEN:'Peruvian Sol',
+    UYU:'Uruguayan Peso', BOB:'Bolivian Boliviano', PYG:'Paraguayan Guarani',
+    VES:'Venezuelan Bolivar', CRC:'Costa Rican Colon', GTQ:'Guatemalan Quetzal',
+    DOP:'Dominican Peso', JMD:'Jamaican Dollar', TTD:'Trinidad & Tobago Dollar',
+    BBD:'Barbadian Dollar', BSD:'Bahamian Dollar', BMD:'Bermudian Dollar',
+    XCD:'East Caribbean Dollar', ISK:'Icelandic Krona', RON:'Romanian Leu',
+    BGN:'Bulgarian Lev', HRK:'Croatian Kuna', RSD:'Serbian Dinar',
+    UAH:'Ukrainian Hryvnia', GEL:'Georgian Lari', AMD:'Armenian Dram',
+    AZN:'Azerbaijani Manat', KZT:'Kazakhstani Tenge', UZS:'Uzbekistani Som',
+    KGS:'Kyrgystani Som', TJS:'Tajikistani Somoni', TMT:'Turkmenistani Manat',
+    BYN:'Belarusian Ruble', MDL:'Moldovan Leu', ALL:'Albanian Lek',
+    MKD:'Macedonian Denar', BAM:'Bosnia-Herzegovina Mark', TWD:'Taiwan Dollar',
+    PKR:'Pakistani Rupee', BDT:'Bangladeshi Taka', LKR:'Sri Lankan Rupee',
+    NPR:'Nepalese Rupee', MMK:'Myanmar Kyat', KHR:'Cambodian Riel',
+    LAK:'Laotian Kip', MNT:'Mongolian Tugrik', BND:'Brunei Dollar',
+    MOP:'Macanese Pataca', FJD:'Fijian Dollar', PGK:'Papua New Guinean Kina',
+    IRR:'Iranian Rial', IQD:'Iraqi Dinar', LBP:'Lebanese Pound', SYP:'Syrian Pound',
+    YER:'Yemeni Rial', AFN:'Afghan Afghani', LYD:'Libyan Dinar', SDG:'Sudanese Pound',
+    AOA:'Angolan Kwanza', ZMW:'Zambian Kwacha', MWK:'Malawian Kwacha',
+    MZN:'Mozambican Metical', BWP:'Botswanan Pula', NAD:'Namibian Dollar',
+    MUR:'Mauritian Rupee', SCR:'Seychellois Rupee', MGA:'Malagasy Ariary',
+    RWF:'Rwandan Franc', CDF:'Congolese Franc', GNF:'Guinean Franc',
+    SLL:'Sierra Leonean Leone', GMD:'Gambian Dalasi', LRD:'Liberian Dollar',
+    SOS:'Somali Shilling', DJF:'Djiboutian Franc', ERN:'Eritrean Nakfa',
+    SSP:'South Sudanese Pound', BIF:'Burundian Franc', CVE:'Cape Verdean Escudo',
+    KMF:'Comorian Franc', SZL:'Eswatini Lilangeni', LSL:'Lesotho Loti',
+    HNL:'Honduran Lempira', NIO:'Nicaraguan Cordoba', PAB:'Panamanian Balboa',
+    HTG:'Haitian Gourde', SRD:'Surinamese Dollar', GYD:'Guyanaese Dollar',
+    BZD:'Belize Dollar', AWG:'Aruban Florin', ANG:'Netherlands Antillean Guilder',
+    KYD:'Cayman Islands Dollar', BTN:'Bhutanese Ngultrum', MVR:'Maldivian Rufiyaa',
+    WST:'Samoan Tala', TOP:'Tongan Paanga', VUV:'Vanuatu Vatu', SBD:'Solomon Islands Dollar',
+    XPF:'CFP Franc', GIP:'Gibraltar Pound', FKP:'Falkland Islands Pound',
+    SHP:'Saint Helena Pound', JEP:'Jersey Pound', GGP:'Guernsey Pound',
+    IMP:'Isle of Man Pound', FOK:'Faroese Krona', KID:'Kiribati Dollar',
+    TVD:'Tuvaluan Dollar', ZWL:'Zimbabwean Dollar',
+  };
+  const FX_CACHE_KEY = 'tourist-fx-cache';
+  let fxRates = null, fxAsOf = '', fxStale = true;
+  const usdInput = document.getElementById('usd-input'), fxInput = document.getElementById('fx-input');
+  const curNote = document.getElementById('cur-note');
+  const curMarkersLeft = document.getElementById('cur-markers-left'), curMarkersRight = document.getElementById('cur-markers-right');
+  const curCombo = document.getElementById('cur-combo'), curSearch = document.getElementById('cur-search'), curList = document.getElementById('cur-list');
+  let curCode = localStorage.getItem('tourist-fx-cur') || 'EUR';
+  function curName(code) { return CURRENCY_NAMES[code] || code; }
+  function curLabel(code) { return code + ' · ' + curName(code); }
+  function currencyCodes() {
+    const src = fxRates || FX_FALLBACK;
+    return Object.keys(src).sort((a, b) => curName(a).localeCompare(curName(b)));
+  }
+  function renderComboList(query) {
+    const q = (query || '').trim().toUpperCase();
+    const codes = currencyCodes().filter(code => !q || code.includes(q) || curName(code).toUpperCase().includes(q));
+    curList.innerHTML = '';
+    if (!codes.length) {
+      const e = document.createElement('div'); e.className = 'combo-empty'; e.textContent = 'No match'; curList.appendChild(e); return;
+    }
+    codes.slice(0, 80).forEach(code => {
+      const it = document.createElement('div');
+      it.className = 'combo-item' + (code === curCode ? ' sel' : '');
+      it.innerHTML = '<span class="code">' + code + '</span>' + curName(code);
+      it.addEventListener('pointerdown', (ev) => { ev.preventDefault(); selectCode(code); });
+      curList.appendChild(it);
+    });
+  }
+  function openCombo() { curCombo.classList.add('open'); curSearch.value = ''; curSearch.placeholder = 'Type to search…'; renderComboList(''); }
+  function closeCombo() { curCombo.classList.remove('open'); curSearch.value = curLabel(curCode); }
+  function selectCode(code) {
+    curCode = code; localStorage.setItem('tourist-fx-cur', curCode);
+    closeCombo(); curSearch.blur(); buildCurMarkers(); renderCur();
+  }
+  curSearch.addEventListener('focus', openCombo);
+  curSearch.addEventListener('input', () => renderComboList(curSearch.value));
+  curSearch.addEventListener('blur', () => setTimeout(closeCombo, 150));
+  curSearch.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      const first = curList.querySelector('.combo-item');
+      if (first) { ev.preventDefault(); selectCode(first.querySelector('.code').textContent); }
+    } else if (ev.key === 'Escape') { closeCombo(); curSearch.blur(); }
+  });
+  curSearch.value = curLabel(curCode);
+  function r2(n) { return Math.round(n * 100) / 100; }
+  function fxRate() { return fxRates ? fxRates[curCode] : null; }
+  function fxDecimals(code) {
+    try { return new Intl.NumberFormat('en-US', { style:'currency', currency:code }).resolvedOptions().maximumFractionDigits; }
+    catch { return 2; }
+  }
+  function roundFx(amount, code) { const f = Math.pow(10, fxDecimals(code)); return Math.round(amount * f) / f; }
+  function fmtFxMark(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 10000)   return Math.round(n / 1000) + 'k';
+    if (n >= 1000)    return Math.round(n).toLocaleString('en-US');
+    if (n >= 1)       return (Math.round(n * 10) / 10).toLocaleString('en-US');
+    return String(Math.round(n * 100) / 100);
+  }
+  let usdVal = 20;
+  const curSlider = new VSlider(document.getElementById('cur-track'), document.getElementById('cur-thumb'),
+    C_MIN, C_MAX, usdVal, v => { usdVal = v; renderCur(); }, { log: true });
+  function buildCurMarkers() {
+    const rate = fxRate();
+    const rightRefs = CUR_MARKS.map(v => ({ v, label: '$' + v }));
+    const leftRefs  = CUR_MARKS.map(v => ({ v, label: rate ? fmtFxMark(v * rate) + '\n' + curCode : '—' }));
+    buildMarkers(curMarkersLeft,  leftRefs,  C_MIN, C_MAX, 'left',  true);
+    buildMarkers(curMarkersRight, rightRefs, C_MIN, C_MAX, 'right', true);
+  }
+  function highlightCurMarkers() {
+    const lo = Math.log(C_MIN), hi = Math.log(C_MAX);
+    const valPct = (Math.log(clamp(usdVal, C_MIN, C_MAX)) - lo) / (hi - lo);
+    [curMarkersLeft, curMarkersRight].forEach(c =>
+      c.querySelectorAll('.marker').forEach(el => {
+        const mp = (Math.log(parseFloat(el.dataset.v)) - lo) / (hi - lo);
+        el.classList.toggle('active', Math.abs(mp - valPct) < 0.03);
+      })
+    );
+  }
+  function fxNoteText() {
+    const rate = fxRate();
+    if (!rate) return 'Exchange rates unavailable — check connection';
+    const shown = rate >= 100 ? Math.round(rate).toLocaleString('en-US') : (Math.round(rate * 100) / 100).toLocaleString('en-US');
+    let s = '1 USD = ' + shown + ' ' + curCode;
+    if (fxAsOf) s += ' · ' + fxAsOf;
+    if (fxStale) s += ' · offline';
+    return s;
+  }
+  function autoFitCur(input) {
+    const len = (input.value || '').length || 1;
+    const w = input.clientWidth || 120;
+    const base = window.matchMedia('(max-width: 700px)').matches ? 40 : 44;
+    let size = Math.floor((w - 6) / (len * 0.6));
+    input.style.fontSize = clamp(size, 15, base) + 'px';
+  }
+  function renderCur() {
+    const rate = fxRate();
+    usdInput.value = r2(usdVal);
+    fxInput.value  = rate ? roundFx(usdVal * rate, curCode) : '';
+    curSlider.setValue(usdVal);
+    autoFitCur(usdInput); autoFitCur(fxInput);
+    highlightCurMarkers();
+    curNote.textContent = fxNoteText();
+  }
+  window.addEventListener('resize', () => { autoFitCur(usdInput); autoFitCur(fxInput); });
+  usdInput.addEventListener('input', () => {
+    if (usdInput.value === '') return;
+    usdVal = Math.max(0, parseFloat(usdInput.value) || 0);
+    const rate = fxRate();
+    if (rate) fxInput.value = roundFx(usdVal * rate, curCode);
+    curSlider.setValue(usdVal);
+    autoFitCur(usdInput); autoFitCur(fxInput);
+    highlightCurMarkers();
+    curNote.textContent = fxNoteText();
+  });
+  fxInput.addEventListener('input', () => {
+    if (fxInput.value === '') return;
+    const rate = fxRate();
+    if (!rate) return;
+    usdVal = Math.max(0, (parseFloat(fxInput.value) || 0) / rate);
+    usdInput.value = r2(usdVal);
+    curSlider.setValue(usdVal);
+    autoFitCur(usdInput); autoFitCur(fxInput);
+    highlightCurMarkers();
+    curNote.textContent = fxNoteText();
+  });
+  function applyRates(rates, asOf, stale) {
+    fxRates = rates; fxAsOf = asOf || ''; fxStale = !!stale;
+    buildCurMarkers(); renderCur();
+  }
+  function fmtAsOf(utc) {
+    try { return new Date(utc).toLocaleDateString('en-US', { month:'short', day:'numeric' }); }
+    catch { return ''; }
+  }
+  async function fetchRates() {
+    try {
+      const r = await fetch('https://open.er-api.com/v6/latest/USD');
+      const d = await r.json();
+      if (d && d.result === 'success' && d.rates) {
+        const asOf = fmtAsOf(d.time_last_update_utc);
+        localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ rates: d.rates, asOf }));
+        applyRates(d.rates, asOf, false);
+        return;
+      }
+    } catch (e) {}
+    try {
+      const r = await fetch('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json');
+      const d = await r.json();
+      if (d && d.usd) {
+        const rates = {};
+        for (const k in d.usd) rates[k.toUpperCase()] = d.usd[k];
+        const asOf = d.date ? fmtAsOf(d.date) : '';
+        localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ rates, asOf }));
+        applyRates(rates, asOf, false);
+      }
+    } catch (e) {}
+  }
+  let _cached = null;
+  try { _cached = JSON.parse(localStorage.getItem(FX_CACHE_KEY) || 'null'); } catch (e) {}
+  if (_cached && _cached.rates) applyRates(_cached.rates, _cached.asOf, true);
+  else applyRates(FX_FALLBACK, '', true);
+  fetchRates();
+
+  // AREA (slider unit: square feet)
+  const A_MIN = 0, A_MAX = 1000;
+  const areaLeftRefs = [
+    { v: 1000, label: '93 m²' }, { v: 750, label: '70 m²' }, { v: 500, label: '46 m²' },
+    { v: 250, label: '23 m²' }, { v: 0, label: '0 m²' },
+  ];
+  const areaRightRefs = [
+    { v: 1000, label: '1000 ft²', note: '1000 sq. ft.' }, { v: 750, label: '750 ft²', note: 'Avg. US 1-bed apartment' },
+    { v: 500, label: '500 ft²', note: '500 sq. ft.' }, { v: 250, label: '250 ft²', note: 'Studio apartment' },
+    { v: 0, label: '0 ft²', note: '' },
+  ];
+  const areaMarkersLeft  = document.getElementById('area-markers-left');
+  const areaMarkersRight = document.getElementById('area-markers-right');
+  const areaNote = document.getElementById('area-note');
+  const sqftInput = document.getElementById('sqft-input'), sqmInput = document.getElementById('sqm-input');
+  buildMarkers(areaMarkersLeft,  areaLeftRefs,  A_MIN, A_MAX, 'left');
+  buildMarkers(areaMarkersRight, areaRightRefs, A_MIN, A_MAX, 'right');
+  function sqftToSqm(f) { return f * 0.092903; }
+  function sqmToSqft(m) { return m / 0.092903; }
+  let areaVal = 500;
+  const areaSlider = new VSlider(document.getElementById('area-track'), document.getElementById('area-thumb'),
+    A_MIN, A_MAX, areaVal, v => { areaVal = v; renderArea(); });
+  function renderArea() {
+    sqftInput.value = r1(areaVal); sqmInput.value = r1(sqftToSqm(areaVal)); areaSlider.setValue(areaVal);
+    areaNote.textContent = highlightMarkers(areaMarkersLeft, areaMarkersRight, areaVal, areaRightRefs, 10);
+  }
+  sqftInput.addEventListener('input', () => {
+    if (sqftInput.value === '') return;
+    areaVal = parseFloat(sqftInput.value);
+    sqmInput.value = r1(sqftToSqm(areaVal)); areaSlider.setValue(areaVal);
+    areaNote.textContent = highlightMarkers(areaMarkersLeft, areaMarkersRight, areaVal, areaRightRefs, 10);
+  });
+  sqmInput.addEventListener('input', () => {
+    if (sqmInput.value === '') return;
+    areaVal = sqmToSqft(parseFloat(sqmInput.value));
+    sqftInput.value = r1(areaVal); areaSlider.setValue(areaVal);
+    areaNote.textContent = highlightMarkers(areaMarkersLeft, areaMarkersRight, areaVal, areaRightRefs, 10);
+  });
+  renderArea();
+
+  fitAll();
+})();
 
 // ── Init ───────────────────────────────────────────────────────
 (async () => {

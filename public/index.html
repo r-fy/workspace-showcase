@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=118">
+<link rel="stylesheet" href="/app.css?v=119">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -96,6 +96,11 @@
           <button class="nav-menu-item" data-tab="audits">Audits</button>
           <button class="icon-btn nav-add-btn" id="new-audit-btn" title="New audit">+</button>
         </div>
+        <div class="nav-row" draggable="true" data-tab="tourist">
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="tourist">Tourist</button>
+        </div>
       </div>
       <div id="notes-panel" class="panel-section">
         <div id="tags-bar" class="tags-bar" style="display:none"></div>
@@ -173,6 +178,123 @@
       <div id="audit-editor-area">
         <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
           Select an audit, or hit + to start a new one.
+        </div>
+      </div>
+    </div>
+
+    <!-- Tourist view (unit converter, migrated from tourist.rfisolns.org) -->
+    <div class="view hidden tourist-view" id="tourist-view" style="flex-direction:column;overflow-y:auto;">
+      <div class="tourist-header">
+        <div class="tourist-logo-row">
+          <svg width="30" height="30" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="15" cy="15" r="13.5" stroke="#444" stroke-width="1.2"/>
+            <polygon points="15,3 12.5,15 15,12 17.5,15" fill="#d0d0d0"/>
+            <polygon points="15,27 12.5,15 15,18 17.5,15" fill="#3a3a3a"/>
+            <line x1="2" y1="15" x2="5" y2="15" stroke="#3a3a3a" stroke-width="1.2"/>
+            <line x1="25" y1="15" x2="28" y2="15" stroke="#3a3a3a" stroke-width="1.2"/>
+            <circle cx="15" cy="15" r="2" fill="#555"/>
+          </svg>
+          <h1>Tourist</h1>
+        </div>
+        <span class="tourist-subtitle">Traveler's unit reference</span>
+      </div>
+      <div class="tourist-main">
+        <div class="converter" id="conv-temp">
+          <span class="conv-label" draggable="true">Temperature</span>
+          <div class="slider-area">
+            <div class="markers-left" id="temp-markers-left"></div>
+            <div class="slider-track" id="temp-track"><div class="slider-thumb" id="temp-thumb"></div></div>
+            <div class="markers-right" id="temp-markers-right"></div>
+          </div>
+          <div class="conv-inputs">
+            <div class="input-group"><span class="input-label">Fahrenheit</span><input class="num-input" id="f-input" type="number" step="0.1"></div>
+            <div class="input-group"><span class="input-label">Celsius</span><input class="num-input" id="c-input" type="number" step="0.1"></div>
+          </div>
+          <div class="ref-note" id="temp-note"></div>
+        </div>
+
+        <div class="converter" id="conv-height">
+          <span class="conv-label" draggable="true">Height</span>
+          <div class="slider-area">
+            <div class="markers-left" id="height-markers-left"></div>
+            <div class="slider-track" id="height-track"><div class="slider-thumb" id="height-thumb"></div></div>
+            <div class="markers-right" id="height-markers-right"></div>
+          </div>
+          <div class="conv-inputs">
+            <div class="input-group">
+              <span class="input-label">Feet / Inches</span>
+              <div class="ft-in-row">
+                <input class="num-input" id="ft-input" type="number" min="0" max="9" step="1">
+                <span class="unit-sep">ft</span>
+                <input class="num-input" id="in-input" type="number" min="0" step="1">
+                <span class="unit-sep">in</span>
+              </div>
+            </div>
+            <div class="input-group"><span class="input-label">Centimeters</span><input class="num-input" id="cm-input" type="number" step="1"></div>
+          </div>
+          <div class="ref-note" id="height-note"></div>
+        </div>
+
+        <div class="converter" id="conv-dist">
+          <span class="conv-label" draggable="true">Distance</span>
+          <div class="slider-area">
+            <div class="markers-left" id="dist-markers-left"></div>
+            <div class="slider-track" id="dist-track"><div class="slider-thumb" id="dist-thumb"></div></div>
+            <div class="markers-right" id="dist-markers-right"></div>
+          </div>
+          <div class="conv-inputs">
+            <div class="input-group"><span class="input-label">Miles</span><input class="num-input" id="mi-input" type="number" step="0.1"></div>
+            <div class="input-group"><span class="input-label">Kilometers</span><input class="num-input" id="km-input" type="number" step="0.1"></div>
+          </div>
+          <div class="ref-note" id="dist-note"></div>
+        </div>
+
+        <div class="converter" id="conv-weight">
+          <span class="conv-label" draggable="true">Weight</span>
+          <div class="slider-area">
+            <div class="markers-left" id="weight-markers-left"></div>
+            <div class="slider-track" id="weight-track"><div class="slider-thumb" id="weight-thumb"></div></div>
+            <div class="markers-right" id="weight-markers-right"></div>
+          </div>
+          <div class="conv-inputs">
+            <div class="input-group"><span class="input-label">Pounds</span><input class="num-input" id="lb-input" type="number" step="0.1"></div>
+            <div class="input-group"><span class="input-label">Kilograms</span><input class="num-input" id="kg-input" type="number" step="0.1"></div>
+          </div>
+          <div class="ref-note" id="weight-note"></div>
+        </div>
+
+        <div class="converter" id="conv-cur">
+          <span class="conv-label" draggable="true">Currency</span>
+          <div class="slider-area">
+            <div class="markers-left" id="cur-markers-left"></div>
+            <div class="slider-track" id="cur-track"><div class="slider-thumb" id="cur-thumb"></div></div>
+            <div class="markers-right" id="cur-markers-right"></div>
+          </div>
+          <div class="conv-inputs">
+            <div class="input-group"><span class="input-label">US Dollars</span><input class="num-input" id="usd-input" type="number" min="0" step="1" inputmode="decimal"></div>
+            <div class="input-group">
+              <div class="combo" id="cur-combo">
+                <input class="cur-search" id="cur-search" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Search currency">
+                <div class="combo-list" id="cur-list"></div>
+              </div>
+              <input class="num-input" id="fx-input" type="number" min="0" step="1" inputmode="decimal">
+            </div>
+          </div>
+          <div class="ref-note" id="cur-note"></div>
+        </div>
+
+        <div class="converter" id="conv-area">
+          <span class="conv-label" draggable="true">Area</span>
+          <div class="slider-area">
+            <div class="markers-left" id="area-markers-left"></div>
+            <div class="slider-track" id="area-track"><div class="slider-thumb" id="area-thumb"></div></div>
+            <div class="markers-right" id="area-markers-right"></div>
+          </div>
+          <div class="conv-inputs">
+            <div class="input-group"><span class="input-label">Sq. Feet</span><input class="num-input" id="sqft-input" type="number" step="1"></div>
+            <div class="input-group"><span class="input-label">Sq. Meters</span><input class="num-input" id="sqm-input" type="number" step="0.1"></div>
+          </div>
+          <div class="ref-note" id="area-note"></div>
         </div>
       </div>
     </div>
@@ -439,6 +561,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=134"></script>
+<script src="/app.js?v=135"></script>
 </body>
 </html>
