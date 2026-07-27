@@ -3943,8 +3943,8 @@ function ceCampaignTableHtml(rows) {
 
 function ceAccountTableHtml(accounts) {
   if (!accounts.length) return '<div class="expense-chart-empty">No account health data yet.</div>';
-  return `<table class="ce-table"><thead><tr><th>Inbox</th><th>Warmup</th><th>Status</th><th>Daily limit</th></tr></thead><tbody>
-    ${accounts.map(a => `<tr><td>${escHtml(a.account_email)}</td><td>${escHtml(a.warmup_status || '—')}</td><td>${escHtml(a.ctd_status || '—')}</td><td>${a.daily_limit ?? '—'}</td></tr>`).join('')}
+  return `<table class="ce-table"><thead><tr><th>Inbox</th><th>Warmup score</th><th>Daily limit</th></tr></thead><tbody>
+    ${accounts.map(a => `<tr><td>${escHtml(a.account_email)}</td><td>${a.warmup_score ?? '—'}</td><td>${a.daily_limit ?? '—'}</td></tr>`).join('')}
   </tbody></table>`;
 }
 
