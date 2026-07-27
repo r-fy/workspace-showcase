@@ -4466,9 +4466,9 @@ async function deleteCurrentDailyTask() {
   function autoFit(input) {
     if (!input) return;
     const len = (input.value || '').length || 1;
-    const w = input.clientWidth || 100;
-    const base = window.matchMedia('(max-width: 700px)').matches ? 40 : 44;
-    input.style.fontSize = clamp(Math.floor((w - 6) / (len * 0.6)), 15, base) + 'px';
+    const w = input.clientWidth || 76;
+    const base = window.matchMedia('(max-width: 640px)').matches ? 17 : 20;
+    input.style.fontSize = clamp(Math.floor((w - 6) / (len * 0.6)), 10, base) + 'px';
   }
   function fitAll() { NUM_INPUT_IDS.forEach(id => autoFit(document.getElementById(id))); }
   document.addEventListener('input', fitAll);
@@ -4962,10 +4962,10 @@ async function deleteCurrentDailyTask() {
   }
   function autoFitCur(input) {
     const len = (input.value || '').length || 1;
-    const w = input.clientWidth || 120;
-    const base = window.matchMedia('(max-width: 700px)').matches ? 40 : 44;
+    const w = input.clientWidth || 76;
+    const base = window.matchMedia('(max-width: 640px)').matches ? 17 : 20;
     let size = Math.floor((w - 6) / (len * 0.6));
-    input.style.fontSize = clamp(size, 15, base) + 'px';
+    input.style.fontSize = clamp(size, 10, base) + 'px';
   }
   function renderCur() {
     const rate = fxRate();
