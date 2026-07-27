@@ -53,6 +53,7 @@ let allColumns = [];
 
 let coldEmailDaily = [];
 let coldEmailAccounts = [];
+let coldEmailReplies = [];
 let coldEmailStatus = null;
 let coldEmailDays = 30;
 const ceChartHiddenSeries = new Set();
@@ -3828,9 +3829,10 @@ const CE_METRICS = [
 
 async function loadColdEmail() {
   try {
-    [coldEmailDaily, coldEmailAccounts, coldEmailStatus] = await Promise.all([
+    [coldEmailDaily, coldEmailAccounts, coldEmailReplies, coldEmailStatus] = await Promise.all([
       apiCall('GET', '/cold-email/daily?days=' + coldEmailDays),
       apiCall('GET', '/cold-email/accounts'),
+      apiCall('GET', '/cold-email/replies'),
       apiCall('GET', '/cold-email/status'),
     ]);
   } catch (e) { toast('Could not load cold email data'); return; }
@@ -3955,6 +3957,27 @@ function ceCampaignTableHtml(rows) {
   </tbody></table>`;
 }
 
+function ceInterestBadge(v) {
+  if (v == null) return '';
+  if (v > 0) return '<span class="ce-interest-badge ce-interest-pos">Interested</span>';
+  if (v < 0) return '<span class="ce-interest-badge ce-interest-neg">Not interested</span>';
+  return '<span class="ce-interest-badge ce-interest-neu">Neutral</span>';
+}
+
+function ceRepliesHtml(replies) {
+  if (!replies.length) return '<div class="expense-chart-empty">No replies yet.</div>';
+  return replies.map(r => `
+    <div class="ce-reply-card${r.is_unread ? ' ce-reply-unread' : ''}">
+      <div class="ce-reply-head">
+        <span class="ce-reply-from">${escHtml(r.from_name || r.from_email)}</span>
+        <span class="ce-reply-date">${escHtml(fmtDate(r.timestamp_email))}</span>
+      </div>
+      <div class="ce-reply-subject">${escHtml(r.subject)} ${ceInterestBadge(r.ai_interest)}${r.is_unread ? '<span class="ce-unread-badge" style="margin-left:6px;">unread</span>' : ''}</div>
+      <div class="ce-reply-preview">${escHtml(r.preview)}</div>
+      <div class="ce-reply-meta">${escHtml(r.campaign_name || r.campaign_id)} · ${escHtml(r.from_email)}</div>
+    </div>`).join('');
+}
+
 function ceAccountTableHtml(accounts) {
   if (!accounts.length) return '<div class="expense-chart-empty">No account health data yet.</div>';
   return `<table class="ce-table"><thead><tr><th>Inbox</th><th>Warmup score</th><th>Daily limit</th></tr></thead><tbody>
@@ -3980,6 +4003,8 @@ function renderColdEmail() {
     <div style="font-size:12px;margin-bottom:16px;">${ceLastRefreshedHtml()}</div>
     ${ceStatTilesHtml(coldEmailDaily)}
     ${ceChartHtml(coldEmailDaily)}
+    <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Recent replies</h3>
+    <div class="ce-replies-list">${ceRepliesHtml(coldEmailReplies)}</div>
     <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Campaigns</h3>
     ${ceCampaignTableHtml(coldEmailDaily)}
     <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Inbox health</h3>
