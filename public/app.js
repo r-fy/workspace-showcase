@@ -4451,7 +4451,7 @@ let dailyTasks = [];
 let currentDailyTaskId = null;
 let currentDailyTaskCategory = null; // sidebar filter pill
 let dailyTaskDraft = null; // { category, task_date, source_url, questions: [{question, answer}] }
-const DAILY_TASK_CAT_LABELS = { business_masters: 'Business Master', daily_marketing: 'Daily Marketing' };
+const DAILY_TASK_CAT_LABELS = { business_masters: 'Business Master', daily_marketing: 'Daily Marketing', daily_seo_task: 'Daily SEO Task' };
 
 // TRW's raw prompt block and its own already-answered .md files use two
 // DIFFERENT shapes for the same content: an answered file has each question
@@ -4565,6 +4565,7 @@ function newDailyTaskPaste() {
         <select id="dt-paste-category">
           <option value="business_masters">Business Master</option>
           <option value="daily_marketing">Daily Marketing</option>
+          <option value="daily_seo_task">Daily SEO Task</option>
         </select>
       </div>
       <div class="expense-field-row">
@@ -4599,6 +4600,7 @@ function renderDailyTaskForm() {
         <select id="dt-category">
           <option value="business_masters"${d.category === 'business_masters' ? ' selected' : ''}>Business Master</option>
           <option value="daily_marketing"${d.category === 'daily_marketing' ? ' selected' : ''}>Daily Marketing</option>
+          <option value="daily_seo_task"${d.category === 'daily_seo_task' ? ' selected' : ''}>Daily SEO Task</option>
         </select>
         <input type="date" id="dt-date" value="${escHtml(d.task_date)}">
         ${d.source_url ? `<a href="${escHtml(d.source_url)}" target="_blank" rel="noopener" class="daily-task-source-link">Open source ↗</a>` : ''}

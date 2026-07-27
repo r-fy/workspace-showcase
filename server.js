@@ -478,7 +478,7 @@ app.post('/api/audits/render', auth, (req, res) => {
 });
 
 // ── TRW Daily Tasks ──────────────────────────────────────────
-const DAILY_TASK_CATEGORIES = ['business_masters', 'daily_marketing'];
+const DAILY_TASK_CATEGORIES = ['business_masters', 'daily_marketing', 'daily_seo_task'];
 
 app.get('/api/daily-tasks', auth, (req, res) => {
   const rows = db.prepare('SELECT * FROM daily_tasks WHERE deleted_at IS NULL AND user_id=? ORDER BY task_date DESC, created_at DESC').all(req.userId);
