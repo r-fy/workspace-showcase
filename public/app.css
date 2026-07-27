@@ -1077,10 +1077,11 @@ header {
 .tourist-subtitle { font-size: 11px; color: #444; letter-spacing: 0.15em; text-transform: uppercase; }
 
 .tourist-main {
-  display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center;
-  column-gap: 48px; row-gap: 48px; align-items: flex-start; width: 100%; max-width: 1500px;
+  display: flex; flex-direction: row; flex-wrap: nowrap; justify-content: center;
+  column-gap: 48px; align-items: flex-start; width: 100%; max-width: 1500px;
+  overflow-x: auto; padding: 4px 4px 16px;
 }
-.converter { display: flex; flex-direction: column; align-items: center; gap: 24px; transition: opacity 0.15s; }
+.converter { display: flex; flex-direction: column; align-items: center; gap: 24px; transition: opacity 0.15s; flex-shrink: 0; }
 .converter.dragging { opacity: 0.35; }
 .conv-label { font-size: 19px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #b0b0b0; cursor: grab; }
 .conv-label:active { cursor: grabbing; }
