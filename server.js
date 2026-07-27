@@ -537,9 +537,13 @@ async function instantlyGet(path) {
 }
 
 let coldEmailPullRunning = false;
+let coldEmailLastAttemptAt = null;
+let coldEmailLastSuccessAt = null;
+let coldEmailLastError = null;
 async function pullColdEmailStats() {
   if (!INSTANTLY_API_KEY || coldEmailPullRunning) return;
   coldEmailPullRunning = true;
+  coldEmailLastAttemptAt = now();
   try {
     const today = new Date().toISOString().slice(0, 10);
     const startDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
@@ -597,8 +601,11 @@ async function pullColdEmailStats() {
         upsertAcct.run(a.email, a.stat_warmup_score ?? null, a.daily_limit ?? null, t);
       }
     } catch (e) { console.warn('cold email: account health failed', e.message); }
+    coldEmailLastSuccessAt = now();
+    coldEmailLastError = null;
   } catch (e) {
     console.warn('cold email pull failed:', e.message);
+    coldEmailLastError = e.message;
   } finally {
     coldEmailPullRunning = false;
   }
@@ -624,6 +631,15 @@ app.post('/api/cold-email/pull', auth, async (req, res) => {
   if (!INSTANTLY_API_KEY) return res.status(503).json({ error: 'INSTANTLY_API_KEY not configured' });
   await pullColdEmailStats();
   res.json({ ok: true });
+});
+
+app.get('/api/cold-email/status', auth, (req, res) => {
+  res.json({
+    configured: !!INSTANTLY_API_KEY,
+    last_attempt_at: coldEmailLastAttemptAt,
+    last_success_at: coldEmailLastSuccessAt,
+    last_error: coldEmailLastError,
+  });
 });
 
 // ── Notes ────────────────────────────────────────────────────

@@ -53,6 +53,7 @@ let allColumns = [];
 
 let coldEmailDaily = [];
 let coldEmailAccounts = [];
+let coldEmailStatus = null;
 let coldEmailDays = 30;
 const ceChartHiddenSeries = new Set();
 
@@ -3827,17 +3828,30 @@ const CE_METRICS = [
 
 async function loadColdEmail() {
   try {
-    [coldEmailDaily, coldEmailAccounts] = await Promise.all([
+    [coldEmailDaily, coldEmailAccounts, coldEmailStatus] = await Promise.all([
       apiCall('GET', '/cold-email/daily?days=' + coldEmailDays),
       apiCall('GET', '/cold-email/accounts'),
+      apiCall('GET', '/cold-email/status'),
     ]);
   } catch (e) { toast('Could not load cold email data'); return; }
   renderColdEmail();
 }
 
+function ceLastRefreshedHtml() {
+  const s = coldEmailStatus;
+  if (!s) return '';
+  if (!s.configured) return '<span style="color:#e0a94a;">Instantly key not configured on the server</span>';
+  if (!s.last_success_at) return '<span style="color:#999;">Never refreshed yet</span>';
+  const errBit = s.last_error ? ` <span style="color:#e05a4a;" title="${escHtml(s.last_error)}">(last attempt failed)</span>` : '';
+  return `<span style="color:#999;">Last refreshed: ${escHtml(fmtDate(s.last_success_at))}</span>${errBit}`;
+}
+
 async function refreshColdEmail() {
   toast('Refreshing…');
-  try { await apiCall('POST', '/cold-email/pull'); } catch (e) { toast('Refresh failed — check INSTANTLY_API_KEY is configured'); }
+  try {
+    await apiCall('POST', '/cold-email/pull');
+    toast('Refreshed');
+  } catch (e) { toast('Refresh failed — check INSTANTLY_API_KEY is configured'); }
   await loadColdEmail();
 }
 
@@ -3952,7 +3966,7 @@ function renderColdEmail() {
   const area = document.getElementById('cold-email-area');
   if (!area) return;
   area.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
       <h2 style="margin:0;font-size:16px;color:#e0e0e0;">Cold Email</h2>
       <div>
         <select id="ce-days-select" style="margin-right:8px;">
@@ -3963,6 +3977,7 @@ function renderColdEmail() {
         <button id="ce-refresh-inline-btn">↻ Refresh now</button>
       </div>
     </div>
+    <div style="font-size:12px;margin-bottom:16px;">${ceLastRefreshedHtml()}</div>
     ${ceStatTilesHtml(coldEmailDaily)}
     ${ceChartHtml(coldEmailDaily)}
     <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Campaigns</h3>
