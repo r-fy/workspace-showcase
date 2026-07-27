@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=126">
+<link rel="stylesheet" href="/app.css?v=127">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -65,53 +65,62 @@
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item active" data-tab="notes">Notes</button>
           <button class="icon-btn nav-add-btn" id="new-note-btn" title="New note">+</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="tasks">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="tasks">Projects</button>
           <button class="icon-btn nav-add-btn" id="add-board-btn" title="New board">+</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="expenses">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="expenses">Expenses</button>
           <button class="icon-btn nav-add-btn" id="add-expense-btn" title="New expense">+</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="calendar">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="calendar">Calendar</button>
           <button class="icon-btn nav-add-btn" id="add-reminder-btn" title="New reminder">+</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="calls">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="calls">Calls</button>
           <button class="icon-btn nav-add-btn" id="new-call-btn" title="New call">+</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="audits">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="audits">Audits</button>
           <button class="icon-btn nav-add-btn" id="new-audit-btn" title="New audit">+</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="daily-tasks">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="daily-tasks">TRW Daily Tasks</button>
           <button class="icon-btn nav-add-btn" id="new-daily-task-btn" title="New daily task">+</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="tourist">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="tourist">Tourist</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="cold-email">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="cold-email">Cold Email</button>
           <button class="icon-btn nav-add-btn" id="cold-email-refresh-btn" title="Refresh now">↻</button>
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
         </div>
       </div>
       <div id="notes-panel" class="panel-section">
@@ -586,6 +595,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=143"></script>
+<script src="/app.js?v=144"></script>
 </body>
 </html>

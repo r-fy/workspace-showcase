@@ -318,6 +318,7 @@ function isMobile() { return window.innerWidth <= 640; }
 // ── Tabs ───────────────────────────────────────────────────────
 function switchTab(tab) {
   currentTab = tab;
+  document.getElementById('left-panel-nav')?.classList.remove('nav-open');
   document.querySelectorAll('.nav-menu-item').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.getElementById('notes-view').classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-view').classList.toggle('hidden', tab !== 'tasks');
@@ -3821,6 +3822,16 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
 document.getElementById('sidebar-overlay').addEventListener('click', closeSidebar);
 // Nav items inside left panel
 document.querySelectorAll('.nav-menu-item').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+// Nav dropdown: collapsed to just the active section by default (app.css
+// hides every non-active .nav-row); its own ▾ opens the full list.
+document.getElementById('left-panel-nav').addEventListener('click', e => {
+  if (!e.target.closest('.nav-expand-btn')) return;
+  e.stopPropagation();
+  document.getElementById('left-panel-nav').classList.toggle('nav-open');
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#left-panel-nav')) document.getElementById('left-panel-nav').classList.remove('nav-open');
+});
 // Drag-to-reorder the nav tabs themselves (Notes/Projects/Expenses/Calendar).
 // Rows are static markup (not re-rendered from an array), so reordering just
 // moves the existing DOM nodes — listeners already attached to them travel

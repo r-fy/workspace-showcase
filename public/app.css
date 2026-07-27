@@ -420,18 +420,27 @@ header {
 }
 #left-panel.collapsed { width: 0; min-width: 0; }
 .left-panel-nav { flex-shrink: 0; border-bottom: 1px solid #1e1e1e; padding: 4px 0; }
-.nav-row { display: flex; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
+/* Dropdown behavior: only the active section's row shows by default (its
+   own ▾ toggles the rest open); every other row is off until expanded. */
+.nav-row { display: none; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
+.nav-row:has(.nav-menu-item.active) { display: flex; }
+.left-panel-nav.nav-open .nav-row { display: flex; }
+.nav-expand-btn { display: none; width: 22px; font-size: 10px; color: #555; flex-shrink: 0; transition: transform 0.15s ease, color 0.12s; }
+.nav-row:has(.nav-menu-item.active) .nav-expand-btn { display: flex; align-items: center; justify-content: center; }
+.nav-expand-btn:hover { color: #aaa; }
+.left-panel-nav.nav-open .nav-expand-btn { transform: rotate(180deg); color: #8ce870; }
 .nav-row.dragging { opacity: 0.4; }
 .nav-row.drop-above { border-top-color: #5fc83b; }
 .nav-row.drop-below { border-bottom-color: #5fc83b; }
 /* Native HTML5 drag-and-drop never fires on touch — these give touch devices
    a way to reorder the nav tabs too. Hidden on mouse/trackpad, where the drag
-   already works, so desktop keeps its current look. */
+   already works, so desktop keeps its current look. Only shown once the
+   dropdown is expanded — reordering a single visible row is meaningless. */
 .nav-reorder-btn { display: none; width: 22px; font-size: 9px; color: #444; flex-shrink: 0; }
 .nav-reorder-btn:hover { color: #aaa; }
 .nav-reorder-btn:disabled { color: #2a2a2a; cursor: default; }
 @media (pointer: coarse) {
-  .nav-reorder-btn { display: flex; align-items: center; justify-content: center; }
+  .left-panel-nav.nav-open .nav-reorder-btn { display: flex; align-items: center; justify-content: center; }
 }
 .nav-menu-item {
   display: flex; align-items: center; flex: 1;
