@@ -4653,12 +4653,18 @@ function parseQABlock(raw) {
   const pairs = [];
   let current = null;
   const qRe = /^\s*\*\*(.+?)\*\*:?\s*(.*)$/;
+  const urlRe = /^https?:\/\/\S+$/;
   for (; i < lines.length; i++) {
     const m = lines[i].match(qRe);
     if (m) {
       if (current) pairs.push(current);
       current = { question: m[1].trim(), answer: m[2] ? m[2].trim() : '' };
     } else if (current) {
+      // TRW's prompts often embed a reference link on its own line right
+      // under the question heading, not at the very top of the paste —
+      // pull the first one out to the shared source link instead of
+      // leaving it stuck as the first line of the answer.
+      if (!current.answer && !sourceUrl && urlRe.test(lines[i].trim())) { sourceUrl = lines[i].trim(); continue; }
       current.answer += (current.answer ? '\n' : '') + lines[i];
     }
   }
