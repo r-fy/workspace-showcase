@@ -318,7 +318,7 @@ function isMobile() { return window.innerWidth <= 640; }
 // ── Tabs ───────────────────────────────────────────────────────
 function switchTab(tab) {
   currentTab = tab;
-  document.getElementById('left-panel-nav')?.classList.remove('nav-open');
+  closeNavDropdown();
   document.querySelectorAll('.nav-menu-item').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.getElementById('notes-view').classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-view').classList.toggle('hidden', tab !== 'tasks');
@@ -3822,90 +3822,131 @@ document.getElementById('sidebar-toggle').addEventListener('click', () => {
 document.getElementById('sidebar-overlay').addEventListener('click', closeSidebar);
 // Nav items inside left panel
 document.querySelectorAll('.nav-menu-item').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-// Nav dropdown: collapsed to just the active section by default (app.css
-// hides every non-active .nav-row); its own ▾ opens the full list.
-document.getElementById('left-panel-nav').addEventListener('click', e => {
-  if (!e.target.closest('.nav-expand-btn')) return;
+// Nav dropdown: #left-panel-nav always shows just the active section's row
+// (app.css hides the rest there) — its own ▾ moves the other 8 rows into
+// #nav-popup, a small floating window over the app, instead of growing the
+// sidebar's own layout open. #left-panel-nav's footprint never changes, so
+// nothing below it in the panel shifts when the popup opens/closes.
+function isNavPopupOpen() { return !document.getElementById('nav-popup').classList.contains('hidden'); }
+function openNavDropdown() {
+  const nav = document.getElementById('left-panel-nav');
+  const popup = document.getElementById('nav-popup');
+  const activeRow = nav.querySelector('.nav-row:has(.nav-menu-item.active)');
+  if (!activeRow) return;
+  const r = activeRow.getBoundingClientRect(); // measured BEFORE the popup opens
+  nav.querySelectorAll('.nav-row').forEach(row => { if (row !== activeRow) popup.appendChild(row); });
+  const margin = 8;
+  const maxH = Math.min(window.innerHeight * 0.6, 420);
+  let top = r.bottom + 2;
+  if (top + maxH > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - maxH - margin);
+  popup.style.top = top + 'px';
+  popup.style.left = r.left + 'px';
+  popup.style.width = r.width + 'px';
+  popup.classList.remove('hidden');
+  document.querySelector('.nav-row:has(.nav-menu-item.active) .nav-expand-btn')?.classList.add('nav-expand-open');
+  updateReorderBtnStates();
+}
+function closeNavDropdown() {
+  const nav = document.getElementById('left-panel-nav');
+  const popup = document.getElementById('nav-popup');
+  if (!nav || !popup) return;
+  popup.querySelectorAll('.nav-row').forEach(row => nav.appendChild(row));
+  popup.classList.add('hidden');
+  popup.style.top = popup.style.left = popup.style.width = '';
+  document.querySelectorAll('.nav-expand-open').forEach(b => b.classList.remove('nav-expand-open'));
+}
+document.getElementById('left-panel').addEventListener('click', e => {
+  const btn = e.target.closest('.nav-expand-btn');
+  if (!btn) return;
   e.stopPropagation();
-  document.getElementById('left-panel-nav').classList.toggle('nav-open');
+  isNavPopupOpen() ? closeNavDropdown() : openNavDropdown();
 });
 document.addEventListener('click', e => {
-  if (!e.target.closest('#left-panel-nav')) document.getElementById('left-panel-nav').classList.remove('nav-open');
+  if (!e.target.closest('#left-panel-nav') && !e.target.closest('#nav-popup')) closeNavDropdown();
 });
+window.addEventListener('resize', closeNavDropdown);
 // Drag-to-reorder the nav tabs themselves (Notes/Projects/Expenses/Calendar).
 // Rows are static markup (not re-rendered from an array), so reordering just
 // moves the existing DOM nodes — listeners already attached to them travel
 // along for free. Order persists the same way as expense-col-order.
-(() => {
+// Reordering only ever happens among rows sitting in #nav-popup (the active
+// row, alone in #left-panel-nav, has nothing to reorder against) — moveRow
+// and the drag handlers work off row.parentElement so they're correct
+// whichever container currently holds the row.
+let navDragEl = null;
+function applyNavOrder() {
   const nav = document.getElementById('left-panel-nav');
-  let dragEl = null;
-  function applyNavOrder() {
-    let order;
-    try { order = JSON.parse(localStorage.getItem('nav-tab-order') || 'null'); } catch(e) { order = null; }
-    if (!Array.isArray(order)) return;
-    const rows = new Map([...nav.querySelectorAll('.nav-row')].map(r => [r.dataset.tab, r]));
-    order.forEach(tab => { const r = rows.get(tab); if (r) nav.appendChild(r); });
-    // A tab added after the order was saved (e.g. Calls landing on a 4-tab
-    // list) would otherwise be left stranded ABOVE the reordered rows —
-    // new tabs belong at the bottom until the user places them.
-    rows.forEach((r, tab) => { if (!order.includes(tab)) nav.appendChild(r); });
-  }
-  function saveNavOrder() {
-    localStorage.setItem('nav-tab-order', JSON.stringify([...nav.querySelectorAll('.nav-row')].map(r => r.dataset.tab)));
-  }
-  // Touch devices never fire HTML5 drag events at all — the ▲/▼ buttons
-  // (shown only on coarse pointers, see app.css) are the touch equivalent.
-  function updateReorderBtnStates() {
-    const rows = [...nav.querySelectorAll('.nav-row')];
-    rows.forEach((row, i) => {
-      row.querySelector('.nav-up-btn').disabled = i === 0;
-      row.querySelector('.nav-down-btn').disabled = i === rows.length - 1;
-    });
-  }
-  function moveRow(row, dir) {
-    const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
-    if (!sib) return;
-    dir < 0 ? nav.insertBefore(row, sib) : nav.insertBefore(sib, row);
+  let order;
+  try { order = JSON.parse(localStorage.getItem('nav-tab-order') || 'null'); } catch(e) { order = null; }
+  if (!Array.isArray(order)) return;
+  const rows = new Map([...nav.querySelectorAll('.nav-row')].map(r => [r.dataset.tab, r]));
+  order.forEach(tab => { const r = rows.get(tab); if (r) nav.appendChild(r); });
+  // A tab added after the order was saved (e.g. Calls landing on a 4-tab
+  // list) would otherwise be left stranded ABOVE the reordered rows —
+  // new tabs belong at the bottom until the user places them.
+  rows.forEach((r, tab) => { if (!order.includes(tab)) nav.appendChild(r); });
+}
+// The active tab is excluded from #nav-popup, so it isn't part of what gets
+// reordered there — pin it to the front of the saved order and leave it be;
+// since only rank-by-.active (not array position) decides what's collapsed,
+// this has no visible effect beyond the popup's own row sequence.
+function saveNavOrder() {
+  const activeTab = document.querySelector('.nav-menu-item.active')?.dataset.tab;
+  const popupOrder = [...document.getElementById('nav-popup').querySelectorAll('.nav-row')].map(r => r.dataset.tab);
+  localStorage.setItem('nav-tab-order', JSON.stringify([activeTab, ...popupOrder].filter(Boolean)));
+}
+// Touch devices never fire HTML5 drag events at all — the ▲/▼ buttons
+// (shown only on coarse pointers, see app.css) are the touch equivalent.
+function updateReorderBtnStates() {
+  const rows = [...document.getElementById('nav-popup').querySelectorAll('.nav-row')];
+  rows.forEach((row, i) => {
+    row.querySelector('.nav-up-btn').disabled = i === 0;
+    row.querySelector('.nav-down-btn').disabled = i === rows.length - 1;
+  });
+}
+function moveNavRow(row, dir) {
+  const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  if (!sib) return;
+  const parent = row.parentElement;
+  dir < 0 ? parent.insertBefore(row, sib) : parent.insertBefore(sib, row);
+  saveNavOrder(); updateReorderBtnStates();
+}
+applyNavOrder();
+document.getElementById('left-panel').addEventListener('click', e => {
+  const btn = e.target.closest('.nav-up-btn, .nav-down-btn');
+  if (!btn || btn.disabled) return;
+  e.stopPropagation();
+  moveNavRow(btn.closest('.nav-row'), btn.classList.contains('nav-up-btn') ? -1 : 1);
+});
+document.querySelectorAll('.nav-row').forEach(row => {
+  row.addEventListener('dragstart', e => {
+    navDragEl = row;
+    e.dataTransfer.setData('nav-row-drag', row.dataset.tab);
+    e.dataTransfer.effectAllowed = 'move';
+    setTimeout(() => row.classList.add('dragging'), 0);
+  });
+  row.addEventListener('dragend', () => {
+    row.classList.remove('dragging');
+    row.parentElement?.querySelectorAll('.nav-row').forEach(r => r.classList.remove('drop-above', 'drop-below'));
+    navDragEl = null;
+  });
+  row.addEventListener('dragover', e => {
+    if (!Array.from(e.dataTransfer.types).includes('nav-row-drag') || row === navDragEl) return;
+    e.preventDefault();
+    const mid = row.getBoundingClientRect().top + row.offsetHeight / 2;
+    row.classList.toggle('drop-above', e.clientY < mid);
+    row.classList.toggle('drop-below', e.clientY >= mid);
+  });
+  row.addEventListener('dragleave', e => { if (!row.contains(e.relatedTarget)) row.classList.remove('drop-above', 'drop-below'); });
+  row.addEventListener('drop', e => {
+    if (!navDragEl || navDragEl === row) return;
+    e.preventDefault();
+    const insertBefore = row.classList.contains('drop-above');
+    row.classList.remove('drop-above', 'drop-below');
+    row.parentElement.insertBefore(navDragEl, insertBefore ? row : row.nextSibling);
     saveNavOrder(); updateReorderBtnStates();
-  }
-  applyNavOrder();
-  updateReorderBtnStates();
-  nav.addEventListener('click', e => {
-    const btn = e.target.closest('.nav-up-btn, .nav-down-btn');
-    if (!btn || btn.disabled) return;
-    e.stopPropagation();
-    moveRow(btn.closest('.nav-row'), btn.classList.contains('nav-up-btn') ? -1 : 1);
   });
-  nav.querySelectorAll('.nav-row').forEach(row => {
-    row.addEventListener('dragstart', e => {
-      dragEl = row;
-      e.dataTransfer.setData('nav-row-drag', row.dataset.tab);
-      e.dataTransfer.effectAllowed = 'move';
-      setTimeout(() => row.classList.add('dragging'), 0);
-    });
-    row.addEventListener('dragend', () => {
-      row.classList.remove('dragging');
-      nav.querySelectorAll('.nav-row').forEach(r => r.classList.remove('drop-above', 'drop-below'));
-      dragEl = null;
-    });
-    row.addEventListener('dragover', e => {
-      if (!Array.from(e.dataTransfer.types).includes('nav-row-drag') || row === dragEl) return;
-      e.preventDefault();
-      const mid = row.getBoundingClientRect().top + row.offsetHeight / 2;
-      row.classList.toggle('drop-above', e.clientY < mid);
-      row.classList.toggle('drop-below', e.clientY >= mid);
-    });
-    row.addEventListener('dragleave', e => { if (!row.contains(e.relatedTarget)) row.classList.remove('drop-above', 'drop-below'); });
-    row.addEventListener('drop', e => {
-      if (!dragEl || dragEl === row) return;
-      e.preventDefault();
-      const insertBefore = row.classList.contains('drop-above');
-      row.classList.remove('drop-above', 'drop-below');
-      nav.insertBefore(dragEl, insertBefore ? row : row.nextSibling);
-      saveNavOrder(); updateReorderBtnStates();
-    });
-  });
-})();
+});
 // Mobile col nav
 document.getElementById('prev-col-btn').addEventListener('click', () => goToMobileCol(mobileColIdx - 1));
 document.getElementById('next-col-btn').addEventListener('click', () => goToMobileCol(mobileColIdx + 1));
