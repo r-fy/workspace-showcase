@@ -1126,8 +1126,12 @@ async function sendPushToUser(userId, payload) {
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
         JSON.stringify(payload),
         // urgency:high = deliver now, don't batch (matters on Android Doze).
-        // TTL 60s: a reminder delivered late is noise, drop it instead.
-        { urgency: 'high', TTL: 60 }
+        // TTL 5min: a brief connectivity gap right at fire time (device
+        // asleep, Doze, dead zone) used to silently drop the notification
+        // forever at TTL 60s — a few minutes of retry window turns that into
+        // "slightly late" instead of "never arrived," without going so long
+        // it shows up stale.
+        { urgency: 'high', TTL: 300 }
       );
     } catch (err) {
       // 404/410 = expired/revoked, 403 = VAPID mismatch (subscribed under old
