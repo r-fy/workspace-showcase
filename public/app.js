@@ -373,12 +373,30 @@ function tagColor(name) {
   return hslToHex(h % 360, 55, 55);
 }
 
+// Tags are a single shared namespace/color store across Notes and Projects
+// (tasks) — a color or rename change refreshes both sides' UI.
 function setTagColor(name, color) {
   const stored = JSON.parse(localStorage.getItem('tag-colors') || '{}');
   stored[name] = color;
   localStorage.setItem('tag-colors', JSON.stringify(stored));
   renderTagsBar(); renderNotesList(); renderTagEditor();
+  renderTaskTagsBar(); renderKanban(); renderTaskTagEditor();
 }
+
+// One-time migration: task tags used to be a separate color namespace
+// ('task-tag-colors'). Fold any saved colors into the shared store (note
+// colors win on a name collision, since notes tags shipped first) and drop
+// the old key — nothing reads it anymore now that tags are unified.
+(() => {
+  const old = localStorage.getItem('task-tag-colors');
+  if (!old) return;
+  try {
+    const oldColors = JSON.parse(old);
+    const merged = { ...oldColors, ...JSON.parse(localStorage.getItem('tag-colors') || '{}') };
+    localStorage.setItem('tag-colors', JSON.stringify(merged));
+  } catch (e) {}
+  localStorage.removeItem('task-tag-colors');
+})();
 
 function renderTagsBar() {
   const bar = document.getElementById('tags-bar');
@@ -2502,13 +2520,15 @@ function setupTocResize() {
   });
 }
 
+// Renames a tag everywhere it appears — notes AND tasks share one namespace.
 async function renameTagGlobally(oldName, newName) {
   if (!newName || newName === oldName) return;
-  const allIDB = await idbGetAll('notes');
-  allIDB.forEach(n => { if (!notesFullCache[n.id]) notesFullCache[n.id] = n; });
   const colors = JSON.parse(localStorage.getItem('tag-colors') || '{}');
   if (colors[oldName]) { colors[newName] = colors[oldName]; delete colors[oldName]; }
   localStorage.setItem('tag-colors', JSON.stringify(colors));
+
+  const allIDB = await idbGetAll('notes');
+  allIDB.forEach(n => { if (!notesFullCache[n.id]) notesFullCache[n.id] = n; });
   const affected = Object.values(notesFullCache).filter(n => noteTags(n).includes(oldName));
   for (const n of affected) {
     n.tags = noteTags(n).map(t => t === oldName ? newName : t).join(',');
@@ -2519,11 +2539,30 @@ async function renameTagGlobally(oldName, newName) {
   notes.forEach(n => {
     if (noteTags(n).includes(oldName)) n.tags = noteTags(n).map(t => t === oldName ? newName : t).join(',');
   });
+
+  const renameList = list => list.includes(oldName) ? list.map(t => t === oldName ? newName : t).join(',') : null;
+  const idbTasks = await idbGetAll('tasks');
+  for (const t of idbTasks) {
+    const merged = renameList(taskTags(t));
+    if (merged === null) continue;
+    t.tags = merged; t.updated_at = Date.now();
+    await idbPut('tasks', t);
+    try { await apiCall('PUT', '/tasks/'+t.id, { tags: t.tags }); } catch(e) {}
+  }
+  currentBoardData.forEach(col => col.tasks.forEach(t => {
+    const merged = renameList(taskTags(t));
+    if (merged !== null) t.tags = merged;
+  }));
+  if (modalTaskTags.includes(oldName)) modalTaskTags = modalTaskTags.map(t => t === oldName ? newName : t);
 }
 
-function allTagNames() {
+// Unions tag names across notes AND tasks (idb + in-memory) — one shared namespace.
+async function allTagNames() {
   const all = new Set();
   notes.forEach(n => { const f = notesFullCache[n.id] || n; noteTags(f).forEach(t => all.add(t)); });
+  (await idbGetAll('notes')).forEach(n => noteTags(n).forEach(t => all.add(t)));
+  currentBoardData.forEach(col => col.tasks.forEach(t => taskTags(t).forEach(x => all.add(x))));
+  (await idbGetAll('tasks')).forEach(t => taskTags(t).forEach(x => all.add(x)));
   return [...all].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 }
 
@@ -2570,6 +2609,7 @@ function renderTagEditor() {
         const newName = inp.value.replace(/,/g, '').trim();
         await renameTagGlobally(oldName, newName || oldName);
         renderTagEditor(); renderTagsBar(); renderNotesList();
+        renderTaskTagsBar(); renderKanban(); renderTaskTagEditor();
       };
       inp.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); commit(); }
@@ -2601,11 +2641,12 @@ function renderTagEditor() {
   };
 
   // Build/refresh the dropdown of existing tags (filtered by what's typed, excluding ones already on the note).
-  const renderDropdown = () => {
+  const renderDropdown = async () => {
     if (!dropdown) return;
     const applied = noteTags(notesFullCache[currentNoteId] || {});
     const q = (input?.value || '').trim().toLowerCase();
-    opts = allTagNames().filter(t => !applied.includes(t) && t.toLowerCase().includes(q));
+    const all = await allTagNames();
+    opts = all.filter(t => !applied.includes(t) && t.toLowerCase().includes(q));
     activeIndex = -1;
     if (!opts.length) {
       dropdown.innerHTML = `<div class="tag-dropdown-empty">${q ? 'No matching tags' : 'No other tags yet'}</div>`;
@@ -2652,31 +2693,10 @@ function renderTagEditor() {
   input?.addEventListener('blur', () => setTimeout(closeDropdown, 120));
 }
 
-// ── Task tags (separate namespace from note tags) ──────────────
+// ── Task tags (shared namespace/colors with note tags — see tagColor,
+// setTagColor, allTagNames, renameTagGlobally above) ──────────────
 function taskTags(task) {
   return (task && task.tags ? task.tags : '').split(',').map(t => t.trim()).filter(Boolean);
-}
-
-function taskTagColor(name) {
-  const stored = JSON.parse(localStorage.getItem('task-tag-colors') || '{}');
-  if (stored[name]) return stored[name];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return hslToHex(h % 360, 55, 55);
-}
-
-function setTaskTagColor(name, color) {
-  const stored = JSON.parse(localStorage.getItem('task-tag-colors') || '{}');
-  stored[name] = color;
-  localStorage.setItem('task-tag-colors', JSON.stringify(stored));
-  renderTaskTagsBar(); renderKanban(); renderTaskTagEditor();
-}
-
-async function allTaskTagNames() {
-  const all = new Set();
-  currentBoardData.forEach(col => col.tasks.forEach(t => taskTags(t).forEach(x => all.add(x))));
-  (await idbGetAll('tasks')).forEach(t => taskTags(t).forEach(x => all.add(x)));
-  return [...all].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 }
 
 function renderTaskTagsBar() {
@@ -2687,7 +2707,7 @@ function renderTaskTagsBar() {
   if (!allTags.size) { bar.innerHTML = ''; bar.style.display = 'none'; return; }
   bar.style.display = '';
   bar.innerHTML = [...allTags].sort().map(t => {
-    const c = taskTagColor(t);
+    const c = tagColor(t);
     return `<span class="tag-filter-pill${t === activeTaskTag ? ' active' : ''}" data-tag="${escHtml(t)}" style="--tag-c:${c}">${escHtml(t)}</span>`;
   }).join('') + (activeTaskTag ? `<span class="tag-filter-clear" id="task-tag-clear">✕</span>` : '');
   bar.querySelectorAll('.tag-filter-pill').forEach(el => {
@@ -2699,27 +2719,6 @@ function renderTaskTagsBar() {
   document.getElementById('task-tag-clear')?.addEventListener('click', () => {
     activeTaskTag = null; renderTaskTagsBar(); renderKanban();
   });
-}
-
-async function renameTaskTagGlobally(oldName, newName) {
-  if (!newName || newName === oldName) return;
-  const colors = JSON.parse(localStorage.getItem('task-tag-colors') || '{}');
-  if (colors[oldName]) { colors[newName] = colors[oldName]; delete colors[oldName]; }
-  localStorage.setItem('task-tag-colors', JSON.stringify(colors));
-  const rename = list => list.includes(oldName) ? list.map(t => t === oldName ? newName : t).join(',') : null;
-  const idbTasks = await idbGetAll('tasks');
-  for (const t of idbTasks) {
-    const merged = rename(taskTags(t));
-    if (merged === null) continue;
-    t.tags = merged; t.updated_at = Date.now();
-    await idbPut('tasks', t);
-    try { await apiCall('PUT', '/tasks/'+t.id, { tags: t.tags }); } catch(e) {}
-  }
-  currentBoardData.forEach(col => col.tasks.forEach(t => {
-    const merged = rename(taskTags(t));
-    if (merged !== null) t.tags = merged;
-  }));
-  if (modalTaskTags.includes(oldName)) modalTaskTags = modalTaskTags.map(t => t === oldName ? newName : t);
 }
 
 function addTagToModal(val) {
@@ -2734,15 +2733,15 @@ function renderTaskTagEditor() {
   const el = document.getElementById('task-tag-editor');
   if (!el) return;
   el.innerHTML = modalTaskTags.map(t => {
-    const c = taskTagColor(t);
+    const c = tagColor(t);
     return `<span class="note-tag editable" style="--tag-c:${c}"><span class="tag-color-dot" data-tag="${escHtml(t)}" style="background:${c}" title="Change color"></span><span class="tag-name" data-tag="${escHtml(t)}" title="Double-click to rename">${escHtml(t)}</span><button class="tag-remove-btn" data-tag="${escHtml(t)}">×</button></span>`;
   }).join('') + `<span class="tag-add-wrap" id="task-tag-add-wrap"><input class="tag-input" id="task-tag-input" placeholder="tag" autocomplete="off"><button class="tag-add-btn" id="task-tag-add-btn" title="Pick an existing tag">+</button><div class="tag-dropdown" id="task-tag-dropdown" hidden></div></span>`;
   el.querySelectorAll('.tag-color-dot').forEach(dot => {
     dot.addEventListener('click', () => {
       const inp = document.createElement('input');
       inp.type = 'color';
-      inp.value = taskTagColor(dot.dataset.tag);
-      inp.addEventListener('input', () => setTaskTagColor(dot.dataset.tag, inp.value));
+      inp.value = tagColor(dot.dataset.tag);
+      inp.addEventListener('input', () => setTagColor(dot.dataset.tag, inp.value));
       inp.click();
     });
   });
@@ -2757,8 +2756,9 @@ function renderTaskTagEditor() {
       inp.select();
       const commit = async () => {
         const newName = inp.value.replace(/,/g, '').trim();
-        await renameTaskTagGlobally(oldName, newName || oldName);
+        await renameTagGlobally(oldName, newName || oldName);
         renderTaskTagEditor(); renderTaskTagsBar(); renderKanban();
+        renderTagEditor(); renderTagsBar(); renderNotesList();
       };
       inp.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); commit(); }
@@ -2790,7 +2790,7 @@ function renderTaskTagEditor() {
   const renderDropdown = async () => {
     if (!dropdown) return;
     const q = (input?.value || '').trim().toLowerCase();
-    const all = await allTaskTagNames();
+    const all = await allTagNames();
     opts = all.filter(t => !modalTaskTags.includes(t) && t.toLowerCase().includes(q));
     activeIndex = -1;
     if (!opts.length) {
@@ -2798,7 +2798,7 @@ function renderTaskTagEditor() {
       return;
     }
     dropdown.innerHTML = opts.map(t =>
-      `<div class="tag-dropdown-item" data-tag="${escHtml(t)}"><span class="tag-color-dot" style="background:${taskTagColor(t)}"></span>${escHtml(t)}</div>`
+      `<div class="tag-dropdown-item" data-tag="${escHtml(t)}"><span class="tag-color-dot" style="background:${tagColor(t)}"></span>${escHtml(t)}</div>`
     ).join('');
     dropdown.querySelectorAll('.tag-dropdown-item').forEach((item, i) => {
       item.addEventListener('mousedown', e => {
@@ -3474,7 +3474,7 @@ function createTaskEl(task, col) {
       <button class="task-claude-btn${task.claude_marked ? ' active' : ''}" title="Mark for Claude Code">${CLAUDE_ICON_SVG}</button>
       <button class="task-done-btn" title="${inDone ? 'Already done' : 'Mark as done'}">✓</button>
     </div>
-    ${tags.length ? `<div class="note-item-tags">${tags.map(t=>`<span class="note-tag" style="--tag-c:${taskTagColor(t)}">${escHtml(t)}</span>`).join('')}</div>` : ''}
+    ${tags.length ? `<div class="note-item-tags">${tags.map(t=>`<span class="note-tag" style="--tag-c:${tagColor(t)}">${escHtml(t)}</span>`).join('')}</div>` : ''}
     ${preview ? `<div class="task-desc-preview">${escHtml(preview)}</div>` : ''}
     ${checks ? `<div class="task-checklist-preview"><span class="task-checks-done">${checks.done}</span><span class="task-checks-sep">/</span><span class="task-checks-total">${checks.total}</span></div>` : ''}
   `;
