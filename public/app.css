@@ -1164,3 +1164,42 @@ header {
   .ref-note   { color: #999; }
 }
 
+/* ── TRW Daily Tasks ────────────────────────────────────────── */
+.daily-task-paste-wrap, .daily-task-form { max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; width: 100%; }
+.daily-task-paste-wrap .expense-field-row select,
+.daily-task-form-head select {
+  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 6px 10px; font-size: 13px; color: #e0e0e0; font-family: inherit;
+}
+.daily-task-paste-wrap .expense-field-row input[type="date"],
+.daily-task-form-head input[type="date"] {
+  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 6px 10px; font-size: 13px; color: #e0e0e0; font-family: inherit; color-scheme: dark;
+}
+.daily-task-paste-box {
+  width: 100%; min-height: 260px; margin-top: 16px; resize: vertical;
+  background: #161616; border: 1px solid #2a2a2a; border-radius: 6px;
+  padding: 12px 14px; font-size: 13px; color: #e0e0e0; font-family: inherit; line-height: 1.5;
+}
+.daily-task-paste-box:focus { border-color: #3a3a3a; outline: none; }
+.daily-task-paste-wrap .save-btn { margin-top: 16px; }
+.daily-task-form-head { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+.daily-task-source-link { font-size: 12px; color: #5fc83b; text-decoration: none; }
+.daily-task-source-link:hover { text-decoration: underline; }
+.daily-task-qa { margin-bottom: 20px; }
+.daily-task-question-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.daily-task-question { font-size: 14px; color: #ccc; font-weight: 600; line-height: 1.4; }
+.daily-task-remove-q { font-size: 11px; color: #444; flex-shrink: 0; padding: 2px 4px; }
+.daily-task-remove-q:hover { color: #e55; }
+.daily-task-answer {
+  width: 100%; min-height: 80px; resize: vertical;
+  background: #161616; border: 1px solid #2a2a2a; border-radius: 6px;
+  padding: 10px 12px; font-size: 13px; color: #e0e0e0; font-family: inherit; line-height: 1.5;
+}
+.daily-task-answer:focus { border-color: #3a3a3a; outline: none; }
+.daily-task-form-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 24px; padding-top: 16px; border-top: 1px solid #1a1a1a; }
+@media (max-width: 640px) {
+  .daily-task-paste-wrap, .daily-task-form { padding: 16px 14px 40px; }
+  .daily-task-form-head { flex-direction: column; align-items: stretch; }
+}
+

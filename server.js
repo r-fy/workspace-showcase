@@ -224,6 +224,24 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_audits_user ON audits(user_id, updated_at);
 `);
 
+// TRW Daily Tasks tab: paste a prompt block, fill out the questions inline.
+// questions is a JSON array of {question, answer} — same blob-column pattern
+// as audits.data, no relational split needed for a per-entry Q&A list.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS daily_tasks (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    category TEXT NOT NULL DEFAULT 'business_masters',
+    task_date TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    questions TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_daily_tasks_user ON daily_tasks(user_id, task_date);
+`);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -409,6 +427,57 @@ app.post('/api/audits/render', auth, (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ── TRW Daily Tasks ──────────────────────────────────────────
+const DAILY_TASK_CATEGORIES = ['business_masters', 'daily_marketing'];
+
+app.get('/api/daily-tasks', auth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM daily_tasks WHERE deleted_at IS NULL AND user_id=? ORDER BY task_date DESC, created_at DESC').all(req.userId);
+  res.json(rows.map(r => ({ ...r, questions: JSON.parse(r.questions) })));
+});
+
+app.get('/api/daily-tasks/:id', auth, (req, res) => {
+  const r = db.prepare('SELECT * FROM daily_tasks WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  res.json({ ...r, questions: JSON.parse(r.questions) });
+});
+
+function dailyTaskFields(body) {
+  const category = DAILY_TASK_CATEGORIES.includes(body.category) ? body.category : 'business_masters';
+  const task_date = /^\d{4}-\d{2}-\d{2}$/.test(body.task_date) ? body.task_date : null;
+  if (!task_date) return { error: 'task_date (YYYY-MM-DD) required' };
+  const questions = Array.isArray(body.questions)
+    ? body.questions.map(q => ({ question: String(q.question || '').trim(), answer: String(q.answer || '') }))
+      .filter(q => q.question)
+    : [];
+  if (!questions.length) return { error: 'at least one question required' };
+  return { category, task_date, source_url: String(body.source_url || '').trim(), questions };
+}
+
+app.post('/api/daily-tasks', auth, (req, res) => {
+  const f = dailyTaskFields(req.body);
+  if (f.error) return res.status(400).json({ error: f.error });
+  const id = uid(), t = now();
+  db.prepare('INSERT INTO daily_tasks (id, user_id, category, task_date, source_url, questions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.userId, f.category, f.task_date, f.source_url, JSON.stringify(f.questions), t, t);
+  res.json({ ...db.prepare('SELECT * FROM daily_tasks WHERE id=?').get(id), questions: f.questions });
+});
+
+app.put('/api/daily-tasks/:id', auth, (req, res) => {
+  const r = db.prepare('SELECT * FROM daily_tasks WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const f = dailyTaskFields({ category: r.category, task_date: r.task_date, source_url: r.source_url, ...req.body });
+  if (f.error) return res.status(400).json({ error: f.error });
+  const t = now();
+  db.prepare('UPDATE daily_tasks SET category=?, task_date=?, source_url=?, questions=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(f.category, f.task_date, f.source_url, JSON.stringify(f.questions), t, req.params.id, req.userId);
+  res.json({ ...db.prepare('SELECT * FROM daily_tasks WHERE id=?').get(req.params.id), questions: f.questions });
+});
+
+app.delete('/api/daily-tasks/:id', auth, (req, res) => {
+  db.prepare('UPDATE daily_tasks SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
 });
 
 // ── Notes ────────────────────────────────────────────────────

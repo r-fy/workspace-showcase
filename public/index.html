@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=120">
+<link rel="stylesheet" href="/app.css?v=121">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -96,6 +96,12 @@
           <button class="nav-menu-item" data-tab="audits">Audits</button>
           <button class="icon-btn nav-add-btn" id="new-audit-btn" title="New audit">+</button>
         </div>
+        <div class="nav-row" draggable="true" data-tab="daily-tasks">
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="daily-tasks">TRW Daily Tasks</button>
+          <button class="icon-btn nav-add-btn" id="new-daily-task-btn" title="New daily task">+</button>
+        </div>
         <div class="nav-row" draggable="true" data-tab="tourist">
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
@@ -135,6 +141,10 @@
       </div>
       <div id="audits-panel" class="panel-section hidden">
         <div class="notes-list" id="audits-list"></div>
+      </div>
+      <div id="daily-tasks-panel" class="panel-section hidden">
+        <div id="daily-task-cat-bar" class="tags-bar" style="display:none"></div>
+        <div class="notes-list" id="daily-tasks-list"></div>
       </div>
       <div class="left-panel-footer">
         <button class="icon-btn" id="trash-btn" title="Trash">🗑</button>
@@ -178,6 +188,15 @@
       <div id="audit-editor-area">
         <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
           Select an audit, or hit + to start a new one.
+        </div>
+      </div>
+    </div>
+
+    <!-- TRW Daily Tasks view -->
+    <div class="view hidden" id="daily-tasks-view" style="flex-direction:column;overflow-y:auto;">
+      <div id="daily-task-editor-area">
+        <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
+          Select an entry, or hit + to paste a new one.
         </div>
       </div>
     </div>
@@ -561,6 +580,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=135"></script>
+<script src="/app.js?v=136"></script>
 </body>
 </html>

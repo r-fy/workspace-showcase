@@ -318,18 +318,21 @@ function switchTab(tab) {
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
   document.getElementById('audits-view')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
+  document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-panel')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('calls-panel')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('audits-panel')?.classList.toggle('hidden', tab !== 'audits');
+  document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
   if (tab === 'calls') loadCallsTab();
   if (tab === 'audits') loadAudits();
+  if (tab === 'daily-tasks') loadDailyTasks();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
 
@@ -2874,6 +2877,8 @@ const COMMANDS = [
   { label: 'Switch to Calls',      icon: '📞', action: () => switchTab('calls') },
   { label: 'New Call',             icon: '📞', action: () => { switchTab('calls'); setTimeout(() => document.getElementById('dial-number')?.focus(), 50); } },
   { label: 'Switch to Tourist',    icon: '🧭', action: () => switchTab('tourist') },
+  { label: 'Switch to TRW Daily Tasks', icon: '📝', action: () => switchTab('daily-tasks') },
+  { label: 'New Daily Task',       icon: '📝', action: () => { switchTab('daily-tasks'); newDailyTaskPaste(); } },
   { label: 'Open Trash',           icon: '🗑', action: () => switchTab('trash') },
 ];
 
@@ -3828,6 +3833,7 @@ document.getElementById('dial-back').addEventListener('click', () => {
 });
 document.getElementById('dial-call-btn').addEventListener('click', startCall);
 document.getElementById('new-audit-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('audits'); newAudit(); });
+document.getElementById('new-daily-task-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('daily-tasks'); newDailyTaskPaste(); });
 document.getElementById('dial-hangup-btn').addEventListener('click', hangUp);
 document.getElementById('dial-number').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); startCall(); }
@@ -4220,6 +4226,230 @@ async function refreshAuditPreview() {
   } catch (e) {}
 }
 
+
+// ── TRW Daily Tasks ─────────────────────────────────────────────
+// Paste a prompt block (a source link + repeated **bolded question** lines),
+// get a fillable form back, answer inline, save. Same parser handles both a
+// fresh blank-answer paste and re-parsing an already-answered file on import.
+let dailyTasks = [];
+let currentDailyTaskId = null;
+let currentDailyTaskCategory = null; // sidebar filter pill
+let dailyTaskDraft = null; // { category, task_date, source_url, questions: [{question, answer}] }
+const DAILY_TASK_CAT_LABELS = { business_masters: 'Business Master', daily_marketing: 'Daily Marketing' };
+
+// TRW's raw prompt block and its own already-answered .md files use two
+// DIFFERENT shapes for the same content: an answered file has each question
+// as its own **bold** line; a fresh unanswered paste instead has ONE bold
+// instruction line (e.g. "**Answer the questions:**") followed by a bullet
+// list of the real questions. Parse bold lines first, then explode any pair
+// whose entire "answer" turned out to be pure bullet lines into one question
+// per bullet — this only fires for the fresh-paste shape (a real answered
+// pair's answer is prose, not bullets-only) except the rare case where a
+// genuine question's answer itself IS a bullet list (e.g. "list 10 niches");
+// that's why the form always keeps a per-question ✕ to undo a bad split.
+function parseQABlock(raw) {
+  const lines = String(raw || '').replace(/\r\n/g, '\n').split('\n');
+  let i = 0;
+  while (i < lines.length && lines[i].trim() === '') i++;
+  let sourceUrl = '';
+  if (i < lines.length && /^https?:\/\//.test(lines[i].trim())) { sourceUrl = lines[i].trim(); i++; }
+  const pairs = [];
+  let current = null;
+  const qRe = /^\s*\*\*(.+?)\*\*:?\s*(.*)$/;
+  for (; i < lines.length; i++) {
+    const m = lines[i].match(qRe);
+    if (m) {
+      if (current) pairs.push(current);
+      current = { question: m[1].trim(), answer: m[2] ? m[2].trim() : '' };
+    } else if (current) {
+      current.answer += (current.answer ? '\n' : '') + lines[i];
+    }
+  }
+  if (current) pairs.push(current);
+  pairs.forEach(p => { p.answer = p.answer.replace(/^\n+|\n+$/g, ''); });
+
+  const bulletRe = /^\s*[-*]\s+(.+)$/;
+  const exploded = [];
+  for (const p of pairs) {
+    const answerLines = p.answer.split('\n').filter(l => l.trim() !== '');
+    const allBullets = answerLines.length > 0 && answerLines.every(l => bulletRe.test(l));
+    if (allBullets) {
+      answerLines.forEach(l => exploded.push({ question: l.match(bulletRe)[1].trim(), answer: '' }));
+    } else {
+      exploded.push(p);
+    }
+  }
+  return { sourceUrl, pairs: exploded };
+}
+
+function formatQABlock(sourceUrl, pairs) {
+  let out = sourceUrl ? sourceUrl + '\n\n' : '';
+  out += pairs.map(p => `**${p.question}**\n\n${p.answer || ''}`).join('\n\n');
+  return out;
+}
+
+async function loadDailyTasks() {
+  try { dailyTasks = await apiCall('GET', '/daily-tasks'); } catch (e) { toast('Could not load daily tasks'); return; }
+  renderDailyTaskCatBar();
+  renderDailyTasksList();
+}
+
+function renderDailyTaskCatBar() {
+  const bar = document.getElementById('daily-task-cat-bar');
+  if (!bar) return;
+  if (!dailyTasks.length) { bar.innerHTML = ''; bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  bar.innerHTML = Object.entries(DAILY_TASK_CAT_LABELS).map(([cat, label]) => {
+    const active = cat === currentDailyTaskCategory;
+    return `<span class="tag-filter-pill${active ? ' active' : ''}" data-cat="${cat}" style="--tag-c:${tagColor(label)}">${escHtml(label)}</span>`;
+  }).join('') + (currentDailyTaskCategory ? `<span class="tag-filter-clear" id="daily-task-cat-clear">✕</span>` : '');
+  bar.querySelectorAll('.tag-filter-pill').forEach(el => {
+    el.addEventListener('click', () => {
+      currentDailyTaskCategory = el.dataset.cat === currentDailyTaskCategory ? null : el.dataset.cat;
+      renderDailyTaskCatBar(); renderDailyTasksList();
+    });
+  });
+  document.getElementById('daily-task-cat-clear')?.addEventListener('click', () => {
+    currentDailyTaskCategory = null; renderDailyTaskCatBar(); renderDailyTasksList();
+  });
+}
+
+function renderDailyTasksList() {
+  const list = document.getElementById('daily-tasks-list');
+  if (!list) return;
+  const filtered = currentDailyTaskCategory ? dailyTasks.filter(t => t.category === currentDailyTaskCategory) : dailyTasks;
+  list.innerHTML = filtered.map(t => `
+    <div class="note-item${t.id === currentDailyTaskId ? ' active' : ''}" data-id="${t.id}">
+      <div class="note-item-title">${escHtml(isoToMdy(t.task_date))}</div>
+      <div class="note-item-snippet">${escHtml((t.questions[0]?.question || '').slice(0, 60))}</div>
+      <div class="note-item-tags"><span class="note-tag" style="--tag-c:${tagColor(DAILY_TASK_CAT_LABELS[t.category])}">${escHtml(DAILY_TASK_CAT_LABELS[t.category])}</span></div>
+    </div>`).join('') || '<div style="padding:16px 12px;color:#444;font-size:12px;">No daily tasks yet</div>';
+  list.querySelectorAll('.note-item').forEach(el => el.addEventListener('click', () => openDailyTask(el.dataset.id)));
+}
+
+function openDailyTask(id) {
+  const t = dailyTasks.find(x => x.id === id);
+  if (!t) return;
+  currentDailyTaskId = id;
+  dailyTaskDraft = { category: t.category, task_date: t.task_date, source_url: t.source_url, questions: t.questions.map(q => ({ ...q })) };
+  renderDailyTasksList();
+  renderDailyTaskForm();
+  if (isMobile()) closeSidebar();
+}
+
+function newDailyTaskPaste() {
+  currentDailyTaskId = null;
+  dailyTaskDraft = null;
+  renderDailyTasksList();
+  const area = document.getElementById('daily-task-editor-area');
+  area.innerHTML = `
+    <div class="daily-task-paste-wrap">
+      <div class="expense-field-row">
+        <label>Category</label>
+        <select id="dt-paste-category">
+          <option value="business_masters">Business Master</option>
+          <option value="daily_marketing">Daily Marketing</option>
+        </select>
+      </div>
+      <div class="expense-field-row">
+        <label>Date</label>
+        <input type="date" id="dt-paste-date">
+      </div>
+      <textarea id="dt-paste-raw" class="daily-task-paste-box" placeholder="Paste the daily task prompt block here (link + **bolded questions**)…"></textarea>
+      <button class="save-btn" id="dt-parse-btn">Parse into a form</button>
+    </div>`;
+  document.getElementById('dt-paste-date').valueAsDate = new Date();
+  document.getElementById('dt-parse-btn').addEventListener('click', () => {
+    const raw = document.getElementById('dt-paste-raw').value;
+    const { sourceUrl, pairs } = parseQABlock(raw);
+    if (!pairs.length) { toast('Could not find any **bolded** questions in that text'); return; }
+    dailyTaskDraft = {
+      category: document.getElementById('dt-paste-category').value,
+      task_date: document.getElementById('dt-paste-date').value,
+      source_url: sourceUrl,
+      questions: pairs,
+    };
+    renderDailyTaskForm();
+  });
+}
+
+function renderDailyTaskForm() {
+  const area = document.getElementById('daily-task-editor-area');
+  const d = dailyTaskDraft;
+  const isEdit = !!currentDailyTaskId;
+  area.innerHTML = `
+    <div class="daily-task-form">
+      <div class="daily-task-form-head">
+        <select id="dt-category">
+          <option value="business_masters"${d.category === 'business_masters' ? ' selected' : ''}>Business Master</option>
+          <option value="daily_marketing"${d.category === 'daily_marketing' ? ' selected' : ''}>Daily Marketing</option>
+        </select>
+        <input type="date" id="dt-date" value="${escHtml(d.task_date)}">
+        ${d.source_url ? `<a href="${escHtml(d.source_url)}" target="_blank" rel="noopener" class="daily-task-source-link">Open source ↗</a>` : ''}
+      </div>
+      ${d.questions.map((q, i) => `
+        <div class="daily-task-qa">
+          <div class="daily-task-question-row">
+            <div class="daily-task-question">${escHtml(q.question)}</div>
+            <button class="daily-task-remove-q" data-i="${i}" title="Remove this question">✕</button>
+          </div>
+          <textarea class="daily-task-answer" data-i="${i}" placeholder="Your answer…">${escHtml(q.answer)}</textarea>
+        </div>`).join('')}
+      <div class="daily-task-form-actions">
+        ${isEdit ? '<button class="del-task-btn" id="dt-delete-btn">Delete</button>' : '<span></span>'}
+        <div style="display:flex;gap:8px;">
+          <button class="cancel-sel-btn" id="dt-copy-btn">Copy formatted</button>
+          <button class="save-btn" id="dt-save-btn">Save</button>
+        </div>
+      </div>
+    </div>`;
+  area.querySelectorAll('.daily-task-answer').forEach(ta => {
+    ta.addEventListener('input', () => { d.questions[+ta.dataset.i].answer = ta.value; });
+  });
+  area.querySelectorAll('.daily-task-remove-q').forEach(btn => {
+    btn.addEventListener('click', () => { d.questions.splice(+btn.dataset.i, 1); renderDailyTaskForm(); });
+  });
+  document.getElementById('dt-category').addEventListener('change', e => { d.category = e.target.value; });
+  document.getElementById('dt-date').addEventListener('change', e => { d.task_date = e.target.value; });
+  document.getElementById('dt-copy-btn').addEventListener('click', () => {
+    navigator.clipboard.writeText(formatQABlock(d.source_url, d.questions)).then(() => toast('Copied'));
+  });
+  document.getElementById('dt-save-btn').addEventListener('click', saveDailyTask);
+  document.getElementById('dt-delete-btn')?.addEventListener('click', deleteCurrentDailyTask);
+}
+
+async function saveDailyTask() {
+  const d = dailyTaskDraft;
+  if (!d.task_date) { toast('Date required'); return; }
+  const body = { category: d.category, task_date: d.task_date, source_url: d.source_url, questions: d.questions };
+  try {
+    if (currentDailyTaskId) {
+      const updated = await apiCall('PUT', '/daily-tasks/' + currentDailyTaskId, body);
+      const idx = dailyTasks.findIndex(t => t.id === updated.id);
+      if (idx >= 0) dailyTasks[idx] = updated;
+    } else {
+      const created = await apiCall('POST', '/daily-tasks', body);
+      dailyTasks.unshift(created);
+      currentDailyTaskId = created.id;
+      renderDailyTaskForm(); // switches from "fresh paste" to "saved entry" (adds Delete)
+    }
+    renderDailyTaskCatBar(); renderDailyTasksList();
+    toast('Saved');
+  } catch (e) {
+    toast('Could not save: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection'));
+  }
+}
+
+async function deleteCurrentDailyTask() {
+  if (!currentDailyTaskId) return;
+  if (!confirm('Delete this daily task entry?')) return;
+  const id = currentDailyTaskId;
+  dailyTasks = dailyTasks.filter(t => t.id !== id);
+  currentDailyTaskId = null; dailyTaskDraft = null;
+  renderDailyTasksList();
+  document.getElementById('daily-task-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">Select an entry, or hit + to paste a new one.</div>`;
+  try { await apiCall('DELETE', '/daily-tasks/' + id); } catch(e) {}
+}
 
 // ── Tourist (unit converter, migrated from tourist.rfisolns.org) ──
 // Self-contained: own IIFE so its generic helper names (clamp, r1, r2...)
