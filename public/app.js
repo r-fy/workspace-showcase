@@ -4759,7 +4759,11 @@ function newDailyTaskPaste() {
         <label>Date</label>
         <input type="date" id="dt-paste-date">
       </div>
-      <textarea id="dt-paste-raw" class="daily-task-paste-box" placeholder="Paste the daily task prompt block here (link + **bolded questions**)…"></textarea>
+      <div class="expense-field-row">
+        <label>Link</label>
+        <input type="url" id="dt-paste-link" placeholder="Message link (https://app.jointherealworld.com/chat/...)">
+      </div>
+      <textarea id="dt-paste-raw" class="daily-task-paste-box" placeholder="Paste the questions here (**bolded questions**)…"></textarea>
       <button class="save-btn" id="dt-parse-btn">Parse into a form</button>
     </div>`;
   document.getElementById('dt-paste-date').valueAsDate = new Date();
@@ -4767,10 +4771,11 @@ function newDailyTaskPaste() {
     const raw = document.getElementById('dt-paste-raw').value;
     const { sourceUrl, pairs } = parseQABlock(raw);
     if (!pairs.length) { toast('Could not find any **bolded** questions in that text'); return; }
+    const manualLink = document.getElementById('dt-paste-link').value.trim();
     dailyTaskDraft = {
       category: document.getElementById('dt-paste-category').value,
       task_date: document.getElementById('dt-paste-date').value,
-      source_url: sourceUrl,
+      source_url: manualLink || sourceUrl,
       questions: pairs,
     };
     renderDailyTaskForm();
