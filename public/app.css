@@ -1268,6 +1268,13 @@ header {
 .daily-task-paste-box:focus { border-color: #3a3a3a; outline: none; }
 .daily-task-paste-wrap .save-btn { margin-top: 16px; }
 .daily-task-form-head { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+.daily-task-source-input {
+  flex: 1; min-width: 180px;
+  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
+  padding: 6px 10px; font-size: 13px; color: #e0e0e0; font-family: inherit;
+}
+.daily-task-source-input:focus { border-color: #3a3a3a; outline: none; }
+.daily-task-source-input::placeholder { color: #444; }
 .daily-task-source-link { font-size: 12px; color: #5fc83b; text-decoration: none; }
 .daily-task-source-link:hover { text-decoration: underline; }
 .daily-task-qa { margin-bottom: 20px; }

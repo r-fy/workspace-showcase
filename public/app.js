@@ -4790,7 +4790,8 @@ function renderDailyTaskForm() {
           <option value="daily_seo_task"${d.category === 'daily_seo_task' ? ' selected' : ''}>Daily SEO Task</option>
         </select>
         <input type="date" id="dt-date" value="${escHtml(d.task_date)}">
-        ${d.source_url ? `<a href="${escHtml(d.source_url)}" target="_blank" rel="noopener" class="daily-task-source-link">Open source ↗</a>` : ''}
+        <input type="url" id="dt-source-url" class="daily-task-source-input" placeholder="Message link (https://app.jointherealworld.com/chat/...)" value="${escHtml(d.source_url || '')}">
+        ${d.source_url ? `<a href="${escHtml(d.source_url)}" target="_blank" rel="noopener" class="daily-task-source-link">Open ↗</a>` : ''}
       </div>
       ${d.questions.map((q, i) => `
         <div class="daily-task-qa">
@@ -4816,6 +4817,7 @@ function renderDailyTaskForm() {
   });
   document.getElementById('dt-category').addEventListener('change', e => { d.category = e.target.value; });
   document.getElementById('dt-date').addEventListener('change', e => { d.task_date = e.target.value; });
+  document.getElementById('dt-source-url').addEventListener('change', e => { d.source_url = e.target.value.trim(); renderDailyTaskForm(); });
   document.getElementById('dt-copy-btn').addEventListener('click', () => {
     navigator.clipboard.writeText(formatQABlock(d.source_url, d.questions)).then(() => toast('Copied'));
   });
