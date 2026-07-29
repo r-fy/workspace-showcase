@@ -224,6 +224,24 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_audits_user ON audits(user_id, updated_at);
 `);
 
+// Follow-ups tab: one row per warm lead, an 8-touch drip sequence stored as a
+// JSON blob (same blob-column pattern as audits.data) — touches is a fixed
+// array of {day, type, label, subject, body, status, due_at, sent_at}.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS followups (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    lead_name TEXT NOT NULL DEFAULT '',
+    business_name TEXT NOT NULL DEFAULT 'Untitled follow-up',
+    status TEXT NOT NULL DEFAULT 'active',
+    data TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_followups_user ON followups(user_id, updated_at);
+`);
+
 // TRW Daily Tasks tab: paste a prompt block, fill out the questions inline.
 // questions is a JSON array of {question, answer} — same blob-column pattern
 // as audits.data, no relational split needed for a per-entry Q&A list.
@@ -463,6 +481,96 @@ app.put('/api/audits/:id', auth, (req, res) => {
 
 app.delete('/api/audits/:id', auth, (req, res) => {
   db.prepare('UPDATE audits SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+// ── Follow-ups (8-touch warm-lead drip sequences) ─────────────
+// day offsets + type cycle locked per the Can-Ersöz-reviewed cadence:
+// 8 touches over ~65 days, round-robin value-add / close-hard / new-angle.
+const FOLLOWUP_TOUCH_PLAN = [
+  { day: 0,  type: 'value-add' },
+  { day: 4,  type: 'close-hard' },
+  { day: 9,  type: 'new-angle' },
+  { day: 16, type: 'value-add' },
+  { day: 25, type: 'close-hard' },
+  { day: 35, type: 'new-angle' },
+  { day: 50, type: 'value-add' },
+  { day: 65, type: 'close-hard' }, // final touch — breakup framing
+];
+const FOLLOWUP_TYPE_LABEL = { 'value-add': 'Value-add', 'close-hard': 'Close hard', 'new-angle': 'New angle / check-in' };
+const FOLLOWUP_SKELETON = {
+  'value-add': {
+    subject: "One more thing on [BUSINESS_NAME]'s ads",
+    body: "Hey [FIRST_NAME],\n\n[VALUE_ADD_INSIGHT — a fresh finding, screenshot, or competitor update specific to them].\n\nNo pitch here, just flagging it because it's useful either way.",
+  },
+  'close-hard': {
+    subject: 'Quick close on [BUSINESS_NAME]',
+    body: "Hey [FIRST_NAME],\n\nStill open to closing that gap we found? $500/mo plus 15% of ad spend, no long-term lock-in.\n\nIf timing's off, just say so and I'll check back later. If it's a flat no, tell me that too, no hard feelings.",
+  },
+  'new-angle': {
+    subject: 'Different angle on [BUSINESS_NAME]',
+    body: "Hey [FIRST_NAME],\n\n[NEW_ANGLE — a different hook than what's already been sent, e.g. a seasonal angle, a new competitor, a site change you noticed].\n\nWorth a quick look?",
+  },
+};
+const FOLLOWUP_FINAL_TOUCH = {
+  subject: 'Last check-in on [BUSINESS_NAME]',
+  body: "Hey [FIRST_NAME],\n\nHaven't heard back so I'll leave it here. Door's open whenever it makes sense on your end, the findings don't expire.\n\nGood luck either way.",
+};
+function buildFollowupTouches(startAt) {
+  return FOLLOWUP_TOUCH_PLAN.map((step, i) => {
+    const isLast = i === FOLLOWUP_TOUCH_PLAN.length - 1;
+    const skel = isLast ? FOLLOWUP_FINAL_TOUCH : FOLLOWUP_SKELETON[step.type];
+    return {
+      day: step.day,
+      type: step.type,
+      label: FOLLOWUP_TYPE_LABEL[step.type],
+      subject: skel.subject,
+      body: skel.body,
+      status: 'pending', // pending | sent | skipped
+      due_at: startAt + step.day * 86400000,
+      sent_at: null,
+    };
+  });
+}
+
+app.get('/api/followups', auth, (req, res) => {
+  const rows = db.prepare('SELECT id, lead_name, business_name, status, data, updated_at FROM followups WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
+  res.json(rows.map(r => {
+    let touches = [];
+    try { touches = JSON.parse(r.data).touches || []; } catch {}
+    const next = touches.find(t => t.status === 'pending');
+    return { id: r.id, lead_name: r.lead_name, business_name: r.business_name, status: r.status, updated_at: r.updated_at, next_due_at: next ? next.due_at : null, next_label: next ? next.label : null };
+  }));
+});
+
+app.get('/api/followups/:id', auth, (req, res) => {
+  const f = db.prepare('SELECT * FROM followups WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  res.json({ ...f, data: JSON.parse(f.data) });
+});
+
+app.post('/api/followups', auth, (req, res) => {
+  const { lead_name = '', business_name = 'Untitled follow-up', start_at } = req.body;
+  const id = uid(), t = now();
+  const data = { touches: buildFollowupTouches(start_at || t) };
+  db.prepare('INSERT INTO followups (id, lead_name, business_name, status, data, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, lead_name, business_name, 'active', JSON.stringify(data), req.userId, t, t);
+  res.json({ id, lead_name, business_name, status: 'active', data, created_at: t, updated_at: t });
+});
+
+app.put('/api/followups/:id', auth, (req, res) => {
+  const { lead_name, business_name, status, data } = req.body;
+  const t = now();
+  const f = db.prepare('SELECT * FROM followups WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!f) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE followups SET lead_name=?, business_name=?, status=?, data=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(lead_name ?? f.lead_name, business_name ?? f.business_name, status ?? f.status, JSON.stringify(data ?? JSON.parse(f.data)), t, req.params.id, req.userId);
+  const updated = db.prepare('SELECT * FROM followups WHERE id = ?').get(req.params.id);
+  res.json({ ...updated, data: JSON.parse(updated.data) });
+});
+
+app.delete('/api/followups/:id', auth, (req, res) => {
+  db.prepare('UPDATE followups SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
   res.json({ ok: true });
 });
 

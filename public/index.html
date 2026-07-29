@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=129">
+<link rel="stylesheet" href="/app.css?v=130">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -109,6 +109,13 @@
           <button class="nav-menu-item" data-tab="daily-tasks">TRW Daily Tasks</button>
           <button class="icon-btn nav-add-btn" id="new-daily-task-btn" title="New daily task">+</button>
         </div>
+        <div class="nav-row" draggable="true" data-tab="followups">
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="followups">Follow-ups</button>
+          <button class="icon-btn nav-add-btn" id="new-followup-btn" title="New follow-up sequence">+</button>
+        </div>
         <div class="nav-row" draggable="true" data-tab="tourist">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
@@ -161,6 +168,9 @@
       <div id="daily-tasks-panel" class="panel-section hidden">
         <div id="daily-task-cat-bar" class="tags-bar" style="display:none"></div>
         <div class="notes-list" id="daily-tasks-list"></div>
+      </div>
+      <div id="followups-panel" class="panel-section hidden">
+        <div class="notes-list" id="followups-list"></div>
       </div>
       <div id="cold-email-panel" class="panel-section hidden">
         <div class="ce-campaign-list" id="ce-campaign-list"></div>
@@ -222,6 +232,15 @@
       <div id="daily-task-editor-area">
         <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
           Select an entry, or hit + to paste a new one.
+        </div>
+      </div>
+    </div>
+
+    <!-- Follow-ups view (8-touch warm-lead drip sequences) -->
+    <div class="view hidden" id="followups-view" style="flex-direction:column;overflow-y:auto;">
+      <div id="followup-editor-area">
+        <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
+          Select a follow-up sequence, or hit + to start one for a lead.
         </div>
       </div>
     </div>
@@ -596,6 +615,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=149"></script>
+<script src="/app.js?v=150"></script>
 </body>
 </html>
