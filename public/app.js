@@ -329,6 +329,7 @@ function switchTab(tab) {
   document.getElementById('audits-view')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
+  document.getElementById('followups-view')?.classList.toggle('hidden', tab !== 'followups');
   document.getElementById('cold-email-view')?.classList.toggle('hidden', tab !== 'cold-email');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
@@ -337,6 +338,7 @@ function switchTab(tab) {
   document.getElementById('calls-panel')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('audits-panel')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
+  document.getElementById('followups-panel')?.classList.toggle('hidden', tab !== 'followups');
   document.getElementById('cold-email-panel')?.classList.toggle('hidden', tab !== 'cold-email');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
@@ -345,6 +347,7 @@ function switchTab(tab) {
   if (tab === 'calls') loadCallsTab();
   if (tab === 'audits') loadAudits();
   if (tab === 'daily-tasks') loadDailyTasks();
+  if (tab === 'followups') loadFollowups();
   if (tab === 'cold-email') loadColdEmail();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
@@ -4230,6 +4233,7 @@ document.getElementById('dial-back').addEventListener('click', () => {
 document.getElementById('dial-call-btn').addEventListener('click', startCall);
 document.getElementById('new-audit-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('audits'); newAudit(); });
 document.getElementById('new-daily-task-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('daily-tasks'); newDailyTaskPaste(); });
+document.getElementById('new-followup-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('followups'); newFollowupForm(); });
 document.getElementById('cold-email-refresh-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('cold-email'); refreshColdEmail(); });
 document.getElementById('dial-hangup-btn').addEventListener('click', hangUp);
 document.getElementById('dial-number').addEventListener('keydown', e => {
@@ -4861,6 +4865,162 @@ async function deleteCurrentDailyTask() {
   renderDailyTasksList();
   document.getElementById('daily-task-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">Select an entry, or hit + to paste a new one.</div>`;
   try { await apiCall('DELETE', '/daily-tasks/' + id); } catch(e) {}
+}
+
+// ── Follow-ups (8-touch warm-lead drip sequences) ────────────────
+// Skeleton copy (type + subject/body per touch) mirrors server.js's
+// FOLLOWUP_TOUCH_PLAN — the server fills it in at creation, this file just
+// renders/edits/saves whatever comes back as followup.data.touches.
+let followups = [];
+let currentFollowupId = null;
+let followupDraft = null; // { lead_name, business_name, status, data: { touches: [...] } }
+
+async function loadFollowups() {
+  try { followups = await apiCall('GET', '/followups'); } catch (e) { toast('Could not load follow-ups'); return; }
+  renderFollowupsList();
+}
+
+function renderFollowupsList() {
+  const list = document.getElementById('followups-list');
+  if (!list) return;
+  const t = Date.now();
+  list.innerHTML = followups.map(f => {
+    const overdue = f.next_due_at && f.next_due_at < t;
+    return `
+    <div class="note-item${f.id === currentFollowupId ? ' active' : ''}" data-id="${f.id}">
+      <div class="note-item-title">${escHtml(f.business_name || 'Untitled follow-up')}</div>
+      <div class="note-item-snippet">${escHtml(f.lead_name || '')}</div>
+      <div class="note-item-tags">
+        ${f.next_label ? `<span class="note-tag"${overdue ? ' style="--tag-c:#c0392b"' : ''}>${overdue ? 'Overdue: ' : 'Next: '}${escHtml(f.next_label)}</span>` : '<span class="note-tag" style="--tag-c:#2e7d32">All touches sent</span>'}
+      </div>
+    </div>`;
+  }).join('') || '<div style="padding:16px 12px;color:#444;font-size:12px;">No follow-up sequences yet</div>';
+  list.querySelectorAll('.note-item').forEach(el => el.addEventListener('click', () => openFollowup(el.dataset.id)));
+}
+
+async function openFollowup(id) {
+  let f;
+  try { f = await apiCall('GET', '/followups/' + id); } catch (e) { toast('Could not load'); return; }
+  currentFollowupId = id;
+  followupDraft = { lead_name: f.lead_name, business_name: f.business_name, status: f.status, data: f.data };
+  renderFollowupsList();
+  renderFollowupEditor();
+  if (isMobile()) closeSidebar();
+}
+
+function newFollowupForm() {
+  currentFollowupId = null;
+  followupDraft = null;
+  renderFollowupsList();
+  const area = document.getElementById('followup-editor-area');
+  area.innerHTML = `
+    <div class="daily-task-paste-wrap">
+      <div class="expense-field-row">
+        <label>Lead name</label>
+        <input type="text" id="fu-new-lead" placeholder="e.g. Sarah at TIA MEDSPA">
+      </div>
+      <div class="expense-field-row">
+        <label>Business</label>
+        <input type="text" id="fu-new-business" placeholder="e.g. TIA MEDSPA">
+      </div>
+      <div class="expense-field-row">
+        <label>Touch 1 date</label>
+        <input type="date" id="fu-new-start">
+      </div>
+      <button class="save-btn" id="fu-create-btn">Create 8-touch sequence</button>
+    </div>`;
+  document.getElementById('fu-new-start').valueAsDate = new Date();
+  document.getElementById('fu-create-btn').addEventListener('click', async () => {
+    const lead_name = document.getElementById('fu-new-lead').value.trim();
+    const business_name = document.getElementById('fu-new-business').value.trim() || 'Untitled follow-up';
+    const start_at = document.getElementById('fu-new-start').valueAsDate?.getTime() || Date.now();
+    try {
+      const created = await apiCall('POST', '/followups', { lead_name, business_name, start_at });
+      followups.unshift({ id: created.id, lead_name: created.lead_name, business_name: created.business_name, status: created.status, updated_at: created.updated_at, next_due_at: created.data.touches[0].due_at, next_label: created.data.touches[0].label });
+      currentFollowupId = created.id;
+      followupDraft = { lead_name: created.lead_name, business_name: created.business_name, status: created.status, data: created.data };
+      renderFollowupsList();
+      renderFollowupEditor();
+      toast('Sequence created');
+    } catch (e) { toast('Could not create sequence'); }
+  });
+}
+
+function renderFollowupEditor() {
+  const area = document.getElementById('followup-editor-area');
+  const d = followupDraft;
+  area.innerHTML = `
+    <div class="daily-task-form">
+      <div class="daily-task-form-head">
+        <input type="text" id="fu-lead-name" placeholder="Lead name" value="${escHtml(d.lead_name || '')}">
+        <input type="text" id="fu-business-name" placeholder="Business" value="${escHtml(d.business_name || '')}">
+        <select id="fu-status">
+          <option value="active"${d.status === 'active' ? ' selected' : ''}>Active</option>
+          <option value="paused"${d.status === 'paused' ? ' selected' : ''}>Paused</option>
+          <option value="won"${d.status === 'won' ? ' selected' : ''}>Won</option>
+          <option value="dead"${d.status === 'dead' ? ' selected' : ''}>Dead</option>
+        </select>
+      </div>
+      ${d.data.touches.map((t, i) => `
+        <div class="daily-task-qa followup-touch${t.status === 'sent' ? ' followup-touch-sent' : ''}">
+          <div class="daily-task-question-row">
+            <div class="daily-task-question">Touch ${i + 1} · Day ${t.day} · ${escHtml(t.label)} · due ${fmtDate(t.due_at)}${t.status === 'sent' ? ' · sent ' + fmtDate(t.sent_at) : ''}</div>
+            <button class="cancel-sel-btn followup-mark-btn" data-i="${i}">${t.status === 'sent' ? 'Mark unsent' : 'Mark sent'}</button>
+          </div>
+          <input type="text" class="followup-subject" data-i="${i}" placeholder="Subject" value="${escHtml(t.subject)}">
+          <textarea class="daily-task-answer followup-body" data-i="${i}" placeholder="Body…">${escHtml(t.body)}</textarea>
+        </div>`).join('')}
+      <div class="daily-task-form-actions">
+        <button class="del-task-btn" id="fu-delete-btn">Delete sequence</button>
+        <button class="save-btn" id="fu-save-btn">Save</button>
+      </div>
+    </div>`;
+  area.querySelectorAll('.followup-subject').forEach(inp => {
+    inp.addEventListener('input', () => { d.data.touches[+inp.dataset.i].subject = inp.value; });
+  });
+  area.querySelectorAll('.followup-body').forEach(ta => {
+    ta.addEventListener('input', () => { d.data.touches[+ta.dataset.i].body = ta.value; });
+  });
+  area.querySelectorAll('.followup-mark-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = d.data.touches[+btn.dataset.i];
+      if (t.status === 'sent') { t.status = 'pending'; t.sent_at = null; }
+      else { t.status = 'sent'; t.sent_at = Date.now(); }
+      renderFollowupEditor();
+    });
+  });
+  document.getElementById('fu-lead-name').addEventListener('change', e => { d.lead_name = e.target.value.trim(); });
+  document.getElementById('fu-business-name').addEventListener('change', e => { d.business_name = e.target.value.trim(); });
+  document.getElementById('fu-status').addEventListener('change', e => { d.status = e.target.value; });
+  document.getElementById('fu-save-btn').addEventListener('click', saveFollowup);
+  document.getElementById('fu-delete-btn').addEventListener('click', deleteCurrentFollowup);
+}
+
+async function saveFollowup() {
+  if (!currentFollowupId) return;
+  const d = followupDraft;
+  try {
+    const updated = await apiCall('PUT', '/followups/' + currentFollowupId, { lead_name: d.lead_name, business_name: d.business_name, status: d.status, data: d.data });
+    const next = updated.data.touches.find(t => t.status === 'pending');
+    const idx = followups.findIndex(f => f.id === updated.id);
+    const row = { id: updated.id, lead_name: updated.lead_name, business_name: updated.business_name, status: updated.status, updated_at: updated.updated_at, next_due_at: next ? next.due_at : null, next_label: next ? next.label : null };
+    if (idx >= 0) followups[idx] = row; else followups.unshift(row);
+    renderFollowupsList();
+    toast('Saved');
+  } catch (e) {
+    toast('Could not save: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection'));
+  }
+}
+
+async function deleteCurrentFollowup() {
+  if (!currentFollowupId) return;
+  if (!confirm('Delete this follow-up sequence?')) return;
+  const id = currentFollowupId;
+  followups = followups.filter(f => f.id !== id);
+  currentFollowupId = null; followupDraft = null;
+  renderFollowupsList();
+  document.getElementById('followup-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">Select a follow-up sequence, or hit + to start one for a lead.</div>`;
+  try { await apiCall('DELETE', '/followups/' + id); } catch(e) {}
 }
 
 // ── Tourist (unit converter, migrated from tourist.rfisolns.org) ──
