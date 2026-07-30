@@ -468,6 +468,7 @@ function setTagColor(name, color) {
   localStorage.setItem('tag-colors', JSON.stringify(stored));
   renderTagsBar(); renderNotesList(); renderTagEditor();
   renderTaskTagsBar(); renderKanban(); renderTaskTagEditor();
+  renderDailyTaskCatBar(); renderDailyTasksList();
 }
 
 // One-time migration: task tags used to be a separate color namespace
@@ -4815,12 +4816,23 @@ function renderDailyTaskCatBar() {
   bar.style.display = '';
   bar.innerHTML = Object.entries(DAILY_TASK_CAT_LABELS).map(([cat, label]) => {
     const active = cat === currentDailyTaskCategory;
-    return `<span class="tag-filter-pill${active ? ' active' : ''}" data-cat="${cat}" style="--tag-c:${tagColor(label)}">${escHtml(label)}</span>`;
+    const c = tagColor(label);
+    return `<span class="tag-filter-pill${active ? ' active' : ''}" data-cat="${cat}" style="--tag-c:${c}"><span class="tag-color-dot" data-label="${escHtml(label)}" style="background:${c}" title="Change color"></span>${escHtml(label)}</span>`;
   }).join('') + (currentDailyTaskCategory ? `<span class="tag-filter-clear" id="daily-task-cat-clear">✕</span>` : '');
   bar.querySelectorAll('.tag-filter-pill').forEach(el => {
     el.addEventListener('click', () => {
       currentDailyTaskCategory = el.dataset.cat === currentDailyTaskCategory ? null : el.dataset.cat;
       renderDailyTaskCatBar(); renderDailyTasksList();
+    });
+  });
+  bar.querySelectorAll('.tag-color-dot').forEach(dot => {
+    dot.addEventListener('click', e => {
+      e.stopPropagation();
+      const inp = document.createElement('input');
+      inp.type = 'color';
+      inp.value = tagColor(dot.dataset.label);
+      inp.addEventListener('input', () => setTagColor(dot.dataset.label, inp.value));
+      inp.click();
     });
   });
   document.getElementById('daily-task-cat-clear')?.addEventListener('click', () => {
