@@ -309,6 +309,38 @@ db.exec(`
   );
 `);
 
+// Leads tab: hub row tying together audits / followups / cold_email_replies
+// for the same real-world prospect. website_domain is the only automatic
+// matching key (normalized in app code); business_name text is a human hint,
+// never auto-matched. See CRM-UNIFICATION-PLAN.md.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS leads (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    business_name TEXT NOT NULL DEFAULT 'Untitled lead',
+    website TEXT NOT NULL DEFAULT '',
+    website_domain TEXT DEFAULT NULL,
+    primary_email TEXT NOT NULL DEFAULT '',
+    city TEXT NOT NULL DEFAULT '',
+    niche TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    notes TEXT NOT NULL DEFAULT '',
+    parent_lead_id TEXT DEFAULT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id, updated_at);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_domain ON leads(user_id, website_domain)
+    WHERE website_domain IS NOT NULL AND website_domain != '' AND deleted_at IS NULL;
+`);
+try { db.exec(`ALTER TABLE audits ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE followups ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`); } catch(e) {}
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
