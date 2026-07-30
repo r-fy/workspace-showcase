@@ -1409,3 +1409,16 @@ header {
   .crm-lead-name { max-width: 100%; }
   .lead-reply-detail { padding-left: 12px; }
 }
+
+/* ── Inbound calls (v161): ring banner ─────────────────────────── */
+.incoming-call-bar {
+  position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px; z-index: 700;
+  background: #161616; border: 1px solid #2e5c1f; border-radius: 12px;
+  padding: 10px 14px; box-shadow: 0 4px 24px rgba(0,0,0,0.7);
+  max-width: 94vw; flex-wrap: wrap;
+}
+.incoming-call-label { font-size: 12px; color: #8ce870; text-transform: uppercase; letter-spacing: 0.04em; }
+#incoming-call-who { font-size: 14px; color: #e0e0e0; font-weight: 600; }
+.incoming-call-bar .dial-call-btn, .incoming-call-bar .dial-hangup-btn { padding: 6px 14px; font-size: 12px; }
+.call-dir-in { color: #8ce870; }

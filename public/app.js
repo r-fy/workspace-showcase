@@ -271,6 +271,7 @@ async function tryLogin(pin) {
     outbox = await idbGetAll('outbox');
     if (outbox.length) flushOutbox();
     startPolling();
+    initDialer(); // v161: register for inbound calls from any tab, not just when CRM opens
   } catch(e) {
     authHeader = null;
     const err = document.getElementById('login-error');
@@ -1951,6 +1952,81 @@ async function loadUsagePanel() {
 let crmCallLeadId = null;   // lead the LIVE call belongs to
 let crmCallNumber = '';     // number of the live call, for the float bar
 
+// ── Inbound calls (v161): ring banner + phone-style switch ──────────────
+// A lead calling back rings here (Device.register + incomingAllow). Banner
+// shows who it is (matched by last-10 digits against leads.phone_number).
+// Accept mid-dial hangs up the current call first — no hold, deliberately:
+// finish-or-switch covers a solo cold caller, hold would mean rearchitecting
+// every call through conferences.
+let twIncoming = null;         // pending incoming Call (ringing, not accepted)
+let crmCallInbound = false;    // live call is inbound → no auto-advance after
+let switchingToInbound = false; // suppress the disposition modal for the call we hang up on switch
+
+function clientLast10(s) { return String(s || '').replace(/\D/g, '').slice(-10); }
+function leadForNumber(num) {
+  const t = clientLast10(num);
+  return t.length === 10 ? leads.find(l => clientLast10(l.phone_number) === t) : null;
+}
+
+function handleIncomingCall(call) {
+  twIncoming = call;
+  // Leads may not be loaded yet (banner can fire from any tab) — fetch so
+  // the caller gets a name instead of a bare number.
+  if (!leads.length) apiCall('GET', '/leads').then(ls => { leads = ls; if (twIncoming === call) renderIncomingBanner(); }).catch(() => {});
+  renderIncomingBanner();
+  const clear = () => { if (twIncoming === call) { twIncoming = null; hideIncomingBanner(); } };
+  call.on('cancel', clear);     // caller hung up or the 15s server timeout sent them to voicemail
+  call.on('disconnect', clear);
+  call.on('reject', clear);
+}
+
+function renderIncomingBanner() {
+  const bar = document.getElementById('incoming-call-bar');
+  if (!bar || !twIncoming) return;
+  const from = twIncoming.parameters.From || '';
+  const lead = leadForNumber(from);
+  document.getElementById('incoming-call-who').textContent =
+    (lead ? lead.business_name + ' · ' : '') + (fmtPhone(from) || from || 'Unknown');
+  document.getElementById('incoming-accept').textContent = twCall ? 'End current + Accept' : 'Accept';
+  bar.classList.remove('hidden');
+}
+function hideIncomingBanner() { document.getElementById('incoming-call-bar')?.classList.add('hidden'); }
+
+async function acceptIncoming() {
+  const call = twIncoming;
+  if (!call) return;
+  twIncoming = null;
+  hideIncomingBanner();
+  if (twCall) {
+    // Phone-style switch: end the current call quietly — no disposition
+    // modal for a dial you abandoned to take a hotter callback.
+    switchingToInbound = true;
+    try { twCall.disconnect(); } catch (e) {}
+  }
+  const from = call.parameters.From || '';
+  const lead = leadForNumber(from);
+  crmCallLeadId = lead ? lead.id : null;
+  crmCallInbound = true;
+  crmCallNumber = from;
+  call.on('disconnect', endCallUi);
+  call.on('cancel', endCallUi);
+  call.on('error', err => { console.warn('twilio incoming call error:', err); endCallUi(); });
+  try { call.accept(); } catch (e) { console.warn('accept failed:', e); endCallUi(); return; }
+  twCall = call;
+  document.getElementById('dial-call-btn')?.classList.add('hidden');
+  document.getElementById('dial-hangup-btn')?.classList.remove('hidden');
+  startCallTimer();
+  // Jump to the caller's lead so notes/history are in front of you.
+  if (lead) { if (currentTab !== 'crm') switchTab('crm'); openLead(lead.id, 'calls'); }
+}
+
+function declineIncoming() {
+  const call = twIncoming;
+  twIncoming = null;
+  hideIncomingBanner();
+  try { call?.reject(); } catch (e) {} // caller falls through to voicemail
+}
+
 function showCallFloatBar(text) {
   const bar = document.getElementById('call-float-bar');
   if (!bar) return;
@@ -1991,6 +2067,11 @@ async function initDialer() {
       }
       setDialerStatus('Dialer error — ' + (err.message || err.code), 'dialer-status-err');
     });
+    // Inbound (v161): register() opens the signaling stream so lead callbacks
+    // ring here (outbound-only never needed it). Also means tokenWillExpire
+    // now fires even while idle, keeping the token fresh for free.
+    twDevice.on('incoming', handleIncomingCall);
+    try { await twDevice.register(); } catch (e) { console.warn('twilio register failed:', e); }
     setDialerStatus('Ready', 'dialer-status-ready');
   } catch(e) {
     setDialerStatus(String(e.message || '').includes('not configured')
@@ -2010,10 +2091,18 @@ function startCallTimer() {
   showCallFloatBar('In call ' + fmtPhone(crmCallNumber) + ' · 0:00');
 }
 
-function endCallUi() {
+function endCallUi(callRef) {
+  // Twilio passes the Call as the event arg. If it isn't the CURRENT call,
+  // this is the stale disconnect of a dial we hung up while switching to an
+  // incoming call — swallow it, the new call owns the UI now.
+  if (callRef && typeof callRef === 'object' && twCall && callRef !== twCall) { switchingToInbound = false; return; }
   clearInterval(callTimerInt); callTimerInt = null;
   const endedLeadId = crmCallLeadId;
   crmCallLeadId = null;
+  const inbound = crmCallInbound;
+  crmCallInbound = false;
+  const suppressed = switchingToInbound;
+  switchingToInbound = false;
   const wasLive = !!twCall;
   twCall = null;
   twDialing = false;
@@ -2027,8 +2116,10 @@ function endCallUi() {
   // rfy-crm §1.6/1.7: a lead-scoped call that actually connected surfaces the
   // disposition picker, then auto-advances to the next lead in list order.
   // wasLive filters out dials that never got past "Connecting…" (mic blocked,
-  // connect() rejected) — no conversation happened, nothing to disposition.
-  if (wasLive && endedLeadId) openDispositionModal(endedLeadId);
+  // connect() rejected). Inbound callbacks get the picker too but never
+  // auto-advance (you weren't queue-dialing them). A call abandoned to take
+  // an incoming one (suppressed) gets no picker at all.
+  if (wasLive && endedLeadId && !suppressed) openDispositionModal(endedLeadId, { advance: !inbound });
 }
 
 async function startCall() {
@@ -2047,6 +2138,7 @@ async function startCall() {
   // Capture the lead context at dial time — the disposition/auto-advance flow
   // uses this, not whatever lead happens to be open when the call ends.
   crmCallLeadId = currentLeadId || null;
+  crmCallInbound = false;
   crmCallNumber = num;
   setDialerStatus('Connecting…');
   showCallFloatBar('Calling ' + fmtPhone(num) + '…');
@@ -2116,10 +2208,16 @@ function renderCallLog() {
     return;
   }
   log.innerHTML = '<div class="agenda-section-label">Call log</div>' + leadCalls.map(c => {
-    const st = CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
+    const inbound = c.direction === 'inbound';
+    // Inbound "missed" with a recording attached = the caller left a voicemail.
+    const st = inbound && c.status === 'missed'
+      ? (c.recording_sid ? { label: 'Voicemail', cls: 'call-status-bad' } : { label: 'Missed', cls: 'call-status-bad' })
+      : inbound && c.status === 'ringing' ? { label: 'Ringing', cls: 'call-status-dim' }
+      : CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
+    const num = inbound ? c.from_number : c.to_number;
     return `<div class="call-item" data-id="${c.id}">
       <div class="call-item-main">
-        <div class="call-item-number">${escHtml(fmtPhone(c.to_number))}</div>
+        <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
         <div class="call-item-meta">
           <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(c.started_at))}</span>
           <span class="call-status ${st.cls}">${escHtml(st.label)}</span>
@@ -4338,9 +4436,12 @@ document.getElementById('call-float-hangup').addEventListener('click', hangUp);
 document.getElementById('disposition-close').addEventListener('click', closeDispositionModal);
 document.getElementById('disposition-skip').addEventListener('click', () => {
   const leadId = dispositionLeadId;
+  const advance = dispositionAdvance;
   closeDispositionModal();
-  advanceToNextLead(leadId);
+  if (advance) advanceToNextLead(leadId);
 });
+document.getElementById('incoming-accept').addEventListener('click', acceptIncoming);
+document.getElementById('incoming-decline').addEventListener('click', declineIncoming);
 document.getElementById('disposition-custom').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const name = e.target.value.trim().toLowerCase();
@@ -4826,9 +4927,13 @@ async function savePhoneBackToLead(raw) {
 
 // ── Disposition picker + one-click-through call queue (rfy-crm §1.6/1.7) ──
 let dispositionLeadId = null;
+let dispositionAdvance = true; // false for inbound callbacks — no queue to advance
 
-function openDispositionModal(leadId) {
+function openDispositionModal(leadId, opts) {
   dispositionLeadId = leadId;
+  dispositionAdvance = !opts || opts.advance !== false;
+  const skipBtn = document.getElementById('disposition-skip');
+  if (skipBtn) skipBtn.textContent = dispositionAdvance ? 'Skip → next lead' : 'Skip';
   const modal = document.getElementById('disposition-modal');
   renderDispositionModalPills('');
   document.getElementById('disposition-custom').value = '';
@@ -4845,6 +4950,7 @@ function renderDispositionModalPills(selected) {
 }
 async function pickDisposition(value) {
   const leadId = dispositionLeadId;
+  const advance = dispositionAdvance;
   closeDispositionModal();
   try {
     await apiCall('PUT', '/leads/' + leadId, { disposition: value });
@@ -4853,7 +4959,7 @@ async function pickDisposition(value) {
     renderLeadsList();
     toast('Marked ' + value);
   } catch (e) { toast('Could not save disposition'); }
-  advanceToNextLead(leadId);
+  if (advance) advanceToNextLead(leadId);
 }
 
 // Auto-advance to the next lead in the CURRENT list ordering (the in-memory
@@ -6306,6 +6412,7 @@ async function deleteCurrentFollowup() {
       outbox = await idbGetAll('outbox');
       if(outbox.length) flushOutbox();
       startPolling();
+      initDialer(); // v161: register for inbound calls on session restore too
     } catch(e) { showLogin(); }
   }
 })();
