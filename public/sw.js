@@ -1,5 +1,5 @@
-const CACHE = 'workspace-v160';
-const SHELL = ['/', '/index.html', '/manifest.json', '/app.css?v=136', '/app.js?v=157', '/editor.bundle.js?v=66', '/dialer.bundle.js?v=1'];
+const CACHE = 'workspace-v161';
+const SHELL = ['/', '/index.html', '/manifest.json', '/app.css?v=137', '/app.js?v=158', '/editor.bundle.js?v=66', '/dialer.bundle.js?v=1'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
@@ -88,6 +88,15 @@ function swOpenApp() {
 self.addEventListener('push', e => {
   let data = {};
   try { data = e.data.json(); } catch (err) {}
+  // Missed-call/voicemail pushes (v161): plain notification, no reminder
+  // action buttons — tapping it just opens the app.
+  if (data.type === 'call') {
+    e.waitUntil(self.registration.showNotification(data.title || 'Missed call', {
+      body: data.body || '',
+      tag: 'call-' + Date.now(),
+    }));
+    return;
+  }
   e.waitUntil(self.registration.showNotification(data.title || 'Reminder', {
     body: data.body || '',
     tag: 'reminder-' + (data.id || ''),

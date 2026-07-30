@@ -354,6 +354,9 @@ try { db.exec(`ALTER TABLE leads ADD COLUMN source TEXT NOT NULL DEFAULT ''`); }
 try { db.exec(`ALTER TABLE leads ADD COLUMN disposition TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 try { db.exec(`ALTER TABLE calls ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`); } catch(e) {}
+// Inbound calling (v161): callbacks to the Twilio number ring the browser,
+// no-answer goes to voicemail. Pre-v161 rows are all outbound by definition.
+try { db.exec(`ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'`); } catch(e) {}
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
@@ -1501,7 +1504,8 @@ app.get('/api/twilio/token', auth, (req, res) => {
   const AccessToken = twilio.jwt.AccessToken;
   const token = new AccessToken(TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET,
     { identity: req.userId, ttl: 3600 });
-  token.addGrant(new AccessToken.VoiceGrant({ outgoingApplicationSid: TWILIO_TWIML_APP_SID, incomingAllow: false }));
+  // incomingAllow flipped true in v161 — lead callbacks ring the browser now.
+  token.addGrant(new AccessToken.VoiceGrant({ outgoingApplicationSid: TWILIO_TWIML_APP_SID, incomingAllow: true }));
   res.json({ token: token.toJwt(), identity: req.userId, callerId: TWILIO_CALLER_ID });
 });
 
@@ -1577,6 +1581,74 @@ app.post('/api/twilio/recording-status', twilioWebhook, (req, res) => {
       .run(CallStatus, now(), CallSid);
   }
   res.sendStatus(204);
+});
+
+// ── Inbound calling (v161) ────────────────────────────────────
+// The phone NUMBER's Voice URL points at /api/twilio/inbound (the TwiML
+// App's Voice URL stays on /api/twilio/voice for outbound browser dials).
+// Flow: ring the registered browser client for 15s → answered: normal
+// bridged call, recorded like outbound → not answered / rejected / browser
+// closed: voicemail (greeting + record), missed-call push notification.
+// Caller is matched to a lead by last-10-digits against leads.phone_number.
+const VOICEMAIL_GREETING = "You've reached Raffi. I can't take your call right now. Leave your name and number and I'll call you right back.";
+const VOICEMAIL_VOICE = 'Polly.Matthew-Neural';
+
+function last10(s) { return String(s || '').replace(/\D/g, '').slice(-10); }
+function leadByPhone(userId, num) {
+  const target = last10(num);
+  if (target.length < 10) return null;
+  return db.prepare(`SELECT id, business_name, phone_number FROM leads WHERE user_id=? AND deleted_at IS NULL AND phone_number != ''`)
+    .all(userId).find(l => last10(l.phone_number) === target) || null;
+}
+
+app.post('/api/twilio/inbound', twilioWebhook, (req, res) => {
+  const twiml = new twilio.twiml.VoiceResponse();
+  const from = String(req.body.From || '');
+  const userId = Object.values(USERS)[0]; // single-user app — inbound always rings the owner
+  const lead = leadByPhone(userId, from);
+  db.prepare(`INSERT OR IGNORE INTO calls (id, user_id, call_sid, to_number, from_number, status, direction, lead_id, started_at, created_at)
+    VALUES (?, ?, ?, ?, ?, 'ringing', 'inbound', ?, ?, ?)`)
+    .run(uid(), userId, req.body.CallSid || null, TWILIO_CALLER_ID, from, lead ? lead.id : null, now(), now());
+  const dial = twiml.dial({
+    timeout: 15,                                 // ~4 rings, then voicemail
+    answerOnBridge: true,
+    record: 'record-from-answer-dual',
+    recordingStatusCallback: '/api/twilio/recording-status',
+    recordingStatusCallbackEvent: 'completed',
+    action: '/api/twilio/inbound-status',
+  });
+  dial.client(userId);
+  res.type('text/xml').send(twiml.toString());
+});
+
+// <Dial> finished: answered → close out the row like outbound; anything else
+// → mark missed, play the greeting, record a voicemail (the recording lands
+// on this same call row via the shared recording-status webhook — a missed
+// row WITH a recording_sid is displayed as "Voicemail", without as "Missed").
+app.post('/api/twilio/inbound-status', twilioWebhook, (req, res) => {
+  const { CallSid, DialCallStatus, DialCallDuration, From } = req.body;
+  const twiml = new twilio.twiml.VoiceResponse();
+  if (DialCallStatus === 'completed' || DialCallStatus === 'answered') {
+    db.prepare('UPDATE calls SET status=?, duration=?, ended_at=? WHERE call_sid=?')
+      .run('completed', parseInt(DialCallDuration, 10) || 0, now(), CallSid);
+  } else {
+    db.prepare(`UPDATE calls SET status='missed', ended_at=? WHERE call_sid=?`).run(now(), CallSid);
+    const userId = Object.values(USERS)[0];
+    const lead = leadByPhone(userId, From);
+    sendPushToUser(userId, {
+      type: 'call',
+      title: 'Missed call' + (lead ? ' — ' + lead.business_name : ''),
+      body: (From || 'Unknown number') + ' — check Workspace for a voicemail.',
+    }).catch(() => {});
+    twiml.say({ voice: VOICEMAIL_VOICE }, VOICEMAIL_GREETING);
+    twiml.record({
+      maxLength: 120,
+      playBeep: true,
+      recordingStatusCallback: '/api/twilio/recording-status',
+      recordingStatusCallbackEvent: 'completed',
+    });
+  }
+  res.type('text/xml').send(twiml.toString());
 });
 
 app.get('/api/calls', auth, (req, res) => {
