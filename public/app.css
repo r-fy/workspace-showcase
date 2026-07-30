@@ -94,6 +94,7 @@ header {
   color: var(--tag-c, #8ce870);
   font-weight: 600;
 }
+.tag-filter-pill .tag-color-dot { display: inline-block; vertical-align: middle; margin-right: 5px; }
 .tag-filter-clear { font-size: 11px; color: #444; cursor: pointer; padding: 2px 4px; }
 .tag-filter-clear:hover { color: #888; }
 
