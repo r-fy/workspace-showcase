@@ -1144,6 +1144,16 @@ header {
 .audit-preview-pane { border-top: 1px solid #1e1e1e; background: #0a0a0a; }
 .audit-section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin: 18px 0 8px; }
 .audit-section-title:first-child { margin-top: 0; }
+
+/* Leads timeline / unmatched triage rows — merged multi-source list, no
+   existing row template fits (audit/followup/reply each have different
+   fields), so this is genuinely new markup rather than reused audit-item/
+   note-item styling. */
+.lead-timeline-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1c1c1c; font-size: 13px; cursor: pointer; }
+.lead-timeline-row:last-child { border-bottom: none; }
+.lead-timeline-type { flex: 0 0 auto; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #5fc83b; width: 64px; }
+.lead-timeline-label { flex: 1; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-timeline-date { flex: 0 0 auto; color: #666; font-size: 12px; }
 .audit-field-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .audit-field-row label { font-size: 12px; color: #666; width: 110px; flex-shrink: 0; }
 .audit-field-row input, .audit-field-row textarea, .audit-field-row select {

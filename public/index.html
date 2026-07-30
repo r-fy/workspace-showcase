@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=134">
+<link rel="stylesheet" href="/app.css?v=135">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -96,6 +96,13 @@
           <button class="nav-menu-item" data-tab="calls">Calls</button>
           <button class="icon-btn nav-add-btn" id="new-call-btn" title="New call">+</button>
         </div>
+        <div class="nav-row" draggable="true" data-tab="leads">
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="leads">Leads</button>
+          <button class="icon-btn nav-add-btn" id="new-lead-btn" title="New lead">+</button>
+        </div>
         <div class="nav-row" draggable="true" data-tab="audits">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
@@ -163,6 +170,9 @@
         <div class="calls-panel-info" id="calls-panel-info"></div>
         <div class="calls-usage-info" id="calls-usage-info"></div>
       </div>
+      <div id="leads-panel" class="panel-section hidden">
+        <div class="notes-list" id="leads-list"></div>
+      </div>
       <div id="audits-panel" class="panel-section hidden">
         <div class="notes-list" id="audits-list"></div>
       </div>
@@ -216,6 +226,15 @@
       <div class="calendar-view-body" id="calendar-view-body">
         <div id="agenda-list" class="agenda-list"></div>
         <div id="month-cal-view" class="month-cal-view hidden"></div>
+      </div>
+    </div>
+
+    <!-- Leads view (CRM hub tying audits/followups/cold-email replies together) -->
+    <div class="view hidden" id="leads-view" style="flex-direction:column;overflow-y:auto;">
+      <div id="lead-editor-area">
+        <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
+          Select a lead, or hit + to add one.
+        </div>
       </div>
     </div>
 
@@ -616,6 +635,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=155"></script>
+<script src="/app.js?v=156"></script>
 </body>
 </html>

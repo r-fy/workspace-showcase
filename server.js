@@ -309,6 +309,38 @@ db.exec(`
   );
 `);
 
+// Leads tab: hub row tying together audits / followups / cold_email_replies
+// for the same real-world prospect. website_domain is the only automatic
+// matching key (normalized in app code); business_name text is a human hint,
+// never auto-matched. See CRM-UNIFICATION-PLAN.md.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS leads (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    business_name TEXT NOT NULL DEFAULT 'Untitled lead',
+    website TEXT NOT NULL DEFAULT '',
+    website_domain TEXT DEFAULT NULL,
+    primary_email TEXT NOT NULL DEFAULT '',
+    city TEXT NOT NULL DEFAULT '',
+    niche TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    notes TEXT NOT NULL DEFAULT '',
+    parent_lead_id TEXT DEFAULT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_leads_user ON leads(user_id, updated_at);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_domain ON leads(user_id, website_domain)
+    WHERE website_domain IS NOT NULL AND website_domain != '' AND deleted_at IS NULL;
+`);
+try { db.exec(`ALTER TABLE audits ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE followups ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`); } catch(e) {}
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -422,6 +454,14 @@ app.use('/uploads', uploadsAuth, express.static(UPLOADS_DIR));
 function uid() { return crypto.randomBytes(8).toString('hex'); }
 function now() { return Date.now(); }
 
+// Shared by leads.website_domain (write time) and reply auto-matching (read
+// time) so both sides normalize identically — see CRM-UNIFICATION-PLAN.md §3.
+function normalizeDomain(input) {
+  if (!input) return null;
+  const s = input.includes('@') ? input.split('@')[1] : input;
+  return s.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase().trim() || null;
+}
+
 // ── Rate limit ───────────────────────────────────────────────
 // ponytail: fixed-window per-IP counter, same in-memory shape as the login lockout above —
 // no extra dependency. Ceiling is deliberately generous: the app polls /api/sync every 2s
@@ -447,11 +487,11 @@ app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
 
 // ── Audits ───────────────────────────────────────────────────
 app.get('/api/audits', auth, (req, res) => {
-  const rows = db.prepare('SELECT id, business_name, status, data, updated_at FROM audits WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
+  const rows = db.prepare('SELECT id, business_name, status, data, lead_id, updated_at FROM audits WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
   res.json(rows.map(r => {
     let report_type = 'seo';
     try { report_type = JSON.parse(r.data).report_type || 'seo'; } catch {}
-    return { id: r.id, business_name: r.business_name, status: r.status, report_type, updated_at: r.updated_at };
+    return { id: r.id, business_name: r.business_name, status: r.status, report_type, lead_id: r.lead_id, updated_at: r.updated_at };
   }));
 });
 
@@ -462,20 +502,20 @@ app.get('/api/audits/:id', auth, (req, res) => {
 });
 
 app.post('/api/audits', auth, (req, res) => {
-  const { business_name = 'Untitled audit', data = {} } = req.body;
+  const { business_name = 'Untitled audit', data = {}, lead_id = null } = req.body;
   const id = uid(), t = now();
-  db.prepare('INSERT INTO audits (id, business_name, status, data, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, business_name, 'draft', JSON.stringify(data), req.userId, t, t);
-  res.json({ id, business_name, status: 'draft', data, created_at: t, updated_at: t });
+  db.prepare('INSERT INTO audits (id, business_name, status, data, lead_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, business_name, 'draft', JSON.stringify(data), lead_id, req.userId, t, t);
+  res.json({ id, business_name, status: 'draft', data, lead_id, created_at: t, updated_at: t });
 });
 
 app.put('/api/audits/:id', auth, (req, res) => {
-  const { business_name, status, data } = req.body;
+  const { business_name, status, data, lead_id } = req.body;
   const t = now();
   const a = db.prepare('SELECT * FROM audits WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!a) return res.status(404).json({ error: 'Not found' });
-  db.prepare('UPDATE audits SET business_name=?, status=?, data=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(business_name ?? a.business_name, status ?? a.status, JSON.stringify(data ?? JSON.parse(a.data)), t, req.params.id, req.userId);
+  db.prepare('UPDATE audits SET business_name=?, status=?, data=?, lead_id=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(business_name ?? a.business_name, status ?? a.status, JSON.stringify(data ?? JSON.parse(a.data)), lead_id !== undefined ? lead_id : a.lead_id, t, req.params.id, req.userId);
   const updated = db.prepare('SELECT * FROM audits WHERE id = ?').get(req.params.id);
   res.json({ ...updated, data: JSON.parse(updated.data) });
 });
@@ -535,12 +575,12 @@ function buildFollowupTouches(startAt) {
 }
 
 app.get('/api/followups', auth, (req, res) => {
-  const rows = db.prepare('SELECT id, lead_name, business_name, status, data, updated_at FROM followups WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
+  const rows = db.prepare('SELECT id, lead_name, business_name, status, data, lead_id, updated_at FROM followups WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
   res.json(rows.map(r => {
     let touches = [];
     try { touches = JSON.parse(r.data).touches || []; } catch {}
     const next = touches.find(t => t.status === 'pending');
-    return { id: r.id, lead_name: r.lead_name, business_name: r.business_name, status: r.status, updated_at: r.updated_at, next_due_at: next ? next.due_at : null, next_label: next ? next.label : null };
+    return { id: r.id, lead_name: r.lead_name, business_name: r.business_name, status: r.status, lead_id: r.lead_id, updated_at: r.updated_at, next_due_at: next ? next.due_at : null, next_label: next ? next.label : null };
   }));
 });
 
@@ -551,21 +591,21 @@ app.get('/api/followups/:id', auth, (req, res) => {
 });
 
 app.post('/api/followups', auth, (req, res) => {
-  const { lead_name = '', business_name = 'Untitled follow-up', start_at } = req.body;
+  const { lead_name = '', business_name = 'Untitled follow-up', start_at, lead_id = null } = req.body;
   const id = uid(), t = now();
   const data = { touches: buildFollowupTouches(start_at || t) };
-  db.prepare('INSERT INTO followups (id, lead_name, business_name, status, data, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, lead_name, business_name, 'active', JSON.stringify(data), req.userId, t, t);
-  res.json({ id, lead_name, business_name, status: 'active', data, created_at: t, updated_at: t });
+  db.prepare('INSERT INTO followups (id, lead_name, business_name, status, data, lead_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, lead_name, business_name, 'active', JSON.stringify(data), lead_id, req.userId, t, t);
+  res.json({ id, lead_name, business_name, status: 'active', data, lead_id, created_at: t, updated_at: t });
 });
 
 app.put('/api/followups/:id', auth, (req, res) => {
-  const { lead_name, business_name, status, data } = req.body;
+  const { lead_name, business_name, status, data, lead_id } = req.body;
   const t = now();
   const f = db.prepare('SELECT * FROM followups WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!f) return res.status(404).json({ error: 'Not found' });
-  db.prepare('UPDATE followups SET lead_name=?, business_name=?, status=?, data=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(lead_name ?? f.lead_name, business_name ?? f.business_name, status ?? f.status, JSON.stringify(data ?? JSON.parse(f.data)), t, req.params.id, req.userId);
+  db.prepare('UPDATE followups SET lead_name=?, business_name=?, status=?, data=?, lead_id=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(lead_name ?? f.lead_name, business_name ?? f.business_name, status ?? f.status, JSON.stringify(data ?? JSON.parse(f.data)), lead_id !== undefined ? lead_id : f.lead_id, t, req.params.id, req.userId);
   const updated = db.prepare('SELECT * FROM followups WHERE id = ?').get(req.params.id);
   res.json({ ...updated, data: JSON.parse(updated.data) });
 });
@@ -584,6 +624,119 @@ app.post('/api/audits/render', auth, (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ── Leads (CRM hub tying audits/followups/cold_email_replies together) ──
+// See CRM-UNIFICATION-PLAN.md. business_name text is a human hint only —
+// website_domain is the one automatic matching key, normalized via normalizeDomain().
+function leadRollup(lead) {
+  const auditCount = db.prepare('SELECT COUNT(*) c FROM audits WHERE lead_id=? AND deleted_at IS NULL').get(lead.id).c;
+  const followupRow = db.prepare('SELECT data FROM followups WHERE lead_id=? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1').get(lead.id);
+  let next_followup_due = null, next_followup_label = null;
+  if (followupRow) {
+    try {
+      const next = (JSON.parse(followupRow.data).touches || []).find(t => t.status === 'pending');
+      if (next) { next_followup_due = next.due_at; next_followup_label = next.label; }
+    } catch {}
+  }
+  const unreadReplies = db.prepare('SELECT COUNT(*) c FROM cold_email_replies WHERE lead_id=? AND is_unread=1').get(lead.id).c;
+  const lastActivity = db.prepare(`
+    SELECT MAX(x) m FROM (
+      SELECT MAX(updated_at) x FROM audits WHERE lead_id=? AND deleted_at IS NULL
+      UNION ALL SELECT MAX(updated_at) FROM followups WHERE lead_id=? AND deleted_at IS NULL
+      UNION ALL SELECT MAX(timestamp_email) FROM cold_email_replies WHERE lead_id=?
+    )`).get(lead.id, lead.id, lead.id).m;
+  return { audit_count: auditCount, unread_replies: unreadReplies, next_followup_due, next_followup_label, last_activity_at: lastActivity || lead.updated_at };
+}
+
+app.get('/api/leads', auth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM leads WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
+  res.json(rows.map(l => ({ ...l, ...leadRollup(l) })));
+});
+
+app.get('/api/leads/unmatched', auth, (req, res) => {
+  const audits = db.prepare('SELECT id, business_name, status, updated_at FROM audits WHERE lead_id IS NULL AND deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
+  const followups = db.prepare('SELECT id, lead_name, business_name, status, updated_at FROM followups WHERE lead_id IS NULL AND deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
+  const replies = db.prepare('SELECT id, from_email, from_name, subject, timestamp_email FROM cold_email_replies WHERE lead_id IS NULL AND user_id=? ORDER BY timestamp_email DESC').all(req.userId);
+  res.json({ audits, followups, replies });
+});
+
+app.get('/api/leads/:id', auth, (req, res) => {
+  const lead = db.prepare('SELECT * FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Not found' });
+  const leadAudits = db.prepare('SELECT id, business_name, status, data, updated_at FROM audits WHERE lead_id=? AND deleted_at IS NULL ORDER BY updated_at DESC').all(lead.id)
+    .map(a => { let report_type = 'seo'; try { report_type = JSON.parse(a.data).report_type || 'seo'; } catch {} return { id: a.id, business_name: a.business_name, status: a.status, report_type, updated_at: a.updated_at }; });
+  const leadFollowups = db.prepare('SELECT id, lead_name, business_name, status, data, updated_at FROM followups WHERE lead_id=? AND deleted_at IS NULL ORDER BY updated_at DESC').all(lead.id)
+    .map(f => { let touches = []; try { touches = JSON.parse(f.data).touches || []; } catch {} const next = touches.find(t => t.status === 'pending'); return { id: f.id, lead_name: f.lead_name, business_name: f.business_name, status: f.status, updated_at: f.updated_at, next_due_at: next ? next.due_at : null, next_label: next ? next.label : null }; });
+  const leadReplies = db.prepare('SELECT id, campaign_id, campaign_name, from_email, from_name, subject, preview, is_unread, ai_interest, timestamp_email FROM cold_email_replies WHERE lead_id=? ORDER BY timestamp_email DESC').all(lead.id);
+  res.json({ ...lead, audits: leadAudits, followups: leadFollowups, replies: leadReplies });
+});
+
+app.post('/api/leads', auth, (req, res) => {
+  const { business_name = 'Untitled lead', website = '', primary_email = '', city = '', niche = '', notes = '' } = req.body;
+  const website_domain = normalizeDomain(website);
+  const id = uid(), t = now();
+  try {
+    db.prepare('INSERT INTO leads (id, business_name, website, website_domain, primary_email, city, niche, status, notes, user_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, business_name, website, website_domain, primary_email, city, niche, 'active', notes, req.userId, t, t);
+  } catch (e) {
+    return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message });
+  }
+  res.json({ id, business_name, website, website_domain, primary_email, city, niche, status: 'active', notes, created_at: t, updated_at: t });
+});
+
+app.put('/api/leads/:id', auth, (req, res) => {
+  const lead = db.prepare('SELECT * FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Not found' });
+  const { business_name, website, primary_email, city, niche, status, notes } = req.body;
+  const website_domain = website !== undefined ? normalizeDomain(website) : lead.website_domain;
+  const t = now();
+  try {
+    db.prepare('UPDATE leads SET business_name=?, website=?, website_domain=?, primary_email=?, city=?, niche=?, status=?, notes=?, updated_at=? WHERE id=? AND user_id=?')
+      .run(business_name ?? lead.business_name, website ?? lead.website, website_domain, primary_email ?? lead.primary_email, city ?? lead.city, niche ?? lead.niche, status ?? lead.status, notes ?? lead.notes, t, req.params.id, req.userId);
+  } catch (e) {
+    return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message });
+  }
+  res.json(db.prepare('SELECT * FROM leads WHERE id=?').get(req.params.id));
+});
+
+app.delete('/api/leads/:id', auth, (req, res) => {
+  db.prepare('UPDATE leads SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+const LEAD_LINK_TABLES = { audit: 'audits', followup: 'followups', reply: 'cold_email_replies' };
+
+app.post('/api/leads/:id/link', auth, (req, res) => {
+  const table = LEAD_LINK_TABLES[req.body.type];
+  if (!table) return res.status(400).json({ error: 'type must be audit, followup, or reply' });
+  const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  db.prepare(`UPDATE ${table} SET lead_id=? WHERE id=? AND user_id=?`).run(lead.id, req.body.id, req.userId);
+  res.json({ ok: true });
+});
+
+app.post('/api/leads/:id/unlink', auth, (req, res) => {
+  const table = LEAD_LINK_TABLES[req.body.type];
+  if (!table) return res.status(400).json({ error: 'type must be audit, followup, or reply' });
+  db.prepare(`UPDATE ${table} SET lead_id=NULL WHERE id=? AND lead_id=? AND user_id=?`).run(req.body.id, req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+// Escape hatch for accidental duplicate leads: repoint every child row from
+// the source lead onto the target, then soft-delete the source.
+app.post('/api/leads/:id/merge', auth, (req, res) => {
+  const source = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  const target = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.body.into_lead_id, req.userId);
+  if (!source || !target) return res.status(404).json({ error: 'Lead not found' });
+  const t = now();
+  db.transaction(() => {
+    db.prepare('UPDATE audits SET lead_id=? WHERE lead_id=? AND user_id=?').run(target.id, source.id, req.userId);
+    db.prepare('UPDATE followups SET lead_id=? WHERE lead_id=? AND user_id=?').run(target.id, source.id, req.userId);
+    db.prepare('UPDATE cold_email_replies SET lead_id=? WHERE lead_id=? AND user_id=?').run(target.id, source.id, req.userId);
+    db.prepare('UPDATE leads SET deleted_at=?, updated_at=? WHERE id=? AND user_id=?').run(t, t, source.id, req.userId);
+  })();
+  res.json({ ok: true });
 });
 
 // ── TRW Daily Tasks ──────────────────────────────────────────
@@ -752,6 +905,21 @@ async function pullColdEmailStats() {
       }
     } catch (e) { console.warn('cold email: replies failed', e.message); }
 
+    // Auto-link replies to leads by normalized domain match — only ever
+    // touches lead_id IS NULL rows, so it never fights a manual correction.
+    try {
+      const domainLeads = db.prepare(`SELECT id, website_domain FROM leads WHERE user_id='owner' AND website_domain IS NOT NULL AND website_domain != '' AND deleted_at IS NULL`).all();
+      if (domainLeads.length) {
+        const byDomain = new Map(domainLeads.map(l => [l.website_domain, l.id]));
+        const unmatched = db.prepare(`SELECT id, from_email FROM cold_email_replies WHERE user_id='owner' AND lead_id IS NULL`).all();
+        const link = db.prepare('UPDATE cold_email_replies SET lead_id=? WHERE id=?');
+        for (const r of unmatched) {
+          const d = normalizeDomain(r.from_email);
+          if (d && byDomain.has(d)) link.run(byDomain.get(d), r.id);
+        }
+      }
+    } catch (e) { console.warn('cold email: lead domain-match failed', e.message); }
+
     coldEmailLastSuccessAt = now();
     coldEmailLastError = null;
   } catch (e) {
@@ -787,7 +955,7 @@ app.post('/api/cold-email/pull', auth, async (req, res) => {
 app.get('/api/cold-email/replies', auth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
   const rows = db.prepare(`SELECT id, campaign_id, campaign_name, from_email, from_name, subject, preview,
-    thread_id, is_unread, ai_interest, timestamp_email
+    thread_id, is_unread, ai_interest, timestamp_email, lead_id
     FROM cold_email_replies WHERE user_id=? ORDER BY timestamp_email DESC LIMIT ?`).all(req.userId, limit);
   res.json(rows);
 });

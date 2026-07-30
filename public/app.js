@@ -325,7 +325,7 @@ function isMobile() { return window.innerWidth <= 640; }
 // only way to open a NEW tab — this strip just reflects what's already open.
 const NAV_TAB_LABELS = {
   notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
-  calls: 'Calls', audits: 'Audits', 'daily-tasks': 'TRW Daily Tasks',
+  calls: 'Calls', leads: 'Leads', audits: 'Audits', 'daily-tasks': 'TRW Daily Tasks',
   followups: 'Follow-ups', tourist: 'Tourist', 'cold-email': 'Cold Email',
 };
 let openNavTabs = [];
@@ -437,6 +437,7 @@ function switchTab(tab) {
   document.getElementById('calendar-view')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('calls-view')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
+  document.getElementById('leads-view')?.classList.toggle('hidden', tab !== 'leads');
   document.getElementById('audits-view')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
@@ -447,6 +448,7 @@ function switchTab(tab) {
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-panel')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('calls-panel')?.classList.toggle('hidden', tab !== 'calls');
+  document.getElementById('leads-panel')?.classList.toggle('hidden', tab !== 'leads');
   document.getElementById('audits-panel')?.classList.toggle('hidden', tab !== 'audits');
   document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
   document.getElementById('followups-panel')?.classList.toggle('hidden', tab !== 'followups');
@@ -456,6 +458,7 @@ function switchTab(tab) {
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
   if (tab === 'calls') loadCallsTab();
+  if (tab === 'leads') loadLeads();
   if (tab === 'audits') loadAudits();
   if (tab === 'daily-tasks') loadDailyTasks();
   if (tab === 'followups') loadFollowups();
@@ -4343,6 +4346,7 @@ document.getElementById('dial-back').addEventListener('click', () => {
   i.value = i.value.slice(0, -1); i.focus();
 });
 document.getElementById('dial-call-btn').addEventListener('click', startCall);
+document.getElementById('new-lead-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('leads'); newLeadForm(); });
 document.getElementById('new-audit-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('audits'); newAudit(); });
 document.getElementById('new-daily-task-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('daily-tasks'); newDailyTaskPaste(); });
 document.getElementById('new-followup-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('followups'); newFollowupForm(); });
@@ -4362,6 +4366,247 @@ document.getElementById('modal-board-select')?.addEventListener('change', e => {
   populateColSelectForBoard(e.target.value, currentCol);
 });
 document.getElementById('task-modal').addEventListener('click',e=>{if(e.target===document.getElementById('task-modal'))closeTaskModal();});
+
+// ── Leads (CRM hub tying audits/followups/cold-email replies together) ──
+// See CRM-UNIFICATION-PLAN.md. No relational/blob split here — the list rows
+// are server-computed rollups, the detail record carries the full linked
+// audits/followups/replies arrays for the merged timeline.
+let leads = [];
+let currentLeadId = null;
+let currentLead = null; // full record from GET /api/leads/:id
+let leadsView = 'empty'; // empty | detail | new | unmatched
+let leadUnmatched = null;
+
+async function loadLeads() {
+  try { leads = await apiCall('GET', '/leads'); } catch (e) { toast('Could not load leads'); return; }
+  renderLeadsList();
+}
+
+function leadStatusColor(s) {
+  return { active: '#5fc83b', won: '#2e7d32', lost: '#c0392b', dormant: '#666' }[s] || '#666';
+}
+
+function renderLeadsList() {
+  const area = document.getElementById('leads-list');
+  if (!area) return;
+  const rows = leads.map(l => {
+    const badges = [];
+    if (l.audit_count) badges.push(`<span class="note-tag">${l.audit_count} audit${l.audit_count > 1 ? 's' : ''}</span>`);
+    if (l.unread_replies) badges.push(`<span class="note-tag" style="--tag-c:#c0392b">${l.unread_replies} unread</span>`);
+    if (l.next_followup_label) {
+      const overdue = l.next_followup_due && l.next_followup_due < Date.now();
+      badges.push(`<span class="note-tag"${overdue ? ' style="--tag-c:#c0392b"' : ''}>${overdue ? 'Overdue: ' : 'Next: '}${escHtml(l.next_followup_label)}</span>`);
+    }
+    return `
+    <div class="note-item${leadsView === 'detail' && l.id === currentLeadId ? ' active' : ''}" data-id="${l.id}">
+      <div class="note-item-title">${escHtml(l.business_name || 'Untitled lead')}</div>
+      <div class="note-item-snippet">${escHtml(l.website || l.city || '')} <span style="color:${leadStatusColor(l.status)}">● ${escHtml(l.status)}</span></div>
+      <div class="note-item-tags">${badges.join('')}</div>
+    </div>`;
+  }).join('') || '<div style="padding:16px 12px;color:#444;font-size:12px;">No leads yet.</div>';
+  area.innerHTML = `<div class="note-item${leadsView === 'unmatched' ? ' active' : ''}" data-unmatched="1" style="border-left:2px solid #c9a227;">
+      <div class="note-item-title">⚠ Unmatched</div>
+      <div class="note-item-snippet">Audits, follow-ups, replies not yet linked to a lead</div>
+    </div>` + rows;
+  area.querySelectorAll('.note-item[data-id]').forEach(el => el.addEventListener('click', () => openLead(el.dataset.id)));
+  area.querySelector('[data-unmatched]')?.addEventListener('click', openUnmatched);
+}
+
+function newLeadForm() {
+  currentLeadId = null; currentLead = null; leadsView = 'new';
+  renderLeadsList();
+  renderLeadEditor({ business_name: '', website: '', primary_email: '', city: '', niche: '', notes: '', status: 'active' }, true);
+}
+
+async function openLead(id) {
+  let l;
+  try { l = await apiCall('GET', '/leads/' + id); } catch (e) { toast('Could not load lead'); return; }
+  currentLeadId = id; currentLead = l; leadsView = 'detail';
+  renderLeadsList();
+  renderLeadEditor(l, false);
+  if (isMobile()) closeSidebar();
+}
+
+async function openUnmatched() {
+  currentLeadId = null; leadsView = 'unmatched';
+  renderLeadsList();
+  try { leadUnmatched = await apiCall('GET', '/leads/unmatched'); } catch (e) { toast('Could not load unmatched items'); return; }
+  renderUnmatchedView();
+}
+
+function leadFieldRow(label, id, value, type) {
+  return `<div class="expense-field-row">
+    <label>${escHtml(label)}</label>
+    <input type="${type || 'text'}" id="${id}" value="${escHtml(value || '')}">
+  </div>`;
+}
+
+function renderLeadEditor(d, isNew) {
+  const area = document.getElementById('lead-editor-area');
+  area.innerHTML = `
+    <div class="daily-task-form">
+      <div class="daily-task-form-head">
+        <input type="text" id="lead-business-name" placeholder="Business name" value="${escHtml(d.business_name || '')}">
+        <select id="lead-status">
+          ${['active', 'won', 'lost', 'dormant'].map(s => `<option value="${s}"${d.status === s ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}
+        </select>
+      </div>
+      ${leadFieldRow('Website', 'lead-website', d.website)}
+      ${leadFieldRow('Primary email', 'lead-email', d.primary_email, 'email')}
+      ${leadFieldRow('City', 'lead-city', d.city)}
+      ${leadFieldRow('Niche', 'lead-niche', d.niche)}
+      <div class="expense-field-row">
+        <label>Notes</label>
+        <textarea id="lead-notes" style="min-height:70px;">${escHtml(d.notes || '')}</textarea>
+      </div>
+      <div class="daily-task-form-actions">
+        ${isNew ? '' : '<button class="del-task-btn" id="lead-delete-btn">Delete lead</button>'}
+        <button class="save-btn" id="lead-save-btn">${isNew ? 'Create lead' : 'Save'}</button>
+      </div>
+    </div>
+    ${isNew ? '' : '<div id="lead-timeline"></div>'}
+  `;
+  document.getElementById('lead-save-btn').addEventListener('click', () => isNew ? createLead() : saveLead());
+  document.getElementById('lead-delete-btn')?.addEventListener('click', deleteCurrentLead);
+  if (!isNew) renderLeadTimeline();
+}
+
+function readLeadForm() {
+  return {
+    business_name: document.getElementById('lead-business-name').value.trim() || 'Untitled lead',
+    status: document.getElementById('lead-status').value,
+    website: document.getElementById('lead-website').value.trim(),
+    primary_email: document.getElementById('lead-email').value.trim(),
+    city: document.getElementById('lead-city').value.trim(),
+    niche: document.getElementById('lead-niche').value.trim(),
+    notes: document.getElementById('lead-notes').value,
+  };
+}
+
+async function createLead() {
+  try {
+    const created = await apiCall('POST', '/leads', readLeadForm());
+    toast('Lead created');
+    await loadLeads();
+    openLead(created.id);
+  } catch (e) { toast('Could not create: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection')); }
+}
+
+async function saveLead() {
+  if (!currentLeadId) return;
+  try {
+    await apiCall('PUT', '/leads/' + currentLeadId, readLeadForm());
+    toast('Saved');
+    await loadLeads();
+    currentLead = await apiCall('GET', '/leads/' + currentLeadId);
+    renderLeadsList();
+  } catch (e) { toast('Could not save: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection')); }
+}
+
+async function deleteCurrentLead() {
+  if (!currentLeadId) return;
+  if (!confirm('Delete this lead? Linked audits/follow-ups/replies stay — they just become unlinked.')) return;
+  const id = currentLeadId;
+  try { await apiCall('DELETE', '/leads/' + id); } catch (e) {}
+  leads = leads.filter(l => l.id !== id);
+  currentLeadId = null; currentLead = null; leadsView = 'empty';
+  renderLeadsList();
+  document.getElementById('lead-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">Select a lead, or hit + to add one.</div>`;
+}
+
+function leadTimelineRowHtml(item) {
+  const unlinkBtn = `<button class="cancel-sel-btn" data-unlink="${item.id}" data-unlink-type="${item.kind}">Unlink</button>`;
+  if (item.kind === 'audit') {
+    return `<div class="lead-timeline-row" data-open-audit="${item.id}">
+      <span class="lead-timeline-type">Audit</span>
+      <span class="lead-timeline-label">${escHtml(item.business_name)} · ${escHtml(item.status)}</span>
+      <span class="lead-timeline-date">${fmtDate(item.ts)}</span>
+      ${unlinkBtn}
+    </div>`;
+  }
+  if (item.kind === 'followup') {
+    return `<div class="lead-timeline-row" data-open-followup="${item.id}">
+      <span class="lead-timeline-type">Follow-up</span>
+      <span class="lead-timeline-label">${escHtml(item.next_label || 'All touches sent')}</span>
+      <span class="lead-timeline-date">${fmtDate(item.ts)}</span>
+      ${unlinkBtn}
+    </div>`;
+  }
+  return `<div class="lead-timeline-row">
+    <span class="lead-timeline-type">Reply</span>
+    <span class="lead-timeline-label">${escHtml(item.from_name || item.from_email)}: ${escHtml(item.subject || '')}</span>
+    <span class="lead-timeline-date">${fmtDate(item.ts)}</span>
+    ${unlinkBtn}
+  </div>`;
+}
+
+function renderLeadTimeline() {
+  const wrap = document.getElementById('lead-timeline');
+  if (!wrap || !currentLead) return;
+  const items = [
+    ...currentLead.audits.map(a => ({ kind: 'audit', ts: a.updated_at, ...a })),
+    ...currentLead.followups.map(f => ({ kind: 'followup', ts: f.updated_at, ...f })),
+    ...currentLead.replies.map(r => ({ kind: 'reply', ts: r.timestamp_email, ...r })),
+  ].sort((a, b) => b.ts - a.ts);
+  wrap.innerHTML = `<div class="audit-section-title">Timeline</div>` +
+    (items.length ? items.map(leadTimelineRowHtml).join('')
+      : '<div style="padding:8px 0;color:#444;font-size:12px;">Nothing linked yet — link items from the Unmatched list.</div>');
+  wrap.querySelectorAll('[data-open-audit]').forEach(el => el.addEventListener('click', () => { switchTab('audits'); openAudit(el.dataset.openAudit); }));
+  wrap.querySelectorAll('[data-open-followup]').forEach(el => el.addEventListener('click', () => { switchTab('followups'); openFollowup(el.dataset.openFollowup); }));
+  wrap.querySelectorAll('[data-unlink]').forEach(el => el.addEventListener('click', async e => {
+    e.stopPropagation();
+    try { await apiCall('POST', '/leads/' + currentLeadId + '/unlink', { type: el.dataset.unlinkType, id: el.dataset.unlink }); toast('Unlinked'); openLead(currentLeadId); }
+    catch (e) { toast('Could not unlink'); }
+  }));
+}
+
+function renderUnmatchedView() {
+  const area = document.getElementById('lead-editor-area');
+  const u = leadUnmatched || { audits: [], followups: [], replies: [] };
+  function section(title, arr, type, labelFn) {
+    if (!arr.length) return '';
+    return `<div class="audit-section-title">${title}</div>` + arr.map(x => `
+      <div class="lead-timeline-row">
+        <span class="lead-timeline-label">${escHtml(labelFn(x))}</span>
+        <button class="cancel-sel-btn" data-attach="${x.id}" data-attach-type="${type}">Attach to lead…</button>
+        <button class="cancel-sel-btn" data-newlead="${x.id}" data-newlead-type="${type}" data-newlead-name="${escHtml(labelFn(x))}">New lead</button>
+      </div>`).join('');
+  }
+  const empty = !u.audits.length && !u.followups.length && !u.replies.length;
+  area.innerHTML = `
+    <div class="daily-task-form">
+      <div class="audit-section-title" style="margin-top:0;">Unmatched</div>
+      ${section('Audits', u.audits, 'audit', x => x.business_name)}
+      ${section('Follow-ups', u.followups, 'followup', x => x.business_name || x.lead_name)}
+      ${section('Replies', u.replies, 'reply', x => (x.from_name || x.from_email) + ' — ' + (x.subject || ''))}
+      ${empty ? '<div style="padding:8px 0;color:#444;font-size:12px;">Nothing unmatched.</div>' : ''}
+    </div>`;
+  area.querySelectorAll('[data-attach]').forEach(btn => btn.addEventListener('click', () => attachToExistingLead(btn.dataset.attachType, btn.dataset.attach)));
+  area.querySelectorAll('[data-newlead]').forEach(btn => btn.addEventListener('click', () => createLeadFromUnmatched(btn.dataset.newleadType, btn.dataset.newlead, btn.dataset.newleadName)));
+}
+
+async function attachToExistingLead(type, id) {
+  const name = prompt('Lead business name to search for:');
+  if (name === null) return;
+  const match = leads.find(l => (l.business_name || '').toLowerCase().includes(name.trim().toLowerCase()));
+  if (!match) { toast('No matching lead found — try "New lead" instead'); return; }
+  try {
+    await apiCall('POST', '/leads/' + match.id + '/link', { type, id });
+    toast('Linked to ' + match.business_name);
+    await loadLeads();
+    openUnmatched();
+  } catch (e) { toast('Could not link'); }
+}
+
+async function createLeadFromUnmatched(type, id, name) {
+  try {
+    const created = await apiCall('POST', '/leads', { business_name: name || 'Untitled lead' });
+    await apiCall('POST', '/leads/' + created.id + '/link', { type, id });
+    toast('Lead created and linked');
+    await loadLeads();
+    openLead(created.id);
+  } catch (e) { toast('Could not create lead'); }
+}
 
 // ── Audits ───────────────────────────────────────────────────
 // Data blob shape mirrors AUTOMATED_AUDITS/input_template.json: identity,
