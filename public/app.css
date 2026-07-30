@@ -1345,3 +1345,67 @@ header {
 .followup-subject:focus { border-color: #3a3a3a; outline: none; }
 .followup-subject::placeholder { color: #444; }
 
+
+/* ── CRM (rfy-crm: one lead-first section replacing Leads/Audits/Calls/Follow-ups) ── */
+.crm-detail-header {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid #1c1c1c; flex-shrink: 0;
+  background: #101010;
+}
+.crm-lead-name { font-size: 15px; font-weight: 600; color: #e0e0e0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.crm-subtabs { display: flex; gap: 2px; }
+.crm-subtab {
+  background: none; border: none; color: #777; font-family: inherit; font-size: 13px;
+  padding: 6px 12px; cursor: pointer; border-radius: 6px 6px 0 0; border-bottom: 2px solid transparent;
+}
+.crm-subtab:hover { color: #ccc; }
+.crm-subtab.active { color: #5fc83b; border-bottom-color: #5fc83b; }
+.crm-sub { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* Sub-views render full size — same layout the standalone tabs had (§1.4).
+   The audit editor manages its own scrolling panes; the rest scroll here. */
+#crm-audit-sub #audit-editor-area { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.crm-history-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 16px; border-bottom: 1px solid #1a1a1a; flex-shrink: 0; font-size: 12px;
+}
+.crm-history-row {
+  display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+  border: 1px solid #222; border-radius: 6px; cursor: pointer; color: #999;
+}
+.crm-history-row:hover { border-color: #3a3a3a; color: #ccc; }
+.crm-history-new { display: flex; align-items: center; gap: 6px; }
+.crm-history-new input[type="date"] {
+  background: #161616; border: 1px solid #2a2a2a; border-radius: 6px;
+  padding: 4px 8px; font-size: 12px; color: #e0e0e0; font-family: inherit; color-scheme: dark;
+}
+
+/* Persistent floating call-status bar — survives switching leads/tabs mid-call */
+.call-float-bar {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 14px; z-index: 600;
+  background: #161616; border: 1px solid #2e5c1f; border-radius: 999px;
+  padding: 8px 10px 8px 18px; box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+}
+#call-float-status { font-size: 13px; color: #8ce870; white-space: nowrap; }
+.call-float-bar .dial-hangup-btn { padding: 6px 14px; font-size: 12px; }
+
+/* Disposition modal */
+#disposition-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center; z-index: 650;
+}
+
+/* Inline reply detail in the lead timeline (§7.3) */
+.lead-reply-detail {
+  padding: 8px 12px 12px 74px; border-bottom: 1px solid #1c1c1c;
+  background: #101010; font-size: 13px;
+}
+.lead-reply-meta { color: #666; font-size: 12px; margin-bottom: 4px; }
+.lead-reply-subject { color: #e0e0e0; font-weight: 600; margin-bottom: 6px; }
+.lead-reply-body { color: #bbb; white-space: pre-wrap; line-height: 1.5; }
+
+@media (max-width: 640px) {
+  .crm-detail-header { gap: 8px; padding: 8px 10px; }
+  .crm-lead-name { max-width: 100%; }
+  .lead-reply-detail { padding-left: 12px; }
+}

@@ -341,6 +341,20 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`); 
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`); } catch(e) {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`); } catch(e) {}
 
+// rfy-crm: lead contact/dial fields + disposition, and calls→lead link.
+// disposition is a single current tag-system value (e.g. "warm") — colors come
+// from the shared tag/color store client-side, not a new categories system.
+// Calls made before this shipped stay unlinked forever (no reliable backfill
+// signal) — lead_id only ever set going forward, passed by the client at dial
+// time. See RFY-CRM-PLAN.md in the outreach project.
+try { db.exec(`ALTER TABLE leads ADD COLUMN contact_name TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+try { db.exec(`ALTER TABLE leads ADD COLUMN phone_number TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+try { db.exec(`ALTER TABLE leads ADD COLUMN address TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+try { db.exec(`ALTER TABLE leads ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+try { db.exec(`ALTER TABLE leads ADD COLUMN disposition TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+try { db.exec(`ALTER TABLE calls ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`); } catch(e) {}
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -485,6 +499,14 @@ app.use('/api', (req, res, next) => {
 // ── Auth check ──────────────────────────────────────────────
 app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
 
+// rfy-crm: audits/follow-ups are always created from inside a lead now, so a
+// live lead_id is REQUIRED on create (§4 of RFY-CRM-PLAN.md). On update it's
+// only validated when explicitly sent — old pre-CRM unlinked rows stay
+// editable, and the unlink route remains the deliberate escape hatch.
+function validLeadId(userId, leadId) {
+  return !!(leadId && db.prepare('SELECT 1 FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(leadId, userId));
+}
+
 // ── Audits ───────────────────────────────────────────────────
 app.get('/api/audits', auth, (req, res) => {
   const rows = db.prepare('SELECT id, business_name, status, data, lead_id, updated_at FROM audits WHERE deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
@@ -503,6 +525,7 @@ app.get('/api/audits/:id', auth, (req, res) => {
 
 app.post('/api/audits', auth, (req, res) => {
   const { business_name = 'Untitled audit', data = {}, lead_id = null } = req.body;
+  if (!validLeadId(req.userId, lead_id)) return res.status(400).json({ error: 'lead_id required — audits are created from inside a lead' });
   const id = uid(), t = now();
   db.prepare('INSERT INTO audits (id, business_name, status, data, lead_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, business_name, 'draft', JSON.stringify(data), lead_id, req.userId, t, t);
@@ -511,6 +534,7 @@ app.post('/api/audits', auth, (req, res) => {
 
 app.put('/api/audits/:id', auth, (req, res) => {
   const { business_name, status, data, lead_id } = req.body;
+  if (lead_id !== undefined && !validLeadId(req.userId, lead_id)) return res.status(400).json({ error: 'lead_id must point at an existing lead' });
   const t = now();
   const a = db.prepare('SELECT * FROM audits WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!a) return res.status(404).json({ error: 'Not found' });
@@ -592,6 +616,7 @@ app.get('/api/followups/:id', auth, (req, res) => {
 
 app.post('/api/followups', auth, (req, res) => {
   const { lead_name = '', business_name = 'Untitled follow-up', start_at, lead_id = null } = req.body;
+  if (!validLeadId(req.userId, lead_id)) return res.status(400).json({ error: 'lead_id required — follow-ups are created from inside a lead' });
   const id = uid(), t = now();
   const data = { touches: buildFollowupTouches(start_at || t) };
   db.prepare('INSERT INTO followups (id, lead_name, business_name, status, data, lead_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -601,6 +626,7 @@ app.post('/api/followups', auth, (req, res) => {
 
 app.put('/api/followups/:id', auth, (req, res) => {
   const { lead_name, business_name, status, data, lead_id } = req.body;
+  if (lead_id !== undefined && !validLeadId(req.userId, lead_id)) return res.status(400).json({ error: 'lead_id must point at an existing lead' });
   const t = now();
   const f = db.prepare('SELECT * FROM followups WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!f) return res.status(404).json({ error: 'Not found' });
@@ -673,27 +699,29 @@ app.get('/api/leads/:id', auth, (req, res) => {
 });
 
 app.post('/api/leads', auth, (req, res) => {
-  const { business_name = 'Untitled lead', website = '', primary_email = '', city = '', niche = '', notes = '' } = req.body;
+  const { business_name = 'Untitled lead', website = '', primary_email = '', city = '', niche = '', notes = '',
+    contact_name = '', phone_number = '', address = '', source = '', disposition = '' } = req.body;
   const website_domain = normalizeDomain(website);
   const id = uid(), t = now();
   try {
-    db.prepare('INSERT INTO leads (id, business_name, website, website_domain, primary_email, city, niche, status, notes, user_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, business_name, website, website_domain, primary_email, city, niche, 'active', notes, req.userId, t, t);
+    db.prepare('INSERT INTO leads (id, business_name, website, website_domain, primary_email, city, niche, status, notes, contact_name, phone_number, address, source, disposition, user_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, business_name, website, website_domain, primary_email, city, niche, 'active', notes, contact_name, phone_number, address, source, disposition, req.userId, t, t);
   } catch (e) {
     return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message });
   }
-  res.json({ id, business_name, website, website_domain, primary_email, city, niche, status: 'active', notes, created_at: t, updated_at: t });
+  res.json(db.prepare('SELECT * FROM leads WHERE id=?').get(id));
 });
 
 app.put('/api/leads/:id', auth, (req, res) => {
   const lead = db.prepare('SELECT * FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  const { business_name, website, primary_email, city, niche, status, notes } = req.body;
+  const { business_name, website, primary_email, city, niche, status, notes, contact_name, phone_number, address, source, disposition } = req.body;
   const website_domain = website !== undefined ? normalizeDomain(website) : lead.website_domain;
   const t = now();
   try {
-    db.prepare('UPDATE leads SET business_name=?, website=?, website_domain=?, primary_email=?, city=?, niche=?, status=?, notes=?, updated_at=? WHERE id=? AND user_id=?')
-      .run(business_name ?? lead.business_name, website ?? lead.website, website_domain, primary_email ?? lead.primary_email, city ?? lead.city, niche ?? lead.niche, status ?? lead.status, notes ?? lead.notes, t, req.params.id, req.userId);
+    db.prepare('UPDATE leads SET business_name=?, website=?, website_domain=?, primary_email=?, city=?, niche=?, status=?, notes=?, contact_name=?, phone_number=?, address=?, source=?, disposition=?, updated_at=? WHERE id=? AND user_id=?')
+      .run(business_name ?? lead.business_name, website ?? lead.website, website_domain, primary_email ?? lead.primary_email, city ?? lead.city, niche ?? lead.niche, status ?? lead.status, notes ?? lead.notes,
+        contact_name ?? lead.contact_name, phone_number ?? lead.phone_number, address ?? lead.address, source ?? lead.source, disposition ?? lead.disposition, t, req.params.id, req.userId);
   } catch (e) {
     return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message });
   }
@@ -1502,9 +1530,15 @@ app.post('/api/twilio/voice', twilioWebhook, (req, res) => {
   } else if (!to) {
     twiml.say('Invalid number.');
   } else {
-    db.prepare(`INSERT OR IGNORE INTO calls (id, user_id, call_sid, to_number, from_number, status, started_at, created_at)
-      VALUES (?, ?, ?, ?, ?, 'initiated', ?, ?)`)
-      .run(uid(), userId, req.body.CallSid || null, to, TWILIO_CALLER_ID, now(), now());
+    // rfy-crm: the dial pad lives inside a lead's Calls sub-tab, so the client
+    // passes LeadId as a custom connect() param. Validate it belongs to this
+    // user before trusting it; a call placed with no/bad LeadId just stays
+    // unlinked (no auto-match by phone — normal path always knows the lead).
+    const rawLeadId = String(req.body.LeadId || '');
+    const leadId = rawLeadId && db.prepare('SELECT 1 FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(rawLeadId, userId) ? rawLeadId : null;
+    db.prepare(`INSERT OR IGNORE INTO calls (id, user_id, call_sid, to_number, from_number, status, lead_id, started_at, created_at)
+      VALUES (?, ?, ?, ?, ?, 'initiated', ?, ?, ?)`)
+      .run(uid(), userId, req.body.CallSid || null, to, TWILIO_CALLER_ID, leadId, now(), now());
     const dial = twiml.dial({
       callerId: TWILIO_CALLER_ID,
       answerOnBridge: true,                        // browser leg stays "ringing" until the callee answers
