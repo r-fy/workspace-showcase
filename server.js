@@ -1590,7 +1590,9 @@ app.post('/api/twilio/recording-status', twilioWebhook, (req, res) => {
 // bridged call, recorded like outbound → not answered / rejected / browser
 // closed: voicemail (greeting + record), missed-call push notification.
 // Caller is matched to a lead by last-10-digits against leads.phone_number.
-const VOICEMAIL_GREETING = "You've reached Raffi. I can't take your call right now. Leave your name and number and I'll call you right back.";
+// "Rahfee" is a deliberate phonetic respelling — the TTS voice mispronounced
+// "Raffi" (it's RAH-fee, one word). Callers only ever HEAR this text.
+const VOICEMAIL_GREETING = "You've reached Rahfee. I can't take your call right now. Leave your name and number and I'll call you right back.";
 const VOICEMAIL_VOICE = 'Polly.Matthew-Neural';
 
 function last10(s) { return String(s || '').replace(/\D/g, '').slice(-10); }
