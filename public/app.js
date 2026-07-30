@@ -343,12 +343,15 @@ function renderNavTabsBar() {
   const bar = document.getElementById('nav-tabs-bar');
   if (!bar) return;
   bar.innerHTML = openNavTabs.map(tab => `
-    <div class="nav-tab${tab === currentTab ? ' active' : ''}" draggable="true" data-tab="${tab}">
+    <div class="nav-tab${tab === currentTab ? ' active' : ''}" draggable="true" data-tab="${tab}" title="Middle-click to close">
       <span class="nav-tab-label">${escHtml(NAV_TAB_LABELS[tab] || tab)}</span>
-      <button class="nav-tab-close" data-tab="${tab}" title="Close tab">✕</button>
     </div>`).join('');
   bar.querySelectorAll('.nav-tab').forEach(el => {
-    el.addEventListener('click', e => { if (!e.target.closest('.nav-tab-close')) switchTab(el.dataset.tab); });
+    el.addEventListener('click', () => switchTab(el.dataset.tab));
+    // Middle-click closes the tab instead of a dedicated ✕ button — mousedown
+    // prevents the middle-click autoscroll cursor some browsers show on Windows/Linux.
+    el.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
+    el.addEventListener('auxclick', e => { if (e.button === 1) closeNavTab(el.dataset.tab); });
     el.addEventListener('dragstart', e => { navTabDragEl = el; e.dataTransfer.setData('nav-tab-drag', el.dataset.tab); el.classList.add('dragging'); });
     el.addEventListener('dragend', () => { navTabDragEl = null; bar.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('dragging', 'drop-before', 'drop-after')); });
     el.addEventListener('dragover', e => {
@@ -368,9 +371,6 @@ function renderNavTabsBar() {
       openNavTabs.splice(before ? idx : idx + 1, 0, navTabDragEl.dataset.tab);
       saveOpenNavTabs(); renderNavTabsBar();
     });
-  });
-  bar.querySelectorAll('.nav-tab-close').forEach(btn => {
-    btn.addEventListener('click', e => { e.stopPropagation(); closeNavTab(btn.dataset.tab); });
   });
 }
 
@@ -395,6 +395,20 @@ function initNavTabsBar() {
   if (!active || !openNavTabs.includes(active)) active = openNavTabs[0];
   switchTab(active);
 }
+
+// Ctrl+Tab / Ctrl+Shift+Tab cycles the open nav tabs, mirroring a real
+// browser's tab-switch shortcut. Only takes effect if the browser hands the
+// keystroke to the page at all — Chrome/Brave reserve it for their own tab
+// strip in a normal browser tab, but a standalone installed PWA window has
+// no tab strip of its own to compete with, so the shortcut is free there.
+document.addEventListener('keydown', e => {
+  if (!e.ctrlKey || e.key !== 'Tab' || !openNavTabs.length) return;
+  e.preventDefault();
+  const idx = openNavTabs.indexOf(currentTab);
+  const step = e.shiftKey ? -1 : 1;
+  const next = openNavTabs[(idx + step + openNavTabs.length) % openNavTabs.length];
+  switchTab(next);
+});
 
 function switchTab(tab) {
   currentTab = tab;
