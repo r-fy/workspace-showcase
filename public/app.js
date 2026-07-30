@@ -132,7 +132,7 @@ async function fullSync() {
     lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if (currentTab === 'calls') renderCallLog();
+    if (currentTab === 'crm' && crmSubTab === 'calls') renderCallLog();
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
     notes = await idbGetAll('notes'); boards = await idbGetAll('boards');
@@ -182,7 +182,7 @@ async function pollSync() {
     calls = data.calls || [];
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if (currentTab === 'calls') renderCallLog();
+    if (currentTab === 'crm' && crmSubTab === 'calls') renderCallLog();
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
       const remote = data.notes.find(n => n.id === currentNoteId);
@@ -325,16 +325,19 @@ function isMobile() { return window.innerWidth <= 640; }
 // only way to open a NEW tab — this strip just reflects what's already open.
 const NAV_TAB_LABELS = {
   notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
-  calls: 'Calls', leads: 'Leads', audits: 'Audits', 'daily-tasks': 'TRW Daily Tasks',
-  followups: 'Follow-ups', tourist: 'Tourist', 'cold-email': 'Cold Email',
+  crm: 'CRM', 'daily-tasks': 'TRW Daily Tasks',
+  tourist: 'Tourist', 'cold-email': 'Cold Email',
 };
+// rfy-crm: the old Calls/Leads/Audits/Follow-ups tabs all collapsed into CRM —
+// map any of them saved in localStorage onto it so nobody loses their spot.
+const CRM_MERGED_TABS = ['calls', 'leads', 'audits', 'followups'];
 let openNavTabs = [];
 let navTabDragEl = null;
 
 function loadOpenNavTabs() {
   try { openNavTabs = JSON.parse(localStorage.getItem('nav-open-tabs') || 'null') || ['notes']; }
   catch (e) { openNavTabs = ['notes']; }
-  openNavTabs = openNavTabs.filter(t => NAV_TAB_LABELS[t]);
+  openNavTabs = [...new Set(openNavTabs.map(t => CRM_MERGED_TABS.includes(t) ? 'crm' : t))].filter(t => NAV_TAB_LABELS[t]);
   if (!openNavTabs.length) openNavTabs = ['notes'];
 }
 function saveOpenNavTabs() { localStorage.setItem('nav-open-tabs', JSON.stringify(openNavTabs)); }
@@ -392,6 +395,7 @@ function initNavTabsBar() {
   loadOpenNavTabs();
   let active = null;
   try { active = localStorage.getItem('nav-active-tab'); } catch (e) {}
+  if (active && CRM_MERGED_TABS.includes(active)) active = 'crm';
   if (!active || !openNavTabs.includes(active)) active = openNavTabs[0];
   switchTab(active);
 }
@@ -435,33 +439,24 @@ function switchTab(tab) {
   document.getElementById('tasks-view').classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-view')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-view')?.classList.toggle('hidden', tab !== 'calendar');
-  document.getElementById('calls-view')?.classList.toggle('hidden', tab !== 'calls');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
-  document.getElementById('leads-view')?.classList.toggle('hidden', tab !== 'leads');
-  document.getElementById('audits-view')?.classList.toggle('hidden', tab !== 'audits');
+  document.getElementById('crm-view')?.classList.toggle('hidden', tab !== 'crm');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
-  document.getElementById('followups-view')?.classList.toggle('hidden', tab !== 'followups');
   document.getElementById('cold-email-view')?.classList.toggle('hidden', tab !== 'cold-email');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-panel')?.classList.toggle('hidden', tab !== 'calendar');
-  document.getElementById('calls-panel')?.classList.toggle('hidden', tab !== 'calls');
-  document.getElementById('leads-panel')?.classList.toggle('hidden', tab !== 'leads');
-  document.getElementById('audits-panel')?.classList.toggle('hidden', tab !== 'audits');
+  document.getElementById('crm-panel')?.classList.toggle('hidden', tab !== 'crm');
   document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
-  document.getElementById('followups-panel')?.classList.toggle('hidden', tab !== 'followups');
   document.getElementById('cold-email-panel')?.classList.toggle('hidden', tab !== 'cold-email');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
-  if (tab === 'calls') loadCallsTab();
-  if (tab === 'leads') loadLeads();
-  if (tab === 'audits') loadAudits();
+  if (tab === 'crm') loadCrm();
   if (tab === 'daily-tasks') loadDailyTasks();
-  if (tab === 'followups') loadFollowups();
   if (tab === 'cold-email') loadColdEmail();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
@@ -608,7 +603,7 @@ function renderNotesEmpty() {
   const area = document.getElementById('note-editor-area');
   if (!area) return;
   if (!notes.length) {
-    area.innerHTML = '<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span></div>';
+    area.innerHTML = '<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">Select or create a note</div>';
     return;
   }
   const sorted = [...notes].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
@@ -1950,11 +1945,20 @@ async function loadUsagePanel() {
   } catch(e) { el.innerHTML = ''; } // not configured / offline — just stay quiet, dialer status already covers real errors
 }
 
-async function loadCallsTab() {
-  try { calls = await apiFetch('GET', '/calls'); } catch(e) {}
-  renderCallLog();
-  initDialer();
-  loadUsagePanel();
+// rfy-crm: dialing always happens from inside a lead's Calls sub-tab, so the
+// lead is captured at dial time (context can change mid-call — the user can
+// browse other leads while talking, that's the whole point of the float bar).
+let crmCallLeadId = null;   // lead the LIVE call belongs to
+let crmCallNumber = '';     // number of the live call, for the float bar
+
+function showCallFloatBar(text) {
+  const bar = document.getElementById('call-float-bar');
+  if (!bar) return;
+  document.getElementById('call-float-status').textContent = text;
+  bar.classList.remove('hidden');
+}
+function hideCallFloatBar() {
+  document.getElementById('call-float-bar')?.classList.add('hidden');
 }
 
 async function refreshDialerToken() {
@@ -1998,21 +2002,33 @@ function startCallTimer() {
   const start = Date.now();
   clearInterval(callTimerInt);
   callTimerInt = setInterval(() => {
-    setDialerStatus('In call · ' + fmtCallDur(Math.round((Date.now() - start) / 1000)), 'dialer-status-live');
+    const t = fmtCallDur(Math.round((Date.now() - start) / 1000));
+    setDialerStatus('In call · ' + t, 'dialer-status-live');
+    showCallFloatBar('In call ' + fmtPhone(crmCallNumber) + ' · ' + t);
   }, 1000);
   setDialerStatus('In call · 0:00', 'dialer-status-live');
+  showCallFloatBar('In call ' + fmtPhone(crmCallNumber) + ' · 0:00');
 }
 
 function endCallUi() {
   clearInterval(callTimerInt); callTimerInt = null;
+  const endedLeadId = crmCallLeadId;
+  crmCallLeadId = null;
+  const wasLive = !!twCall;
   twCall = null;
   twDialing = false;
+  hideCallFloatBar();
   document.getElementById('dial-call-btn')?.classList.remove('hidden');
   document.getElementById('dial-hangup-btn')?.classList.add('hidden');
   setDialerStatus('Ready', 'dialer-status-ready');
   // The recording takes a few seconds to process server-side; the 2s sync
   // poll picks it up (hashData covers recording_sid), no refresh needed here.
   loadUsagePanel(); // balance just moved
+  // rfy-crm §1.6/1.7: a lead-scoped call that actually connected surfaces the
+  // disposition picker, then auto-advances to the next lead in list order.
+  // wasLive filters out dials that never got past "Connecting…" (mic blocked,
+  // connect() rejected) — no conversation happened, nothing to disposition.
+  if (wasLive && endedLeadId) openDispositionModal(endedLeadId);
 }
 
 async function startCall() {
@@ -2028,12 +2044,18 @@ async function startCall() {
   if (Date.now() - twTokenAt > 50 * 60000) {
     try { twDevice.updateToken(await refreshDialerToken()); } catch(e) {}
   }
+  // Capture the lead context at dial time — the disposition/auto-advance flow
+  // uses this, not whatever lead happens to be open when the call ends.
+  crmCallLeadId = currentLeadId || null;
+  crmCallNumber = num;
   setDialerStatus('Connecting…');
+  showCallFloatBar('Calling ' + fmtPhone(num) + '…');
   document.getElementById('dial-call-btn').classList.add('hidden');
   document.getElementById('dial-hangup-btn').classList.remove('hidden');
   try {
-    // Triggers the mic permission prompt on first use.
-    twCall = await twDevice.connect({ params: { To: num } });
+    // Triggers the mic permission prompt on first use. LeadId is a custom
+    // param the /api/twilio/voice webhook validates and stamps on the calls row.
+    twCall = await twDevice.connect({ params: { To: num, LeadId: crmCallLeadId || '' } });
   } catch(e) {
     console.warn('twilio connect failed:', e);
     const msg = String(e && (e.message || e.name) || '');
@@ -2041,7 +2063,7 @@ async function startCall() {
     endCallUi();
     return;
   }
-  twCall.on('ringing', () => setDialerStatus('Ringing ' + fmtPhone(num) + '…'));
+  twCall.on('ringing', () => { setDialerStatus('Ringing ' + fmtPhone(num) + '…'); showCallFloatBar('Ringing ' + fmtPhone(num) + '…'); });
   twCall.on('accept', startCallTimer);
   twCall.on('disconnect', endCallUi);
   twCall.on('cancel', endCallUi);
@@ -2085,11 +2107,15 @@ function renderCallLog() {
   // an innerHTML rebuild would silently kill a recording mid-playback. Hold
   // the re-render while a player is open; it catches up once it's closed.
   if (log.querySelector('audio')) return;
-  if (!calls.length) {
-    log.innerHTML = '<div class="agenda-empty">No calls yet — dial a number above</div>';
+  // rfy-crm: the log lives inside a lead's Calls sub-tab — show only that
+  // lead's calls. Pre-CRM calls have no lead_id (deliberately never
+  // backfilled, §1.8) so they simply don't appear under any lead.
+  const leadCalls = currentLeadId ? calls.filter(c => c.lead_id === currentLeadId) : calls;
+  if (!leadCalls.length) {
+    log.innerHTML = '<div class="agenda-empty">No calls for this lead yet — dial the number above</div>';
     return;
   }
-  log.innerHTML = '<div class="agenda-section-label">Call log</div>' + calls.map(c => {
+  log.innerHTML = '<div class="agenda-section-label">Call log</div>' + leadCalls.map(c => {
     const st = CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
     return `<div class="call-item" data-id="${c.id}">
       <div class="call-item-main">
@@ -3104,29 +3130,9 @@ async function importMdFiles(files) {
 }
 
 // ── Universal Search ───────────────────────────────────────────
-const COMMANDS = [
-  { label: 'New Note',             icon: '📝', action: () => { switchTab('notes'); newNote(); } },
-  { label: 'Share Note as .md',    icon: '↗',  action: shareCurrentNote },
-  { label: 'Delete Current Note',  icon: '🗑', action: deleteCurrentNote },
-  { label: 'Import .md Files',     icon: '⬆',  action: () => document.getElementById('import-input').click() },
-  { label: 'New Board',            icon: '📋', action: () => { switchTab('tasks'); promptNewBoard(); } },
-  { label: 'New Column',           icon: '+',  action: () => { switchTab('tasks'); promptNewColumn(); } },
-  { label: 'Delete Current Board', icon: '🗑', action: deleteCurrentBoard },
-  { label: 'Switch to Notes',      icon: '📄', action: () => switchTab('notes') },
-  { label: 'Switch to Projects',   icon: '✓',  action: () => switchTab('tasks') }, // UI calls this tab "Projects"
-  { label: 'Switch to Expenses',   icon: '$',  action: () => switchTab('expenses') },
-  { label: 'New Expense',          icon: '$',  action: () => { switchTab('expenses'); openExpenseModal(); } },
-  { label: 'Export Expenses CSV',  icon: '↓',  action: exportExpensesCsv },
-  { label: 'Switch to Calendar',   icon: '📅', action: () => switchTab('calendar') },
-  { label: 'New Reminder',         icon: '⏰', action: () => { switchTab('calendar'); openReminderModal(); } },
-  { label: 'Switch to Calls',      icon: '📞', action: () => switchTab('calls') },
-  { label: 'New Call',             icon: '📞', action: () => { switchTab('calls'); setTimeout(() => document.getElementById('dial-number')?.focus(), 50); } },
-  { label: 'Switch to Tourist',    icon: '🧭', action: () => switchTab('tourist') },
-  { label: 'Switch to TRW Daily Tasks', icon: '📝', action: () => switchTab('daily-tasks') },
-  { label: 'New Daily Task',       icon: '📝', action: () => { switchTab('daily-tasks'); newDailyTaskPaste(); } },
-  { label: 'Open Trash',           icon: '🗑', action: () => switchTab('trash') },
-];
-
+// (The ⌘K command palette that used to live in this search dropdown was
+// deleted outright in rfy-crm — confirmed unused. Search still covers
+// notes, boards, and tasks.)
 let searchFlat = [];
 let searchIdx = -1;
 let searchDebounce = null;
@@ -3168,13 +3174,10 @@ async function renderSearch(q) {
     !t.deleted_at && (t.title.toLowerCase().includes(ql) || t.description?.toLowerCase().includes(ql))
   ).slice(0, 5);
 
-  const cmdResults = COMMANDS.filter(c => c.label.toLowerCase().includes(ql)).slice(0, 5);
-
   searchFlat = [
     ...noteResults.map(n => ({ type: 'note', data: n })),
     ...boardResults.map(b => ({ type: 'board', data: b })),
     ...taskResults.map(t => ({ type: 'task', data: t })),
-    ...cmdResults.map(c => ({ type: 'cmd', data: c })),
   ];
 
   if (!searchFlat.length) {
@@ -3218,16 +3221,6 @@ async function renderSearch(q) {
       </div></div>`;
     }
   }
-  if (cmdResults.length) {
-    html += `<div class="search-section-header">Commands</div>`;
-    for (const c of cmdResults) {
-      html += `<div class="search-item" data-fi="${fi++}">
-        <span class="search-item-icon">${c.icon}</span>
-        <div class="search-item-body"><div class="search-item-title">${escHtml(c.label)}</div></div>
-      </div>`;
-    }
-  }
-
   searchIdx = -1;
   dropdown.innerHTML = html;
   dropdown.classList.remove('hidden');
@@ -3248,7 +3241,6 @@ function activateSearch(idx) {
     const col = allColumns.find(c => c.id === item.data.column_id);
     if (col) { switchTab('tasks'); selectBoard(col.board_id).then(() => openTaskModal(item.data)); }
   }
-  else if (item.type === 'cmd') { item.data.action(); }
 }
 
 // ── Boards ─────────────────────────────────────────────────────
@@ -3856,13 +3848,6 @@ document.addEventListener('keydown', e => {
   const mod = e.metaKey || e.ctrlKey;
   const dropdownOpen = !document.getElementById('search-dropdown').classList.contains('hidden');
 
-  if (mod && e.key === 'k') {
-    e.preventDefault();
-    const inp = document.getElementById('search-input');
-    document.getElementById('search-bar-wrap').classList.add('mobile-open');
-    inp.focus(); inp.select();
-    return;
-  }
   // Cmd/Ctrl+S: everything autosaves already — just flush any pending note save
   // and confirm, instead of popping the browser's "Save page" dialog.
   if (mod && e.key === 's') {
@@ -4331,12 +4316,7 @@ document.getElementById('rem-weekdays').addEventListener('click', e => {
   renderWeekdayPills();
 });
 document.getElementById('enable-notifs-btn').addEventListener('click', enableNotifications);
-// Calls / dialer
-document.getElementById('new-call-btn').addEventListener('click', () => {
-  switchTab('calls');
-  if (isMobile()) closeSidebar();
-  setTimeout(() => document.getElementById('dial-number')?.focus(), 50);
-});
+// CRM: dialer (inside the Calls sub-tab)
 document.getElementById('dial-pad').addEventListener('click', e => {
   const k = e.target.closest('.dial-key');
   if (k) dialKeyPress(k.dataset.k);
@@ -4346,15 +4326,30 @@ document.getElementById('dial-back').addEventListener('click', () => {
   i.value = i.value.slice(0, -1); i.focus();
 });
 document.getElementById('dial-call-btn').addEventListener('click', startCall);
-document.getElementById('new-lead-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('leads'); newLeadForm(); });
-document.getElementById('new-audit-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('audits'); newAudit(); });
-document.getElementById('new-daily-task-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('daily-tasks'); newDailyTaskPaste(); });
-document.getElementById('new-followup-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('followups'); newFollowupForm(); });
-document.getElementById('cold-email-refresh-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('cold-email'); refreshColdEmail(); });
 document.getElementById('dial-hangup-btn').addEventListener('click', hangUp);
 document.getElementById('dial-number').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); startCall(); }
 });
+document.getElementById('dial-number').addEventListener('change', e => savePhoneBackToLead(e.target.value));
+// CRM: nav +, inner tab strip, floating call bar, disposition modal
+document.getElementById('new-lead-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('crm'); newLeadForm(); });
+document.querySelectorAll('.crm-subtab').forEach(b => b.addEventListener('click', () => switchCrmSub(b.dataset.sub)));
+document.getElementById('call-float-hangup').addEventListener('click', hangUp);
+document.getElementById('disposition-close').addEventListener('click', closeDispositionModal);
+document.getElementById('disposition-skip').addEventListener('click', () => {
+  const leadId = dispositionLeadId;
+  closeDispositionModal();
+  advanceToNextLead(leadId);
+});
+document.getElementById('disposition-custom').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const name = e.target.value.trim().toLowerCase();
+  if (!name) return;
+  addDispositionOption(name);
+  pickDisposition(name);
+});
+document.getElementById('new-daily-task-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('daily-tasks'); newDailyTaskPaste(); });
+document.getElementById('cold-email-refresh-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('cold-email'); refreshColdEmail(); });
 document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTasks);
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);
@@ -4376,10 +4371,44 @@ let currentLeadId = null;
 let currentLead = null; // full record from GET /api/leads/:id
 let leadsView = 'empty'; // empty | detail | new | unmatched
 let leadUnmatched = null;
+let crmSubTab = 'overview'; // overview | audit | followup | calls — which sub-view of the open lead is showing
 
 async function loadLeads() {
   try { leads = await apiCall('GET', '/leads'); } catch (e) { toast('Could not load leads'); return; }
   renderLeadsList();
+}
+
+function loadCrm() {
+  loadLeads();
+  loadUsagePanel();
+}
+
+// The inner tab strip is pure navigation (rfy-crm §1.4): thin header on top,
+// whichever sub-view is active rendered FULL SIZE below it — the audit editor
+// and dialer keep the exact layout they had as standalone tabs.
+function updateCrmHeader() {
+  const head = document.getElementById('crm-detail-header');
+  if (!head) return;
+  const show = leadsView === 'detail' && currentLead;
+  head.classList.toggle('hidden', !show);
+  if (show) document.getElementById('crm-lead-name').textContent = currentLead.business_name || 'Untitled lead';
+  document.querySelectorAll('.crm-subtab').forEach(b => b.classList.toggle('active', b.dataset.sub === crmSubTab));
+}
+
+function showCrmSub(sub) {
+  ['overview', 'audit', 'followup', 'calls'].forEach(s =>
+    document.getElementById('crm-' + s + '-sub')?.classList.toggle('hidden', s !== sub));
+}
+
+function switchCrmSub(sub, preferId) {
+  crmSubTab = sub;
+  updateCrmHeader();
+  showCrmSub(sub);
+  if (!currentLead) return;
+  if (sub === 'overview') renderLeadEditor(currentLead, false);
+  if (sub === 'audit') renderCrmAuditSub(preferId);
+  if (sub === 'followup') renderCrmFollowupSub(preferId);
+  if (sub === 'calls') renderCrmCallsSub();
 }
 
 function leadStatusColor(s) {
@@ -4391,6 +4420,7 @@ function renderLeadsList() {
   if (!area) return;
   const rows = leads.map(l => {
     const badges = [];
+    if (l.disposition) badges.push(`<span class="note-tag" style="--tag-c:${tagColor(l.disposition)}">${escHtml(l.disposition)}</span>`);
     if (l.audit_count) badges.push(`<span class="note-tag">${l.audit_count} audit${l.audit_count > 1 ? 's' : ''}</span>`);
     if (l.unread_replies) badges.push(`<span class="note-tag" style="--tag-c:#c0392b">${l.unread_replies} unread</span>`);
     if (l.next_followup_label) {
@@ -4413,23 +4443,26 @@ function renderLeadsList() {
 }
 
 function newLeadForm() {
-  currentLeadId = null; currentLead = null; leadsView = 'new';
+  currentLeadId = null; currentLead = null; leadsView = 'new'; crmSubTab = 'overview';
   renderLeadsList();
-  renderLeadEditor({ business_name: '', website: '', primary_email: '', city: '', niche: '', notes: '', status: 'active' }, true);
+  updateCrmHeader(); showCrmSub('overview');
+  renderLeadEditor({ business_name: '', website: '', primary_email: '', city: '', niche: '', notes: '', status: 'active',
+    contact_name: '', phone_number: '', address: '', source: '', disposition: '' }, true);
 }
 
-async function openLead(id) {
+async function openLead(id, sub) {
   let l;
   try { l = await apiCall('GET', '/leads/' + id); } catch (e) { toast('Could not load lead'); return; }
   currentLeadId = id; currentLead = l; leadsView = 'detail';
   renderLeadsList();
-  renderLeadEditor(l, false);
+  switchCrmSub(sub || 'overview');
   if (isMobile()) closeSidebar();
 }
 
 async function openUnmatched() {
-  currentLeadId = null; leadsView = 'unmatched';
+  currentLeadId = null; currentLead = null; leadsView = 'unmatched'; crmSubTab = 'overview';
   renderLeadsList();
+  updateCrmHeader(); showCrmSub('overview');
   try { leadUnmatched = await apiCall('GET', '/leads/unmatched'); } catch (e) { toast('Could not load unmatched items'); return; }
   renderUnmatchedView();
 }
@@ -4441,8 +4474,48 @@ function leadFieldRow(label, id, value, type) {
   </div>`;
 }
 
+// Disposition options (rfy-crm §1.7): positive/warm/cold/no by default,
+// customizable — new names typed in the picker persist here. Colors ride the
+// EXISTING shared tag/color store (tagColor/setTagColor), not a second system.
+function dispositionOptions() {
+  try {
+    const v = JSON.parse(localStorage.getItem('crm-dispositions') || 'null');
+    if (Array.isArray(v) && v.length) return v;
+  } catch (e) {}
+  return ['positive', 'warm', 'cold', 'no'];
+}
+function addDispositionOption(name) {
+  const opts = dispositionOptions();
+  if (!opts.includes(name)) { opts.push(name); localStorage.setItem('crm-dispositions', JSON.stringify(opts)); }
+}
+
+// Tag-style pill row with a color dot per pill (same recolor pattern as the
+// Daily Tasks category pills — click the dot, native color input, setTagColor
+// propagates everywhere the shared store is used).
+function dispositionPillsHtml(selected) {
+  return dispositionOptions().map(o => `
+    <span class="tag-filter-pill${o === selected ? ' active' : ''}" data-dispo="${escHtml(o)}" style="--tag-c:${tagColor(o)}">
+      <span class="tag-color-dot" data-dispo-color="${escHtml(o)}" style="background:${tagColor(o)}"></span>${escHtml(o)}
+    </span>`).join('');
+}
+function wireDispositionPills(container, onPick) {
+  container.querySelectorAll('[data-dispo]').forEach(el => el.addEventListener('click', () => onPick(el.dataset.dispo)));
+  container.querySelectorAll('[data-dispo-color]').forEach(dot => dot.addEventListener('click', e => {
+    e.stopPropagation();
+    const name = dot.dataset.dispoColor;
+    const inp = document.createElement('input');
+    inp.type = 'color'; inp.value = tagColor(name);
+    inp.addEventListener('input', () => setTagColor(name, inp.value));
+    inp.addEventListener('change', () => onPick(null)); // re-render pills with the new color, keep selection
+    inp.click();
+  }));
+}
+
+let leadFormDisposition = ''; // picker state for the open lead form
+
 function renderLeadEditor(d, isNew) {
   const area = document.getElementById('lead-editor-area');
+  leadFormDisposition = d.disposition || '';
   area.innerHTML = `
     <div class="daily-task-form">
       <div class="daily-task-form-head">
@@ -4451,10 +4524,18 @@ function renderLeadEditor(d, isNew) {
           ${['active', 'won', 'lost', 'dormant'].map(s => `<option value="${s}"${d.status === s ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}
         </select>
       </div>
+      ${leadFieldRow('Contact name', 'lead-contact-name', d.contact_name)}
+      ${leadFieldRow('Phone', 'lead-phone', d.phone_number, 'tel')}
       ${leadFieldRow('Website', 'lead-website', d.website)}
       ${leadFieldRow('Primary email', 'lead-email', d.primary_email, 'email')}
+      ${leadFieldRow('Address', 'lead-address', d.address)}
       ${leadFieldRow('City', 'lead-city', d.city)}
       ${leadFieldRow('Niche', 'lead-niche', d.niche)}
+      ${leadFieldRow('Source', 'lead-source', d.source)}
+      <div class="expense-field-row">
+        <label>Disposition</label>
+        <div class="tags-bar" id="lead-dispo-pills" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+      </div>
       <div class="expense-field-row">
         <label>Notes</label>
         <textarea id="lead-notes" style="min-height:70px;">${escHtml(d.notes || '')}</textarea>
@@ -4466,19 +4547,35 @@ function renderLeadEditor(d, isNew) {
     </div>
     ${isNew ? '' : '<div id="lead-timeline"></div>'}
   `;
+  renderLeadDispoPills();
   document.getElementById('lead-save-btn').addEventListener('click', () => isNew ? createLead() : saveLead());
   document.getElementById('lead-delete-btn')?.addEventListener('click', deleteCurrentLead);
   if (!isNew) renderLeadTimeline();
+}
+
+function renderLeadDispoPills() {
+  const wrap = document.getElementById('lead-dispo-pills');
+  if (!wrap) return;
+  wrap.innerHTML = dispositionPillsHtml(leadFormDisposition);
+  wireDispositionPills(wrap, pick => {
+    if (pick !== null) leadFormDisposition = pick === leadFormDisposition ? '' : pick; // click again to clear
+    renderLeadDispoPills();
+  });
 }
 
 function readLeadForm() {
   return {
     business_name: document.getElementById('lead-business-name').value.trim() || 'Untitled lead',
     status: document.getElementById('lead-status').value,
+    contact_name: document.getElementById('lead-contact-name').value.trim(),
+    phone_number: document.getElementById('lead-phone').value.trim(),
     website: document.getElementById('lead-website').value.trim(),
     primary_email: document.getElementById('lead-email').value.trim(),
+    address: document.getElementById('lead-address').value.trim(),
     city: document.getElementById('lead-city').value.trim(),
     niche: document.getElementById('lead-niche').value.trim(),
+    source: document.getElementById('lead-source').value.trim(),
+    disposition: leadFormDisposition,
     notes: document.getElementById('lead-notes').value,
   };
 }
@@ -4500,6 +4597,7 @@ async function saveLead() {
     await loadLeads();
     currentLead = await apiCall('GET', '/leads/' + currentLeadId);
     renderLeadsList();
+    updateCrmHeader();
   } catch (e) { toast('Could not save: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection')); }
 }
 
@@ -4509,8 +4607,9 @@ async function deleteCurrentLead() {
   const id = currentLeadId;
   try { await apiCall('DELETE', '/leads/' + id); } catch (e) {}
   leads = leads.filter(l => l.id !== id);
-  currentLeadId = null; currentLead = null; leadsView = 'empty';
+  currentLeadId = null; currentLead = null; leadsView = 'empty'; crmSubTab = 'overview';
   renderLeadsList();
+  updateCrmHeader(); showCrmSub('overview');
   document.getElementById('lead-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">Select a lead, or hit + to add one.</div>`;
 }
 
@@ -4532,11 +4631,19 @@ function leadTimelineRowHtml(item) {
       ${unlinkBtn}
     </div>`;
   }
-  return `<div class="lead-timeline-row">
+  // Reply rows expand inline on click (rfy-crm §7.3 — the shipped hub gave
+  // no way to actually read a reply). preview is everything the DB stores
+  // (Instantly's content_preview), so this IS the full available content.
+  return `<div class="lead-timeline-row lead-timeline-reply" data-reply-toggle="${item.id}">
     <span class="lead-timeline-type">Reply</span>
     <span class="lead-timeline-label">${escHtml(item.from_name || item.from_email)}: ${escHtml(item.subject || '')}</span>
     <span class="lead-timeline-date">${fmtDate(item.ts)}</span>
     ${unlinkBtn}
+  </div>
+  <div class="lead-reply-detail hidden" id="reply-detail-${item.id}">
+    <div class="lead-reply-meta">${escHtml(item.from_name || '')} &lt;${escHtml(item.from_email || '')}&gt;${item.campaign_name ? ' · ' + escHtml(item.campaign_name) : ''}</div>
+    <div class="lead-reply-subject">${escHtml(item.subject || '(no subject)')}</div>
+    <div class="lead-reply-body">${escHtml(item.preview || '(no preview stored)')}</div>
   </div>`;
 }
 
@@ -4551,8 +4658,10 @@ function renderLeadTimeline() {
   wrap.innerHTML = `<div class="audit-section-title">Timeline</div>` +
     (items.length ? items.map(leadTimelineRowHtml).join('')
       : '<div style="padding:8px 0;color:#444;font-size:12px;">Nothing linked yet — link items from the Unmatched list.</div>');
-  wrap.querySelectorAll('[data-open-audit]').forEach(el => el.addEventListener('click', () => { switchTab('audits'); openAudit(el.dataset.openAudit); }));
-  wrap.querySelectorAll('[data-open-followup]').forEach(el => el.addEventListener('click', () => { switchTab('followups'); openFollowup(el.dataset.openFollowup); }));
+  wrap.querySelectorAll('[data-open-audit]').forEach(el => el.addEventListener('click', () => switchCrmSub('audit', el.dataset.openAudit)));
+  wrap.querySelectorAll('[data-open-followup]').forEach(el => el.addEventListener('click', () => switchCrmSub('followup', el.dataset.openFollowup)));
+  wrap.querySelectorAll('[data-reply-toggle]').forEach(el => el.addEventListener('click', () =>
+    document.getElementById('reply-detail-' + el.dataset.replyToggle)?.classList.toggle('hidden')));
   wrap.querySelectorAll('[data-unlink]').forEach(el => el.addEventListener('click', async e => {
     e.stopPropagation();
     try { await apiCall('POST', '/leads/' + currentLeadId + '/unlink', { type: el.dataset.unlinkType, id: el.dataset.unlink }); toast('Unlinked'); openLead(currentLeadId); }
@@ -4606,6 +4715,158 @@ async function createLeadFromUnmatched(type, id, name) {
     await loadLeads();
     openLead(created.id);
   } catch (e) { toast('Could not create lead'); }
+}
+
+// ── CRM sub-tabs: Audit / Follow-up / Calls (rfy-crm §5) ─────────────────
+// Each shows the most recent item by default with older ones as history rows
+// and "+ New" always available (§7.1). The editors themselves are the same
+// full-size editors the standalone tabs had — only the scoping is new.
+
+function crmHistoryRowHtml(kind, x) {
+  const label = kind === 'audit'
+    ? `${escHtml(x.business_name)} · ${escHtml(x.status)} · ${x.report_type === 'ads' ? 'Google Ads' : 'Local SEO'}`
+    : `${escHtml(x.next_label ? 'Next: ' + x.next_label : 'All touches sent')} · ${escHtml(x.status)}`;
+  return `<div class="crm-history-row" data-open="${x.id}">
+    <span class="lead-timeline-label">${label}</span>
+    <span class="lead-timeline-date">${fmtDate(x.updated_at)}</span>
+  </div>`;
+}
+
+function renderCrmAuditSub(preferId) {
+  const bar = document.getElementById('crm-audit-history');
+  const list = currentLead?.audits || [];
+  bar.innerHTML = `<button class="audit-add-btn" id="crm-new-audit-btn">+ New audit</button>` +
+    list.map(a => crmHistoryRowHtml('audit', a)).join('');
+  bar.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => openAudit(el.dataset.open)));
+  document.getElementById('crm-new-audit-btn').addEventListener('click', newAuditForLead);
+  const openId = preferId || list[0]?.id;
+  if (openId) { openAudit(openId); }
+  else {
+    currentAuditId = null; currentAudit = null;
+    document.getElementById('audit-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">No audits for this lead yet — hit + New audit.</div>`;
+  }
+}
+
+// New audits are always born from a lead: lead_id set from context,
+// business_name (and website/city/niche) pre-filled from the parent so the
+// two can never drift (§1.9 — the editor also locks the name field).
+async function newAuditForLead() {
+  if (!currentLead) return;
+  const data = emptyAuditData();
+  data.identity.business_name = currentLead.business_name || '';
+  data.identity.website = currentLead.website || '';
+  data.identity.city = currentLead.city || '';
+  data.identity.niche = currentLead.niche || '';
+  try {
+    const created = await apiCall('POST', '/audits', { business_name: currentLead.business_name, data, lead_id: currentLeadId });
+    currentLead.audits.unshift({ id: created.id, business_name: created.business_name, status: created.status, report_type: 'seo', updated_at: created.updated_at });
+    renderCrmAuditSub(created.id);
+  } catch (e) { toast('Could not create audit'); }
+}
+
+function renderCrmFollowupSub(preferId) {
+  const bar = document.getElementById('crm-followup-history');
+  const list = currentLead?.followups || [];
+  bar.innerHTML = `
+    <span class="crm-history-new">
+      <input type="date" id="crm-fu-start" title="Touch 1 date">
+      <button class="audit-add-btn" id="crm-new-fu-btn">+ New sequence</button>
+    </span>` +
+    list.map(f => crmHistoryRowHtml('followup', f)).join('');
+  document.getElementById('crm-fu-start').valueAsDate = new Date();
+  bar.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => openFollowup(el.dataset.open)));
+  document.getElementById('crm-new-fu-btn').addEventListener('click', newFollowupForLead);
+  const openId = preferId || list[0]?.id;
+  if (openId) { openFollowup(openId); }
+  else {
+    currentFollowupId = null; followupDraft = null;
+    document.getElementById('followup-editor-area').innerHTML = `<div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">No follow-up sequences for this lead yet — pick a touch-1 date and hit + New sequence.</div>`;
+  }
+}
+
+async function newFollowupForLead() {
+  if (!currentLead) return;
+  const start_at = document.getElementById('crm-fu-start')?.valueAsDate?.getTime() || Date.now();
+  try {
+    const created = await apiCall('POST', '/followups', {
+      lead_name: currentLead.contact_name || '',
+      business_name: currentLead.business_name || 'Untitled follow-up',
+      start_at, lead_id: currentLeadId,
+    });
+    const next = created.data.touches[0];
+    currentLead.followups.unshift({ id: created.id, lead_name: created.lead_name, business_name: created.business_name, status: created.status, updated_at: created.updated_at, next_due_at: next.due_at, next_label: next.label });
+    renderCrmFollowupSub(created.id);
+    toast('Sequence created');
+  } catch (e) { toast('Could not create sequence'); }
+}
+
+function renderCrmCallsSub() {
+  // Phone box pre-filled from the lead (editable — edits save back, §1.6).
+  const inp = document.getElementById('dial-number');
+  if (inp && !twCall && !twDialing) inp.value = currentLead?.phone_number || '';
+  renderCallLog();
+  initDialer();
+  loadUsagePanel();
+}
+
+// Typing a number for a lead that had none (or correcting one) persists it
+// on the lead — the change listener is wired once at startup, and only fires
+// while a lead's Calls sub-tab is the active context.
+async function savePhoneBackToLead(raw) {
+  if (!currentLeadId || !currentLead || currentTab !== 'crm' || crmSubTab !== 'calls') return;
+  const val = (normalizeDialNumber(raw) || raw).trim();
+  if (val === (currentLead.phone_number || '')) return;
+  try {
+    await apiCall('PUT', '/leads/' + currentLeadId, { phone_number: val });
+    currentLead.phone_number = val;
+    const row = leads.find(l => l.id === currentLeadId); if (row) row.phone_number = val;
+    toast('Phone saved to lead');
+  } catch (e) { toast('Could not save phone to lead'); }
+}
+
+// ── Disposition picker + one-click-through call queue (rfy-crm §1.6/1.7) ──
+let dispositionLeadId = null;
+
+function openDispositionModal(leadId) {
+  dispositionLeadId = leadId;
+  const modal = document.getElementById('disposition-modal');
+  renderDispositionModalPills('');
+  document.getElementById('disposition-custom').value = '';
+  modal.classList.remove('hidden');
+}
+function closeDispositionModal() {
+  document.getElementById('disposition-modal').classList.add('hidden');
+  dispositionLeadId = null;
+}
+function renderDispositionModalPills(selected) {
+  const wrap = document.getElementById('disposition-pills');
+  wrap.innerHTML = dispositionPillsHtml(selected);
+  wireDispositionPills(wrap, pick => { if (pick !== null) pickDisposition(pick); else renderDispositionModalPills(selected); });
+}
+async function pickDisposition(value) {
+  const leadId = dispositionLeadId;
+  closeDispositionModal();
+  try {
+    await apiCall('PUT', '/leads/' + leadId, { disposition: value });
+    const row = leads.find(l => l.id === leadId); if (row) row.disposition = value;
+    if (currentLead && currentLeadId === leadId) currentLead.disposition = value;
+    renderLeadsList();
+    toast('Marked ' + value);
+  } catch (e) { toast('Could not save disposition'); }
+  advanceToNextLead(leadId);
+}
+
+// Auto-advance to the next lead in the CURRENT list ordering (the in-memory
+// leads array — same order the left list renders). Deliberately NOT
+// auto-dialing: you still click Call yourself every time (§1.6). No wrap at
+// the end of the list — ponytail: wrap-around dialing loops are how you call
+// someone twice by accident.
+function advanceToNextLead(fromLeadId) {
+  const idx = leads.findIndex(l => l.id === fromLeadId);
+  const next = idx >= 0 ? leads[idx + 1] : null;
+  if (!next) { toast('End of the leads list'); return; }
+  if (currentTab !== 'crm') switchTab('crm');
+  openLead(next.id, 'calls');
 }
 
 // ── Audits ───────────────────────────────────────────────────
@@ -4674,17 +4935,9 @@ function renderAuditsList() {
   area.querySelectorAll('.audit-item').forEach(el => el.addEventListener('click', () => openAudit(el.dataset.id)));
 }
 
-async function newAudit() {
-  const data = emptyAuditData();
-  try {
-    const created = await apiCall('POST', '/audits', { business_name: 'Untitled audit', data });
-    audits.unshift({ id: created.id, business_name: created.business_name, status: created.status, report_type: data.report_type, updated_at: created.updated_at });
-    currentAuditId = created.id;
-    currentAudit = created;
-    renderAuditsList();
-    renderAuditEditor();
-  } catch (e) { toast('Could not create audit'); }
-}
+// (The old lead-less newAudit() was deleted in rfy-crm — audits are always
+// created from inside a lead now via newAuditForLead, and the server 400s a
+// POST without a live lead_id.)
 
 async function openAudit(id) {
   try { currentAudit = await apiCall('GET', '/audits/' + id); } catch (e) { toast('Could not load audit'); return; }
@@ -4790,9 +5043,12 @@ function renderAuditEditor() {
   d.findings = d.findings || [];
   d.gsc = d.gsc || { available: false, top_queries: [], notes: '' };
   d.gsc.top_queries = d.gsc.top_queries || [];
+  // rfy-crm §1.9: an audit born from a lead keeps business_name locked to the
+  // parent lead so the two can never drift via hand-editing in two places.
+  const nameLocked = !!currentAudit.lead_id;
   area.innerHTML = `
     <div class="audit-toolbar">
-      <input type="text" id="audit-business-name" placeholder="Business name" value="${escHtml(d.identity.business_name || '')}">
+      <input type="text" id="audit-business-name" placeholder="Business name" value="${escHtml(d.identity.business_name || '')}"${nameLocked ? ' disabled title="Locked to the lead\'s business name"' : ''}>
       <select id="audit-status-select">
         ${['draft', 'sent', 'won', 'lost'].map(s => `<option value="${s}"${currentAudit.status === s ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}
       </select>
@@ -4953,6 +5209,9 @@ async function saveCurrentAudit() {
     const idx = audits.findIndex(a => a.id === id);
     if (idx >= 0) audits[idx] = { id: saved.id, business_name: saved.business_name, status: saved.status, report_type: currentAudit.data.report_type || 'seo', updated_at: saved.updated_at };
     renderAuditsList();
+    // Keep the CRM sub-tab's history rows in sync too
+    const la = currentLead?.audits?.find(a => a.id === id);
+    if (la) { la.status = saved.status; la.report_type = currentAudit.data.report_type || 'seo'; la.updated_at = saved.updated_at; }
     const status = document.getElementById('audit-save-status');
     if (status) status.textContent = 'Saved';
   } catch (e) {
@@ -5300,58 +5559,26 @@ async function openFollowup(id) {
   let f;
   try { f = await apiCall('GET', '/followups/' + id); } catch (e) { toast('Could not load'); return; }
   currentFollowupId = id;
-  followupDraft = { lead_name: f.lead_name, business_name: f.business_name, status: f.status, data: f.data };
+  followupDraft = { lead_name: f.lead_name, business_name: f.business_name, status: f.status, data: f.data, lead_id: f.lead_id };
   renderFollowupsList();
   renderFollowupEditor();
   if (isMobile()) closeSidebar();
 }
 
-function newFollowupForm() {
-  currentFollowupId = null;
-  followupDraft = null;
-  renderFollowupsList();
-  const area = document.getElementById('followup-editor-area');
-  area.innerHTML = `
-    <div class="daily-task-paste-wrap">
-      <div class="expense-field-row">
-        <label>Lead name</label>
-        <input type="text" id="fu-new-lead" placeholder="e.g. Sarah at TIA MEDSPA">
-      </div>
-      <div class="expense-field-row">
-        <label>Business</label>
-        <input type="text" id="fu-new-business" placeholder="e.g. TIA MEDSPA">
-      </div>
-      <div class="expense-field-row">
-        <label>Touch 1 date</label>
-        <input type="date" id="fu-new-start">
-      </div>
-      <button class="save-btn" id="fu-create-btn">Create 8-touch sequence</button>
-    </div>`;
-  document.getElementById('fu-new-start').valueAsDate = new Date();
-  document.getElementById('fu-create-btn').addEventListener('click', async () => {
-    const lead_name = document.getElementById('fu-new-lead').value.trim();
-    const business_name = document.getElementById('fu-new-business').value.trim() || 'Untitled follow-up';
-    const start_at = document.getElementById('fu-new-start').valueAsDate?.getTime() || Date.now();
-    try {
-      const created = await apiCall('POST', '/followups', { lead_name, business_name, start_at });
-      followups.unshift({ id: created.id, lead_name: created.lead_name, business_name: created.business_name, status: created.status, updated_at: created.updated_at, next_due_at: created.data.touches[0].due_at, next_label: created.data.touches[0].label });
-      currentFollowupId = created.id;
-      followupDraft = { lead_name: created.lead_name, business_name: created.business_name, status: created.status, data: created.data };
-      renderFollowupsList();
-      renderFollowupEditor();
-      toast('Sequence created');
-    } catch (e) { toast('Could not create sequence'); }
-  });
-}
+// (The old standalone new-follow-up form was deleted in rfy-crm — sequences
+// are always created from inside a lead now via newFollowupForLead, and the
+// server 400s a POST without a live lead_id.)
 
 function renderFollowupEditor() {
   const area = document.getElementById('followup-editor-area');
   const d = followupDraft;
+  // rfy-crm §1.9: business name locked to the parent lead, same as audits.
+  const nameLocked = !!d.lead_id;
   area.innerHTML = `
     <div class="daily-task-form">
       <div class="daily-task-form-head">
         <input type="text" id="fu-lead-name" placeholder="Lead name" value="${escHtml(d.lead_name || '')}">
-        <input type="text" id="fu-business-name" placeholder="Business" value="${escHtml(d.business_name || '')}">
+        <input type="text" id="fu-business-name" placeholder="Business" value="${escHtml(d.business_name || '')}"${nameLocked ? ' disabled title="Locked to the lead\'s business name"' : ''}>
         <select id="fu-status">
           <option value="active"${d.status === 'active' ? ' selected' : ''}>Active</option>
           <option value="paused"${d.status === 'paused' ? ' selected' : ''}>Paused</option>
@@ -5404,6 +5631,8 @@ async function saveFollowup() {
     const row = { id: updated.id, lead_name: updated.lead_name, business_name: updated.business_name, status: updated.status, updated_at: updated.updated_at, next_due_at: next ? next.due_at : null, next_label: next ? next.label : null };
     if (idx >= 0) followups[idx] = row; else followups.unshift(row);
     renderFollowupsList();
+    const lf = currentLead?.followups?.find(f => f.id === updated.id);
+    if (lf) Object.assign(lf, { status: row.status, updated_at: row.updated_at, next_due_at: row.next_due_at, next_label: row.next_label });
     toast('Saved');
   } catch (e) {
     toast('Could not save: ' + (String(e.message || '').match(/"error":"([^"]+)"/)?.[1] || 'check connection'));

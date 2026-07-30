@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=135">
+<link rel="stylesheet" href="/app.css?v=136">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -47,7 +47,7 @@
     <button class="icon-btn sidebar-toggle" id="sidebar-toggle">☰</button>
     <button class="icon-btn search-toggle-btn" id="search-toggle-btn" title="Search">🔍</button>
     <div id="search-bar-wrap" class="search-bar-wrap">
-      <input type="text" id="search-input" class="search-input" placeholder="Search notes, projects, boards, commands…" autocomplete="off" spellcheck="false">
+      <input type="text" id="search-input" class="search-input" placeholder="Search notes, projects, boards…" autocomplete="off" spellcheck="false">
       <div id="search-dropdown" class="search-dropdown hidden"></div>
       <button class="icon-btn search-close-btn" id="search-close-btn" title="Close">✕</button>
     </div>
@@ -89,26 +89,12 @@
           <button class="nav-menu-item" data-tab="calendar">Calendar</button>
           <button class="icon-btn nav-add-btn" id="add-reminder-btn" title="New reminder">+</button>
         </div>
-        <div class="nav-row" draggable="true" data-tab="calls">
+        <div class="nav-row" draggable="true" data-tab="crm">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
-          <button class="nav-menu-item" data-tab="calls">Calls</button>
-          <button class="icon-btn nav-add-btn" id="new-call-btn" title="New call">+</button>
-        </div>
-        <div class="nav-row" draggable="true" data-tab="leads">
-          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
-          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
-          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
-          <button class="nav-menu-item" data-tab="leads">Leads</button>
+          <button class="nav-menu-item" data-tab="crm">CRM</button>
           <button class="icon-btn nav-add-btn" id="new-lead-btn" title="New lead">+</button>
-        </div>
-        <div class="nav-row" draggable="true" data-tab="audits">
-          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
-          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
-          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
-          <button class="nav-menu-item" data-tab="audits">Audits</button>
-          <button class="icon-btn nav-add-btn" id="new-audit-btn" title="New audit">+</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="daily-tasks">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
@@ -116,13 +102,6 @@
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="daily-tasks">TRW Daily Tasks</button>
           <button class="icon-btn nav-add-btn" id="new-daily-task-btn" title="New daily task">+</button>
-        </div>
-        <div class="nav-row" draggable="true" data-tab="followups">
-          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
-          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
-          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
-          <button class="nav-menu-item" data-tab="followups">Follow-ups</button>
-          <button class="icon-btn nav-add-btn" id="new-followup-btn" title="New follow-up sequence">+</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="tourist">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
@@ -166,22 +145,13 @@
           <button id="enable-notifs-btn" class="hidden">🔔 Enable notifications</button>
         </div>
       </div>
-      <div id="calls-panel" class="panel-section hidden">
-        <div class="calls-panel-info" id="calls-panel-info"></div>
-        <div class="calls-usage-info" id="calls-usage-info"></div>
-      </div>
-      <div id="leads-panel" class="panel-section hidden">
+      <div id="crm-panel" class="panel-section hidden">
         <div class="notes-list" id="leads-list"></div>
-      </div>
-      <div id="audits-panel" class="panel-section hidden">
-        <div class="notes-list" id="audits-list"></div>
+        <div class="calls-usage-info" id="calls-usage-info"></div>
       </div>
       <div id="daily-tasks-panel" class="panel-section hidden">
         <div id="daily-task-cat-bar" class="tags-bar" style="display:none"></div>
         <div class="notes-list" id="daily-tasks-list"></div>
-      </div>
-      <div id="followups-panel" class="panel-section hidden">
-        <div class="notes-list" id="followups-list"></div>
       </div>
       <div id="cold-email-panel" class="panel-section hidden">
         <div class="ce-campaign-list" id="ce-campaign-list"></div>
@@ -199,7 +169,7 @@
     <div class="view" id="notes-view">
       <div class="note-editor-area" id="note-editor-area">
         <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;">
-          Select or create a note &nbsp;<span style="color:#2a2a2a;font-size:12px;">⌘K to search</span>
+          Select or create a note
         </div>
       </div>
     </div>
@@ -229,20 +199,62 @@
       </div>
     </div>
 
-    <!-- Leads view (CRM hub tying audits/followups/cold-email replies together) -->
-    <div class="view hidden" id="leads-view" style="flex-direction:column;overflow-y:auto;">
-      <div id="lead-editor-area">
-        <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
-          Select a lead, or hit + to add one.
+    <!-- CRM view (rfy-crm: one lead-first section replacing the old
+         Leads/Audits/Calls/Follow-ups tabs — see RFY-CRM-PLAN.md).
+         A lead's page = thin header (name + Overview/Audit/Follow-up/Calls
+         strip); the active sub-view renders full-size below it. -->
+    <div class="view hidden" id="crm-view" style="flex-direction:column;overflow-y:auto;">
+      <div id="crm-detail-header" class="crm-detail-header hidden">
+        <span class="crm-lead-name" id="crm-lead-name"></span>
+        <div class="crm-subtabs" id="crm-subtabs">
+          <button class="crm-subtab active" data-sub="overview">Overview</button>
+          <button class="crm-subtab" data-sub="audit">Audit</button>
+          <button class="crm-subtab" data-sub="followup">Follow-up</button>
+          <button class="crm-subtab" data-sub="calls">Calls</button>
         </div>
       </div>
-    </div>
-
-    <!-- Audits view -->
-    <div class="view hidden" id="audits-view" style="flex-direction:column;overflow-y:auto;">
-      <div id="audit-editor-area">
-        <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
-          Select an audit, or hit + to start a new one.
+      <div id="crm-overview-sub" class="crm-sub">
+        <div id="lead-editor-area">
+          <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
+            Select a lead, or hit + to add one.
+          </div>
+        </div>
+      </div>
+      <div id="crm-audit-sub" class="crm-sub hidden">
+        <div id="crm-audit-history" class="crm-history-bar"></div>
+        <div id="audit-editor-area"></div>
+      </div>
+      <div id="crm-followup-sub" class="crm-sub hidden">
+        <div id="crm-followup-history" class="crm-history-bar"></div>
+        <div id="followup-editor-area"></div>
+      </div>
+      <div id="crm-calls-sub" class="crm-sub hidden">
+        <div class="dialer-area">
+          <div class="dialer-card">
+            <div id="dialer-status" class="dialer-status">Loading…</div>
+            <div class="calls-panel-info" id="calls-panel-info"></div>
+            <input type="tel" id="dial-number" class="dial-number-input" placeholder="(555) 123-4567" autocomplete="off" spellcheck="false">
+            <div class="dial-pad" id="dial-pad">
+              <button class="dial-key" data-k="1">1</button>
+              <button class="dial-key" data-k="2">2</button>
+              <button class="dial-key" data-k="3">3</button>
+              <button class="dial-key" data-k="4">4</button>
+              <button class="dial-key" data-k="5">5</button>
+              <button class="dial-key" data-k="6">6</button>
+              <button class="dial-key" data-k="7">7</button>
+              <button class="dial-key" data-k="8">8</button>
+              <button class="dial-key" data-k="9">9</button>
+              <button class="dial-key" data-k="*">*</button>
+              <button class="dial-key" data-k="0">0</button>
+              <button class="dial-key" data-k="#">#</button>
+            </div>
+            <div class="dial-actions">
+              <button class="dial-back-key" id="dial-back">←</button>
+              <button class="dial-call-btn" id="dial-call-btn">Call</button>
+              <button class="dial-hangup-btn hidden" id="dial-hangup-btn">Hang Up</button>
+            </div>
+          </div>
+          <div class="call-log" id="call-log"></div>
         </div>
       </div>
     </div>
@@ -252,15 +264,6 @@
       <div id="daily-task-editor-area">
         <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
           Select an entry, or hit + to paste a new one.
-        </div>
-      </div>
-    </div>
-
-    <!-- Follow-ups view (8-touch warm-lead drip sequences) -->
-    <div class="view hidden" id="followups-view" style="flex-direction:column;overflow-y:auto;">
-      <div id="followup-editor-area">
-        <div style="color:#555;font-size:14px;display:flex;align-items:center;justify-content:center;flex:1;padding:40px;">
-          Select a follow-up sequence, or hit + to start one for a lead.
         </div>
       </div>
     </div>
@@ -370,36 +373,6 @@
           </div>
           <div class="ref-note" id="area-note"></div>
         </div>
-      </div>
-    </div>
-
-    <!-- Calls view (dialer) -->
-    <div class="view hidden" id="calls-view" style="flex-direction:column;overflow-y:auto;">
-      <div class="dialer-area">
-        <div class="dialer-card">
-          <div id="dialer-status" class="dialer-status">Loading…</div>
-          <input type="tel" id="dial-number" class="dial-number-input" placeholder="(555) 123-4567" autocomplete="off" spellcheck="false">
-          <div class="dial-pad" id="dial-pad">
-            <button class="dial-key" data-k="1">1</button>
-            <button class="dial-key" data-k="2">2</button>
-            <button class="dial-key" data-k="3">3</button>
-            <button class="dial-key" data-k="4">4</button>
-            <button class="dial-key" data-k="5">5</button>
-            <button class="dial-key" data-k="6">6</button>
-            <button class="dial-key" data-k="7">7</button>
-            <button class="dial-key" data-k="8">8</button>
-            <button class="dial-key" data-k="9">9</button>
-            <button class="dial-key" data-k="*">*</button>
-            <button class="dial-key" data-k="0">0</button>
-            <button class="dial-key" data-k="#">#</button>
-          </div>
-          <div class="dial-actions">
-            <button class="dial-back-key" id="dial-back">←</button>
-            <button class="dial-call-btn" id="dial-call-btn">Call</button>
-            <button class="dial-hangup-btn hidden" id="dial-hangup-btn">Hang Up</button>
-          </div>
-        </div>
-        <div class="call-log" id="call-log"></div>
       </div>
     </div>
 
@@ -632,9 +605,40 @@
 </div>
 
 
+<!-- Persistent floating call-status bar (rfy-crm §1.5): lives outside the
+     lead-detail DOM entirely so switching leads/tabs mid-call never drops or
+     hides a live call. Shown whenever a call is dialing/live. -->
+<div id="call-float-bar" class="call-float-bar hidden">
+  <span id="call-float-status">In call</span>
+  <button id="call-float-hangup" class="dial-hangup-btn">Hang Up</button>
+</div>
+
+<!-- Disposition picker (rfy-crm §1.6/1.7): surfaces after a lead-scoped call
+     ends. Picking a value saves it on the LEAD and auto-advances to the next
+     lead in the current list order (you still click Dial yourself). -->
+<div id="disposition-modal" class="hidden">
+  <div class="expense-modal-box" style="max-width:340px;">
+    <div class="expense-modal-header">
+      <span>Call result</span>
+      <button class="modal-close-btn" id="disposition-close" title="Close without advancing">✕</button>
+    </div>
+    <div class="expense-modal-body">
+      <div class="tags-bar" id="disposition-pills" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+      <div class="expense-field-row" style="margin-top:10px;">
+        <label>Custom</label>
+        <input type="text" id="disposition-custom" placeholder="Add a new disposition…" autocomplete="off">
+      </div>
+    </div>
+    <div class="expense-modal-footer">
+      <button class="cancel-sel-btn" id="disposition-skip">Skip → next lead</button>
+      <div></div>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=156"></script>
+<script src="/app.js?v=157"></script>
 </body>
 </html>
