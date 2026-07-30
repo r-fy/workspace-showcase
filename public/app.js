@@ -132,7 +132,7 @@ async function fullSync() {
     lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if (currentTab === 'crm' && crmSubTab === 'calls') renderCallLog();
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') renderCallLog();
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
     notes = await idbGetAll('notes'); boards = await idbGetAll('boards');
@@ -182,7 +182,7 @@ async function pollSync() {
     calls = data.calls || [];
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if (currentTab === 'crm' && crmSubTab === 'calls') renderCallLog();
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') renderCallLog();
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
       const remote = data.notes.find(n => n.id === currentNoteId);
@@ -326,19 +326,20 @@ function isMobile() { return window.innerWidth <= 640; }
 // only way to open a NEW tab — this strip just reflects what's already open.
 const NAV_TAB_LABELS = {
   notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
-  crm: 'CRM', 'daily-tasks': 'TRW Daily Tasks',
+  crm: 'CRM', dialer: 'Dialer', 'daily-tasks': 'TRW Daily Tasks',
   tourist: 'Tourist', 'cold-email': 'Cold Email',
 };
-// rfy-crm: the old Calls/Leads/Audits/Follow-ups tabs all collapsed into CRM —
-// map any of them saved in localStorage onto it so nobody loses their spot.
-const CRM_MERGED_TABS = ['calls', 'leads', 'audits', 'followups'];
+// Tab renames across versions: the old Leads/Audits/Follow-ups tabs collapsed
+// into CRM (v160); the old Calls tab is the standalone Dialer again (v162).
+// Map anything saved in localStorage so nobody loses their spot.
+const TAB_MIGRATIONS = { calls: 'dialer', leads: 'crm', audits: 'crm', followups: 'crm' };
 let openNavTabs = [];
 let navTabDragEl = null;
 
 function loadOpenNavTabs() {
   try { openNavTabs = JSON.parse(localStorage.getItem('nav-open-tabs') || 'null') || ['notes']; }
   catch (e) { openNavTabs = ['notes']; }
-  openNavTabs = [...new Set(openNavTabs.map(t => CRM_MERGED_TABS.includes(t) ? 'crm' : t))].filter(t => NAV_TAB_LABELS[t]);
+  openNavTabs = [...new Set(openNavTabs.map(t => TAB_MIGRATIONS[t] || t))].filter(t => NAV_TAB_LABELS[t]);
   if (!openNavTabs.length) openNavTabs = ['notes'];
 }
 function saveOpenNavTabs() { localStorage.setItem('nav-open-tabs', JSON.stringify(openNavTabs)); }
@@ -396,7 +397,7 @@ function initNavTabsBar() {
   loadOpenNavTabs();
   let active = null;
   try { active = localStorage.getItem('nav-active-tab'); } catch (e) {}
-  if (active && CRM_MERGED_TABS.includes(active)) active = 'crm';
+  if (active && TAB_MIGRATIONS[active]) active = TAB_MIGRATIONS[active];
   if (!active || !openNavTabs.includes(active)) active = openNavTabs[0];
   switchTab(active);
 }
@@ -442,6 +443,7 @@ function switchTab(tab) {
   document.getElementById('calendar-view')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
   document.getElementById('crm-view')?.classList.toggle('hidden', tab !== 'crm');
+  document.getElementById('dialer-view')?.classList.toggle('hidden', tab !== 'dialer');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
   document.getElementById('cold-email-view')?.classList.toggle('hidden', tab !== 'cold-email');
@@ -450,6 +452,7 @@ function switchTab(tab) {
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-panel')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('crm-panel')?.classList.toggle('hidden', tab !== 'crm');
+  document.getElementById('dialer-panel')?.classList.toggle('hidden', tab !== 'dialer');
   document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
   document.getElementById('cold-email-panel')?.classList.toggle('hidden', tab !== 'cold-email');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
@@ -457,6 +460,7 @@ function switchTab(tab) {
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
   if (tab === 'crm') loadCrm();
+  if (tab === 'dialer') loadDialerTab();
   if (tab === 'daily-tasks') loadDailyTasks();
   if (tab === 'cold-email') loadColdEmail();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
@@ -1938,12 +1942,12 @@ function fmtUsd(n) { return '$' + (n || 0).toFixed(2); }
 // Refetched every time the tab opens (unlike the Device, which is a one-time
 // singleton) — balance moves every call, so a stale glance is worse than none.
 async function loadUsagePanel() {
-  const el = document.getElementById('calls-usage-info');
-  if (!el) return;
+  const els = [document.getElementById('calls-usage-info'), document.getElementById('dialer-usage-info')].filter(Boolean);
+  if (!els.length) return;
   try {
     const u = await apiFetch('GET', '/twilio/usage');
-    el.innerHTML = `Balance <b>${escHtml(fmtUsd(u.balance))}</b> · today ${escHtml(fmtUsd(u.spentToday))} · this month ${escHtml(fmtUsd(u.spentThisMonth))}`;
-  } catch(e) { el.innerHTML = ''; } // not configured / offline — just stay quiet, dialer status already covers real errors
+    els.forEach(el => el.innerHTML = `Balance <b>${escHtml(fmtUsd(u.balance))}</b> · today ${escHtml(fmtUsd(u.spentToday))} · this month ${escHtml(fmtUsd(u.spentThisMonth))}`);
+  } catch(e) { els.forEach(el => el.innerHTML = ''); } // not configured / offline — just stay quiet, dialer status already covers real errors
 }
 
 // rfy-crm: dialing always happens from inside a lead's Calls sub-tab, so the
@@ -1960,6 +1964,7 @@ let crmCallNumber = '';     // number of the live call, for the float bar
 // every call through conferences.
 let twIncoming = null;         // pending incoming Call (ringing, not accepted)
 let crmCallInbound = false;    // live call is inbound → no auto-advance after
+let crmCallFromQueue = false;  // dialed from a lead's Calls sub-tab → auto-advance after disposition
 let switchingToInbound = false; // suppress the disposition modal for the call we hang up on switch
 
 function clientLast10(s) { return String(s || '').replace(/\D/g, '').slice(-10); }
@@ -2007,6 +2012,7 @@ async function acceptIncoming() {
   const lead = leadForNumber(from);
   crmCallLeadId = lead ? lead.id : null;
   crmCallInbound = true;
+  crmCallFromQueue = false;
   crmCallNumber = from;
   call.on('disconnect', endCallUi);
   call.on('cancel', endCallUi);
@@ -2101,6 +2107,8 @@ function endCallUi(callRef) {
   crmCallLeadId = null;
   const inbound = crmCallInbound;
   crmCallInbound = false;
+  const fromQueue = crmCallFromQueue;
+  crmCallFromQueue = false;
   const suppressed = switchingToInbound;
   switchingToInbound = false;
   const wasLive = !!twCall;
@@ -2119,7 +2127,9 @@ function endCallUi(callRef) {
   // connect() rejected). Inbound callbacks get the picker too but never
   // auto-advance (you weren't queue-dialing them). A call abandoned to take
   // an incoming one (suppressed) gets no picker at all.
-  if (wasLive && endedLeadId && !suppressed) openDispositionModal(endedLeadId, { advance: !inbound });
+  // Auto-advance only for queue dialing (from a lead's Calls sub-tab) —
+  // inbound callbacks and standalone-Dialer calls just close after picking.
+  if (wasLive && endedLeadId && !suppressed) openDispositionModal(endedLeadId, { advance: !inbound && fromQueue });
 }
 
 async function startCall() {
@@ -2137,7 +2147,12 @@ async function startCall() {
   }
   // Capture the lead context at dial time — the disposition/auto-advance flow
   // uses this, not whatever lead happens to be open when the call ends.
-  crmCallLeadId = currentLeadId || null;
+  // From a lead's Calls sub-tab: that lead, and it counts as queue dialing
+  // (auto-advance after disposition). From the standalone Dialer: link by
+  // phone match if the number belongs to a lead, and never auto-advance.
+  const inCrm = dialerInCrm();
+  crmCallLeadId = inCrm ? (currentLeadId || null) : (leadForNumber(num)?.id || null);
+  crmCallFromQueue = inCrm && !!currentLeadId;
   crmCallInbound = false;
   crmCallNumber = num;
   setDialerStatus('Connecting…');
@@ -2199,12 +2214,13 @@ function renderCallLog() {
   // an innerHTML rebuild would silently kill a recording mid-playback. Hold
   // the re-render while a player is open; it catches up once it's closed.
   if (log.querySelector('audio')) return;
-  // rfy-crm: the log lives inside a lead's Calls sub-tab — show only that
-  // lead's calls. Pre-CRM calls have no lead_id (deliberately never
-  // backfilled, §1.8) so they simply don't appear under any lead.
-  const leadCalls = currentLeadId ? calls.filter(c => c.lead_id === currentLeadId) : calls;
+  // Context-sensitive: inside a lead's Calls sub-tab show only that lead's
+  // calls; in the standalone Dialer tab show everything (with a lead chip on
+  // linked rows). Pre-CRM calls have no lead_id (never backfilled, §1.8).
+  const inCrm = dialerInCrm();
+  const leadCalls = inCrm && currentLeadId ? calls.filter(c => c.lead_id === currentLeadId) : calls;
   if (!leadCalls.length) {
-    log.innerHTML = '<div class="agenda-empty">No calls for this lead yet — dial the number above</div>';
+    log.innerHTML = `<div class="agenda-empty">${inCrm ? 'No calls for this lead yet — dial the number above' : 'No calls yet — dial a number above'}</div>`;
     return;
   }
   log.innerHTML = '<div class="agenda-section-label">Call log</div>' + leadCalls.map(c => {
@@ -2215,9 +2231,10 @@ function renderCallLog() {
       : inbound && c.status === 'ringing' ? { label: 'Ringing', cls: 'call-status-dim' }
       : CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
     const num = inbound ? c.from_number : c.to_number;
+    const chipLead = !inCrm && c.lead_id ? leads.find(l => l.id === c.lead_id) : null;
     return `<div class="call-item" data-id="${c.id}">
       <div class="call-item-main">
-        <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
+        <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}${chipLead ? ` <span class="note-tag">${escHtml(chipLead.business_name)}</span>` : ''}</div>
         <div class="call-item-meta">
           <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(c.started_at))}</span>
           <span class="call-status ${st.cls}">${escHtml(st.label)}</span>
@@ -4429,6 +4446,14 @@ document.getElementById('dial-number').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); startCall(); }
 });
 document.getElementById('dial-number').addEventListener('change', e => savePhoneBackToLead(e.target.value));
+// Standalone Dialer tab (v162)
+document.getElementById('new-call-btn').addEventListener('click', () => {
+  switchTab('dialer');
+  if (isMobile()) closeSidebar();
+  setTimeout(() => document.getElementById('dial-number')?.focus(), 50);
+});
+document.getElementById('prospect-import-btn').addEventListener('click', () =>
+  toast('Prospect lists aren\'t built yet — ask Claude when you have a list ready'));
 // CRM: nav +, inner tab strip, floating call bar, disposition modal
 document.getElementById('new-lead-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('crm'); newLeadForm(); });
 document.querySelectorAll('.crm-subtab').forEach(b => b.addEventListener('click', () => switchCrmSub(b.dataset.sub)));
@@ -4901,10 +4926,34 @@ async function newFollowupForLead() {
   } catch (e) { toast('Could not create sequence'); }
 }
 
+// The dial pad is ONE DOM subtree (#dialer-area) that moves between the
+// standalone Dialer tab and a lead's Calls sub-tab — where it currently
+// lives IS the dialing context (lead-scoped vs free dial).
+function dialerInCrm() {
+  return !!document.getElementById('crm-calls-sub')?.contains(document.getElementById('dialer-area'));
+}
+function moveDialerTo(containerId) {
+  const area = document.getElementById('dialer-area');
+  const home = document.getElementById(containerId);
+  if (area && home && area.parentElement !== home) home.appendChild(area);
+}
+
 function renderCrmCallsSub() {
+  moveDialerTo('crm-calls-sub');
   // Phone box pre-filled from the lead (editable — edits save back, §1.6).
   const inp = document.getElementById('dial-number');
   if (inp && !twCall && !twDialing) inp.value = currentLead?.phone_number || '';
+  renderCallLog();
+  initDialer();
+  loadUsagePanel();
+}
+
+// Standalone Dialer tab (v162): free dialing like the pre-CRM Calls tab.
+// A typed number that matches a lead's phone still links the call (and gets
+// the disposition picker) — an unknown number just logs unlinked.
+async function loadDialerTab() {
+  moveDialerTo('dialer-home');
+  if (!leads.length) { try { leads = await apiCall('GET', '/leads'); } catch (e) {} } // for name chips + auto-link
   renderCallLog();
   initDialer();
   loadUsagePanel();

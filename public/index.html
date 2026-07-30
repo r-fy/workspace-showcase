@@ -96,6 +96,13 @@
           <button class="nav-menu-item" data-tab="crm">CRM</button>
           <button class="icon-btn nav-add-btn" id="new-lead-btn" title="New lead">+</button>
         </div>
+        <div class="nav-row" draggable="true" data-tab="dialer">
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="dialer">Dialer</button>
+          <button class="icon-btn nav-add-btn" id="new-call-btn" title="New call">+</button>
+        </div>
         <div class="nav-row" draggable="true" data-tab="daily-tasks">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
@@ -148,6 +155,21 @@
       <div id="crm-panel" class="panel-section hidden">
         <div class="notes-list" id="leads-list"></div>
         <div class="calls-usage-info" id="calls-usage-info"></div>
+      </div>
+      <div id="dialer-panel" class="panel-section hidden">
+        <!-- Prospect lists placeholder (future project — see RFY-CRM-PLAN.md
+             §1.2): imported dial lists will live here, cheaper than full
+             leads, promote-to-lead on real signal. -->
+        <div class="calls-panel-info" style="padding:12px;">
+          <b>Prospect lists</b><br><br>
+          Not built yet. The plan: import a list (CSV or scrape), it shows up
+          here, you dial straight down it — rows stay lightweight until a
+          real conversation earns a promotion to a full CRM lead.
+        </div>
+        <div class="import-btn-wrap">
+          <button id="prospect-import-btn">⬆ Import prospect list</button>
+        </div>
+        <div class="calls-usage-info" id="dialer-usage-info"></div>
       </div>
       <div id="daily-tasks-panel" class="panel-section hidden">
         <div id="daily-task-cat-bar" class="tags-bar" style="display:none"></div>
@@ -229,7 +251,10 @@
         <div id="followup-editor-area"></div>
       </div>
       <div id="crm-calls-sub" class="crm-sub hidden">
-        <div class="dialer-area">
+        <!-- #dialer-area is a SINGLE instance that physically moves between
+             here and the standalone Dialer tab (#dialer-home) — same
+             move-the-real-nodes pattern as the nav popup. -->
+        <div class="dialer-area" id="dialer-area">
           <div class="dialer-card">
             <div id="dialer-status" class="dialer-status">Loading…</div>
             <div class="calls-panel-info" id="calls-panel-info"></div>
@@ -257,6 +282,12 @@
           <div class="call-log" id="call-log"></div>
         </div>
       </div>
+    </div>
+
+    <!-- Standalone Dialer view (v162): the dial pad, back as its own menu.
+         #dialer-area moves in here when this tab is active. -->
+    <div class="view hidden" id="dialer-view" style="flex-direction:column;overflow-y:auto;">
+      <div id="dialer-home"></div>
     </div>
 
     <!-- TRW Daily Tasks view -->
@@ -648,6 +679,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=158"></script>
+<script src="/app.js?v=159"></script>
 </body>
 </html>
