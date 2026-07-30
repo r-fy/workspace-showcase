@@ -42,6 +42,21 @@ header {
   background: #111; border-bottom: 1px solid #222; padding: 0 16px; flex-shrink: 0;
   position: relative;
 }
+.nav-tabs-bar { flex: 1; display: flex; align-items: center; gap: 4px; overflow-x: auto; height: 100%; scrollbar-width: none; }
+.nav-tabs-bar::-webkit-scrollbar { display: none; }
+.nav-tab {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; max-width: 160px;
+  padding: 5px 8px 5px 12px; border-radius: 6px 6px 0 0; cursor: pointer;
+  font-size: 12.5px; color: #888; background: transparent; transition: background 0.12s, color 0.12s;
+}
+.nav-tab:hover { background: #181818; color: #bbb; }
+.nav-tab.active { background: #1c1c1c; color: #e0e0e0; }
+.nav-tab.dragging { opacity: 0.4; }
+.nav-tab.drop-before { box-shadow: inset 2px 0 0 #5fc83b; }
+.nav-tab.drop-after { box-shadow: inset -2px 0 0 #5fc83b; }
+.nav-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-tab-close { flex-shrink: 0; font-size: 11px; color: #555; border-radius: 3px; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
+.nav-tab-close:hover { background: #2a2a2a; color: #e55; }
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .online-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; transition: background 0.3s; }
 .online-dot.offline { background: #f87171; }
@@ -500,6 +515,7 @@ header {
   .sidebar-toggle { margin-right: 4px; }
   .search-toggle-btn { display: flex; }
   .search-bar-wrap { display: none; }
+  .nav-tabs-bar { display: none; }
   .search-bar-wrap.mobile-open {
     display: flex; position: absolute; inset: 0; z-index: 50;
     background: #111; padding: 0 12px; gap: 8px;
