@@ -259,6 +259,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_daily_tasks_user ON daily_tasks(user_id, task_date);
 `);
+try { db.exec(`ALTER TABLE daily_tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 
 // Cold Email tab: daily rollup pulled from Instantly, one row per campaign per
 // day — relational (not a blob like audits/daily_tasks) because this data is
@@ -608,26 +609,26 @@ function dailyTaskFields(body) {
       .filter(q => q.question)
     : [];
   if (!questions.length) return { error: 'at least one question required' };
-  return { category, task_date, source_url: String(body.source_url || '').trim(), questions };
+  return { category, task_date, source_url: String(body.source_url || '').trim(), context: String(body.context || '').trim(), questions };
 }
 
 app.post('/api/daily-tasks', auth, (req, res) => {
   const f = dailyTaskFields(req.body);
   if (f.error) return res.status(400).json({ error: f.error });
   const id = uid(), t = now();
-  db.prepare('INSERT INTO daily_tasks (id, user_id, category, task_date, source_url, questions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, req.userId, f.category, f.task_date, f.source_url, JSON.stringify(f.questions), t, t);
+  db.prepare('INSERT INTO daily_tasks (id, user_id, category, task_date, source_url, context, questions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.userId, f.category, f.task_date, f.source_url, f.context, JSON.stringify(f.questions), t, t);
   res.json({ ...db.prepare('SELECT * FROM daily_tasks WHERE id=?').get(id), questions: f.questions });
 });
 
 app.put('/api/daily-tasks/:id', auth, (req, res) => {
   const r = db.prepare('SELECT * FROM daily_tasks WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  const f = dailyTaskFields({ category: r.category, task_date: r.task_date, source_url: r.source_url, ...req.body });
+  const f = dailyTaskFields({ category: r.category, task_date: r.task_date, source_url: r.source_url, context: r.context, ...req.body });
   if (f.error) return res.status(400).json({ error: f.error });
   const t = now();
-  db.prepare('UPDATE daily_tasks SET category=?, task_date=?, source_url=?, questions=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(f.category, f.task_date, f.source_url, JSON.stringify(f.questions), t, req.params.id, req.userId);
+  db.prepare('UPDATE daily_tasks SET category=?, task_date=?, source_url=?, context=?, questions=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(f.category, f.task_date, f.source_url, f.context, JSON.stringify(f.questions), t, req.params.id, req.userId);
   res.json({ ...db.prepare('SELECT * FROM daily_tasks WHERE id=?').get(req.params.id), questions: f.questions });
 });
 

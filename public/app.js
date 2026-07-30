@@ -4635,25 +4635,42 @@ async function refreshAuditPreview() {
 let dailyTasks = [];
 let currentDailyTaskId = null;
 let currentDailyTaskCategory = null; // sidebar filter pill
-let dailyTaskDraft = null; // { category, task_date, source_url, questions: [{question, answer}] }
+let dailyTaskDraft = null; // { category, task_date, source_url, context, questions: [{question, answer}] }
 const DAILY_TASK_CAT_LABELS = { business_masters: 'Business Master', daily_marketing: 'Daily Marketing', daily_seo_task: 'Daily SEO Task' };
 
-// TRW's raw prompt block and its own already-answered .md files use two
-// DIFFERENT shapes for the same content: an answered file has each question
-// as its own **bold** line; a fresh unanswered paste instead has ONE bold
-// instruction line (e.g. "**Answer the questions:**") followed by a bullet
-// list of the real questions. Parse bold lines first, then explode any pair
-// whose entire "answer" turned out to be pure bullet lines into one question
-// per bullet — this only fires for the fresh-paste shape (a real answered
-// pair's answer is prose, not bullets-only) except the rare case where a
-// genuine question's answer itself IS a bullet list (e.g. "list 10 niches");
-// that's why the form always keeps a per-question ✕ to undo a bad split.
+// TRW pastes come in three shapes:
+// 1. Already-answered .md file: each question is its own **bold** line
+//    followed by prose answer — parse bold lines directly, one pair each.
+// 2. Fresh Business-Master-style paste: scenario prose, then ONE bold
+//    instruction line ("**Answer the questions:**") followed by a bullet
+//    list of the real questions. The scenario + that instruction line are
+//    context, not a question — only the exploded bullets are real questions.
+// 3. Fresh Daily-SEO-Task-style paste: no bold at all, just a literal
+//    "QUESTION:" line with the real question directly beneath it. Everything
+//    before "QUESTION:" is context.
+// Shape 1 vs 2 is disambiguated after parsing: if any pair's answer turns out
+// to be pure bullet lines, that pair (and anything before it) is context and
+// only the exploded bullets become questions — a real answered pair's answer
+// is prose, not bullets-only (rare exception: a genuine question whose
+// answer itself IS a list, e.g. "list 10 niches" — that's why the form keeps
+// a per-question ✕ to undo a bad split).
 function parseQABlock(raw) {
   const lines = String(raw || '').replace(/\r\n/g, '\n').split('\n');
   let i = 0;
   while (i < lines.length && lines[i].trim() === '') i++;
   let sourceUrl = '';
   if (i < lines.length && /^https?:\/\//.test(lines[i].trim())) { sourceUrl = lines[i].trim(); i++; }
+
+  // Shape 3: literal "QUESTION:" marker, question is the next non-blank line.
+  const qMarkerIdx = lines.findIndex((l, idx) => idx >= i && /^\s*QUESTION:?\s*$/i.test(l));
+  if (qMarkerIdx !== -1) {
+    const context = lines.slice(i, qMarkerIdx).join('\n').replace(/^\n+|\n+$/g, '');
+    let qi = qMarkerIdx + 1;
+    while (qi < lines.length && lines[qi].trim() === '') qi++;
+    const question = qi < lines.length ? lines[qi].trim() : '';
+    return { sourceUrl, context, pairs: question ? [{ question, answer: '' }] : [] };
+  }
+
   const pairs = [];
   let current = null;
   const qRe = /^\s*\*\*(.+?)\*\*:?\s*(.*)$/;
@@ -4676,17 +4693,23 @@ function parseQABlock(raw) {
   pairs.forEach(p => { p.answer = p.answer.replace(/^\n+|\n+$/g, ''); });
 
   const bulletRe = /^\s*[-*]\s+(.+)$/;
-  const exploded = [];
+  const bulletQuestions = []; // exploded questions from any all-bullet pair
+  const headingPairs = []; // pairs whose answer was prose, not bullets
   for (const p of pairs) {
     const answerLines = p.answer.split('\n').filter(l => l.trim() !== '');
     const allBullets = answerLines.length > 0 && answerLines.every(l => bulletRe.test(l));
-    if (allBullets) {
-      answerLines.forEach(l => exploded.push({ question: l.match(bulletRe)[1].trim(), answer: '' }));
-    } else {
-      exploded.push(p);
-    }
+    if (allBullets) answerLines.forEach(l => bulletQuestions.push({ question: l.match(bulletRe)[1].trim(), answer: '' }));
+    else headingPairs.push(p);
   }
-  return { sourceUrl, pairs: exploded };
+  // A bullet-exploded pair proves this was a fresh unanswered paste (shape 2)
+  // — the heading pairs before it are scenario context, not real questions.
+  // With no bullet explosion, every pair is a real answered question (shape
+  // 1) and stays as-is; none of it becomes context.
+  if (bulletQuestions.length) {
+    const context = headingPairs.map(p => `**${p.question}**${p.answer ? '\n\n' + p.answer : ''}`).join('\n\n');
+    return { sourceUrl, context, pairs: bulletQuestions };
+  }
+  return { sourceUrl, context: '', pairs: headingPairs };
 }
 
 function formatQABlock(sourceUrl, pairs) {
@@ -4738,7 +4761,7 @@ function openDailyTask(id) {
   const t = dailyTasks.find(x => x.id === id);
   if (!t) return;
   currentDailyTaskId = id;
-  dailyTaskDraft = { category: t.category, task_date: t.task_date, source_url: t.source_url, questions: t.questions.map(q => ({ ...q })) };
+  dailyTaskDraft = { category: t.category, task_date: t.task_date, source_url: t.source_url, context: t.context || '', questions: t.questions.map(q => ({ ...q })) };
   renderDailyTasksList();
   renderDailyTaskForm();
   if (isMobile()) closeSidebar();
@@ -4767,19 +4790,20 @@ function newDailyTaskPaste() {
         <label>Link</label>
         <input type="url" id="dt-paste-link" placeholder="Message link (https://app.jointherealworld.com/chat/...)">
       </div>
-      <textarea id="dt-paste-raw" class="daily-task-paste-box" placeholder="Paste the questions here (**bolded questions**)…"></textarea>
+      <textarea id="dt-paste-raw" class="daily-task-paste-box" placeholder="Paste the prompt here — **bolded questions**, or a plain QUESTION: line…"></textarea>
       <button class="save-btn" id="dt-parse-btn">Parse into a form</button>
     </div>`;
   document.getElementById('dt-paste-date').valueAsDate = new Date();
   document.getElementById('dt-parse-btn').addEventListener('click', () => {
     const raw = document.getElementById('dt-paste-raw').value;
-    const { sourceUrl, pairs } = parseQABlock(raw);
-    if (!pairs.length) { toast('Could not find any **bolded** questions in that text'); return; }
+    const { sourceUrl, context, pairs } = parseQABlock(raw);
+    if (!pairs.length) { toast('Could not find any questions in that text'); return; }
     const manualLink = document.getElementById('dt-paste-link').value.trim();
     dailyTaskDraft = {
       category: document.getElementById('dt-paste-category').value,
       task_date: document.getElementById('dt-paste-date').value,
       source_url: manualLink || sourceUrl,
+      context,
       questions: pairs,
     };
     renderDailyTaskForm();
@@ -4802,6 +4826,11 @@ function renderDailyTaskForm() {
         <input type="url" id="dt-source-url" class="daily-task-source-input" placeholder="Message link (https://app.jointherealworld.com/chat/...)" value="${escHtml(d.source_url || '')}">
         ${d.source_url ? `<a href="${escHtml(d.source_url)}" target="_blank" rel="noopener" class="daily-task-source-link">Open ↗</a>` : ''}
       </div>
+      ${d.context ? `
+      <div class="daily-task-context">
+        <div class="daily-task-context-label">Context</div>
+        <textarea id="dt-context">${escHtml(d.context)}</textarea>
+      </div>` : ''}
       ${d.questions.map((q, i) => `
         <div class="daily-task-qa">
           <div class="daily-task-question-row">
@@ -4827,6 +4856,7 @@ function renderDailyTaskForm() {
   document.getElementById('dt-category').addEventListener('change', e => { d.category = e.target.value; });
   document.getElementById('dt-date').addEventListener('change', e => { d.task_date = e.target.value; });
   document.getElementById('dt-source-url').addEventListener('change', e => { d.source_url = e.target.value.trim(); renderDailyTaskForm(); });
+  document.getElementById('dt-context')?.addEventListener('input', e => { d.context = e.target.value; });
   document.getElementById('dt-copy-btn').addEventListener('click', () => {
     navigator.clipboard.writeText(formatQABlock(d.source_url, d.questions)).then(() => toast('Copied'));
   });
@@ -4837,7 +4867,7 @@ function renderDailyTaskForm() {
 async function saveDailyTask() {
   const d = dailyTaskDraft;
   if (!d.task_date) { toast('Date required'); return; }
-  const body = { category: d.category, task_date: d.task_date, source_url: d.source_url, questions: d.questions };
+  const body = { category: d.category, task_date: d.task_date, source_url: d.source_url, context: d.context || '', questions: d.questions };
   try {
     if (currentDailyTaskId) {
       const updated = await apiCall('PUT', '/daily-tasks/' + currentDailyTaskId, body);
