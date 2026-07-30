@@ -396,16 +396,29 @@ function initNavTabsBar() {
   switchTab(active);
 }
 
-// Ctrl+Tab / Ctrl+Shift+Tab cycles the open nav tabs, mirroring a real
-// browser's tab-switch shortcut. Only takes effect if the browser hands the
-// keystroke to the page at all — Chrome/Brave reserve it for their own tab
-// strip in a normal browser tab, but a standalone installed PWA window has
-// no tab strip of its own to compete with, so the shortcut is free there.
-document.addEventListener('keydown', e => {
-  if (!e.ctrlKey || e.key !== 'Tab' || !openNavTabs.length) return;
-  e.preventDefault();
+// Ctrl+Tab/Ctrl+PageDown and Ctrl+Shift+Tab/Ctrl+PageUp cycle the open nav
+// tabs, mirroring a real browser's tab-switch shortcuts. Ctrl+Shift+PageUp/
+// PageDown instead MOVES the active tab left/right (also a real browser
+// convention). Only takes effect if the browser hands the keystroke to the
+// page at all — Chrome/Brave reserve these for their own tab strip in a
+// normal browser tab, but a standalone installed PWA window has no tab strip
+// of its own to compete with, so the shortcuts are free there.
+function moveActiveNavTab(step) {
   const idx = openNavTabs.indexOf(currentTab);
-  const step = e.shiftKey ? -1 : 1;
+  if (idx === -1) return;
+  const swapWith = (idx + step + openNavTabs.length) % openNavTabs.length;
+  [openNavTabs[idx], openNavTabs[swapWith]] = [openNavTabs[swapWith], openNavTabs[idx]];
+  saveOpenNavTabs(); renderNavTabsBar();
+}
+document.addEventListener('keydown', e => {
+  if (!e.ctrlKey || !openNavTabs.length) return;
+  const isNext = e.key === 'PageDown' || (e.key === 'Tab' && !e.shiftKey);
+  const isPrev = e.key === 'PageUp' || (e.key === 'Tab' && e.shiftKey);
+  if (!isNext && !isPrev) return;
+  e.preventDefault();
+  const step = isNext ? 1 : -1;
+  if (e.shiftKey && e.key !== 'Tab') { moveActiveNavTab(step); return; }
+  const idx = openNavTabs.indexOf(currentTab);
   const next = openNavTabs[(idx + step + openNavTabs.length) % openNavTabs.length];
   switchTab(next);
 });
