@@ -267,6 +267,7 @@ async function tryLogin(pin) {
     document.getElementById('app').classList.remove('hidden');
     if (isMobile()) document.getElementById('left-panel').classList.add('collapsed');
     await fullSync();
+    initNavTabsBar();
     outbox = await idbGetAll('outbox');
     if (outbox.length) flushOutbox();
     startPolling();
@@ -316,8 +317,91 @@ function closeSidebar() {
 function isMobile() { return window.innerWidth <= 640; }
 
 // ── Tabs ───────────────────────────────────────────────────────
+// Desktop-only browser-style tab strip next to the header search bar (v155).
+// Mirrors an actual browser tab bar: starts with just the last-open tab(s)
+// restored from localStorage, a tab opens the first time you switch to that
+// section (not all 10 sections up front), stays open until you close it (✕),
+// and can be dragged to reorder. The left-panel nav dropdown (v141) is the
+// only way to open a NEW tab — this strip just reflects what's already open.
+const NAV_TAB_LABELS = {
+  notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
+  calls: 'Calls', audits: 'Audits', 'daily-tasks': 'TRW Daily Tasks',
+  followups: 'Follow-ups', tourist: 'Tourist', 'cold-email': 'Cold Email',
+};
+let openNavTabs = [];
+let navTabDragEl = null;
+
+function loadOpenNavTabs() {
+  try { openNavTabs = JSON.parse(localStorage.getItem('nav-open-tabs') || 'null') || ['notes']; }
+  catch (e) { openNavTabs = ['notes']; }
+  openNavTabs = openNavTabs.filter(t => NAV_TAB_LABELS[t]);
+  if (!openNavTabs.length) openNavTabs = ['notes'];
+}
+function saveOpenNavTabs() { localStorage.setItem('nav-open-tabs', JSON.stringify(openNavTabs)); }
+
+function renderNavTabsBar() {
+  const bar = document.getElementById('nav-tabs-bar');
+  if (!bar) return;
+  bar.innerHTML = openNavTabs.map(tab => `
+    <div class="nav-tab${tab === currentTab ? ' active' : ''}" draggable="true" data-tab="${tab}">
+      <span class="nav-tab-label">${escHtml(NAV_TAB_LABELS[tab] || tab)}</span>
+      <button class="nav-tab-close" data-tab="${tab}" title="Close tab">✕</button>
+    </div>`).join('');
+  bar.querySelectorAll('.nav-tab').forEach(el => {
+    el.addEventListener('click', e => { if (!e.target.closest('.nav-tab-close')) switchTab(el.dataset.tab); });
+    el.addEventListener('dragstart', e => { navTabDragEl = el; e.dataTransfer.setData('nav-tab-drag', el.dataset.tab); el.classList.add('dragging'); });
+    el.addEventListener('dragend', () => { navTabDragEl = null; bar.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('dragging', 'drop-before', 'drop-after')); });
+    el.addEventListener('dragover', e => {
+      if (!Array.from(e.dataTransfer.types).includes('nav-tab-drag') || el === navTabDragEl) return;
+      e.preventDefault();
+      const before = e.clientX < el.getBoundingClientRect().left + el.offsetWidth / 2;
+      el.classList.toggle('drop-before', before); el.classList.toggle('drop-after', !before);
+    });
+    el.addEventListener('dragleave', () => el.classList.remove('drop-before', 'drop-after'));
+    el.addEventListener('drop', e => {
+      e.preventDefault();
+      if (!navTabDragEl || el === navTabDragEl) return;
+      const before = el.classList.contains('drop-before');
+      el.classList.remove('drop-before', 'drop-after');
+      openNavTabs = openNavTabs.filter(t => t !== navTabDragEl.dataset.tab);
+      const idx = openNavTabs.indexOf(el.dataset.tab);
+      openNavTabs.splice(before ? idx : idx + 1, 0, navTabDragEl.dataset.tab);
+      saveOpenNavTabs(); renderNavTabsBar();
+    });
+  });
+  bar.querySelectorAll('.nav-tab-close').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); closeNavTab(btn.dataset.tab); });
+  });
+}
+
+function closeNavTab(tab) {
+  const idx = openNavTabs.indexOf(tab);
+  if (idx === -1) return;
+  openNavTabs.splice(idx, 1);
+  if (!openNavTabs.length) openNavTabs = ['notes'];
+  saveOpenNavTabs();
+  if (tab === currentTab) {
+    const fallback = openNavTabs[idx] || openNavTabs[idx - 1] || openNavTabs[0];
+    switchTab(fallback);
+  } else {
+    renderNavTabsBar();
+  }
+}
+
+function initNavTabsBar() {
+  loadOpenNavTabs();
+  let active = null;
+  try { active = localStorage.getItem('nav-active-tab'); } catch (e) {}
+  if (!active || !openNavTabs.includes(active)) active = openNavTabs[0];
+  switchTab(active);
+}
+
 function switchTab(tab) {
   currentTab = tab;
+  if (!openNavTabs.includes(tab)) openNavTabs.push(tab);
+  saveOpenNavTabs();
+  try { localStorage.setItem('nav-active-tab', tab); } catch (e) {}
+  renderNavTabsBar();
   closeNavDropdown();
   document.querySelectorAll('.nav-menu-item').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.getElementById('notes-view').classList.toggle('hidden', tab !== 'notes');
@@ -5705,6 +5789,7 @@ async function deleteCurrentFollowup() {
       document.getElementById('app').classList.remove('hidden');
       if (isMobile()) document.getElementById('left-panel').classList.add('collapsed');
       await fullSync();
+      initNavTabsBar();
       outbox = await idbGetAll('outbox');
       if(outbox.length) flushOutbox();
       startPolling();
