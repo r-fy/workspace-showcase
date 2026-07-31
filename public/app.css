@@ -810,12 +810,13 @@ header {
 .expense-modal-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .expense-field-row { display: flex; align-items: center; gap: 12px; }
 .expense-field-row label { font-size: 12px; color: #555; width: 70px; flex-shrink: 0; text-align: right; }
-.expense-field-row input {
+.expense-field-row input, .expense-field-row textarea {
   flex: 1; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
-  padding: 6px 10px; font-size: 13px; color: #e0e0e0;
+  padding: 6px 10px; font-size: 13px; color: #e0e0e0; font-family: inherit;
 }
-.expense-field-row input:focus { border-color: #3a3a3a; }
-.expense-field-row input::placeholder { color: #444; }
+.expense-field-row textarea { line-height: 1.4; }
+.expense-field-row input:focus, .expense-field-row textarea:focus { border-color: #3a3a3a; }
+.expense-field-row input::placeholder, .expense-field-row textarea::placeholder { color: #444; }
 .expense-modal-footer {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-top: 1px solid #1e1e1e;
