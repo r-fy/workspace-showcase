@@ -261,6 +261,22 @@ db.exec(`
 `);
 try { db.exec(`ALTER TABLE daily_tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 
+// To Do tab: Eisenhower matrix, one blank grid per calendar day (filled out
+// the night before for the next day). data is a JSON blob ({do, schedule,
+// delegate, delete} strings) — same blob-column pattern as audits.data.
+// Unique per user+day so a save is always a plain upsert, no client-side id.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS eisenhower_days (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    entry_date TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_eisenhower_user_date ON eisenhower_days(user_id, entry_date);
+`);
+
 // Cold Email tab: daily rollup pulled from Instantly, one row per campaign per
 // day — relational (not a blob like audits/daily_tasks) because this data is
 // machine-pulled and time-series, the chart needs to query across dates with
@@ -819,6 +835,30 @@ app.put('/api/daily-tasks/:id', auth, (req, res) => {
 app.delete('/api/daily-tasks/:id', auth, (req, res) => {
   db.prepare('UPDATE daily_tasks SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
   res.json({ ok: true });
+});
+
+// ── To Do (Eisenhower matrix) ──────────────────────────────────
+app.get('/api/eisenhower/:date', auth, (req, res) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  const r = db.prepare('SELECT data FROM eisenhower_days WHERE user_id=? AND entry_date=?').get(req.userId, req.params.date);
+  res.json(r ? JSON.parse(r.data) : {});
+});
+
+app.put('/api/eisenhower/:date', auth, (req, res) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  const data = {
+    do: String(req.body.do || ''),
+    schedule: String(req.body.schedule || ''),
+    delegate: String(req.body.delegate || ''),
+    delete: String(req.body.delete || ''),
+  };
+  const t = now();
+  db.prepare(`
+    INSERT INTO eisenhower_days (id, user_id, entry_date, data, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, entry_date) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at
+  `).run(uid(), req.userId, req.params.date, JSON.stringify(data), t, t);
+  res.json(data);
 });
 
 // ── Cold Email (Instantly reporting) ──────────────────────────

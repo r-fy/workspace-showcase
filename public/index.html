@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=138">
+<link rel="stylesheet" href="/app.css?v=139">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -61,6 +61,12 @@
     <!-- Unified left panel -->
     <div id="left-panel" class="left-panel">
       <div class="left-panel-nav" id="left-panel-nav">
+        <div class="nav-row" draggable="true" data-tab="todo">
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="todo">To Do</button>
+        </div>
         <div class="nav-row" draggable="true" data-tab="notes">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
@@ -186,6 +192,82 @@
 
     <!-- Sidebar overlay (mobile) -->
     <div id="sidebar-overlay"></div>
+
+    <!-- To Do view (Eisenhower matrix) -->
+    <div class="view hidden todo-view" id="todo-view" style="flex-direction:column;overflow-y:auto;">
+      <div class="todo-wrap">
+        <div class="todo-header">
+          <div>
+            <span class="todo-eyebrow">To Do</span>
+            <h2 class="todo-title">Eisenhower Matrix</h2>
+          </div>
+          <div class="todo-header-controls">
+            <div class="todo-date-block">
+              <span class="todo-dow" id="todo-dow"></span>
+              <input type="date" id="todo-date" aria-label="Day to log">
+            </div>
+            <button class="expense-chart-toggle-btn" id="todo-today-btn" type="button">Today</button>
+            <button class="expense-chart-toggle-btn" id="todo-clear-btn" type="button">Clear day</button>
+            <span class="todo-saved-flag" id="todo-saved-flag">Saved</span>
+          </div>
+        </div>
+
+        <div class="todo-matrix">
+          <div class="todo-axis-label todo-corner"></div>
+          <div class="todo-axis-label todo-axis-top" style="grid-column:2;">Urgent</div>
+          <div class="todo-axis-label todo-axis-top" style="grid-column:3;">Not urgent</div>
+
+          <div class="todo-axis-label todo-axis-side" style="grid-column:1; grid-row:2;">Important</div>
+          <section class="todo-quad todo-quad-do" style="grid-column:2; grid-row:2;">
+            <div class="todo-quad-head">
+              <span class="todo-quad-verb">Do</span>
+              <span class="todo-quad-hint">Urgent and important — deadlines, real consequences</span>
+            </div>
+            <textarea class="todo-quad-input" id="todo-input-do" placeholder="e.g.&#10;Call the lead back before their window closes&#10;Fix the broken deploy&#10;Send the audit before end of day"></textarea>
+          </section>
+          <section class="todo-quad todo-quad-schedule" style="grid-column:3; grid-row:2;">
+            <div class="todo-quad-head">
+              <span class="todo-quad-verb">Schedule</span>
+              <span class="todo-quad-hint">Important, not urgent — moves things forward long-term</span>
+            </div>
+            <textarea class="todo-quad-input" id="todo-input-schedule" placeholder="e.g.&#10;Plan next month's content calendar&#10;Review last quarter's numbers&#10;Outline the feature before building it"></textarea>
+          </section>
+
+          <div class="todo-axis-label todo-axis-side" style="grid-column:1; grid-row:3;">Not important</div>
+          <section class="todo-quad todo-quad-delegate" style="grid-column:2; grid-row:3;">
+            <div class="todo-quad-head todo-quad-head-delegate">
+              <div class="todo-quad-title">
+                <span class="todo-quad-verb">Delegate</span>
+                <span class="todo-quad-hint">Urgent, not important — must happen, doesn't need to be you</span>
+              </div>
+              <span class="todo-protocol-wrap" tabindex="0" role="button" aria-label="Delegate protocol">
+                <span class="todo-protocol-label">Delegate protocol</span>
+                <div class="todo-protocol-popover">
+                  <div class="todo-protocol-step">
+                    <span class="todo-protocol-q">No staff for it?</span>
+                    <span class="todo-protocol-arrow">&rarr;</span>
+                    <span class="todo-protocol-a">Delegate to Claude.</span>
+                  </div>
+                  <div class="todo-protocol-step">
+                    <span class="todo-protocol-q">Claude can't take it either?</span>
+                    <span class="todo-protocol-arrow">&rarr;</span>
+                    <span class="todo-protocol-a">Batch it into one small timeslot &mdash; move with speed.</span>
+                  </div>
+                </div>
+              </span>
+            </div>
+            <textarea class="todo-quad-input" id="todo-input-delegate" placeholder="e.g.&#10;Answer routine follow-up emails&#10;Book the venue for the team call&#10;Update the tracking sheet"></textarea>
+          </section>
+          <section class="todo-quad todo-quad-delete" style="grid-column:3; grid-row:3;">
+            <div class="todo-quad-head">
+              <span class="todo-quad-verb">Delete</span>
+              <span class="todo-quad-hint">Neither — distraction, drop it</span>
+            </div>
+            <textarea class="todo-quad-input" id="todo-input-delete" placeholder="e.g.&#10;Scroll social media&#10;Rewatch old audit decks&#10;Reorganize a folder that's already fine"></textarea>
+          </section>
+        </div>
+      </div>
+    </div>
 
     <!-- Notes view -->
     <div class="view" id="notes-view">
@@ -679,6 +761,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=159"></script>
+<script src="/app.js?v=160"></script>
 </body>
 </html>

@@ -325,6 +325,7 @@ function isMobile() { return window.innerWidth <= 640; }
 // and can be dragged to reorder. The left-panel nav dropdown (v141) is the
 // only way to open a NEW tab — this strip just reflects what's already open.
 const NAV_TAB_LABELS = {
+  todo: 'To Do',
   notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
   crm: 'CRM', dialer: 'Dialer', 'daily-tasks': 'TRW Daily Tasks',
   tourist: 'Tourist', 'cold-email': 'Cold Email',
@@ -437,6 +438,7 @@ function switchTab(tab) {
   renderNavTabsBar();
   closeNavDropdown();
   document.querySelectorAll('.nav-menu-item').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.getElementById('todo-view')?.classList.toggle('hidden', tab !== 'todo');
   document.getElementById('notes-view').classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-view').classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-view')?.classList.toggle('hidden', tab !== 'expenses');
@@ -456,6 +458,7 @@ function switchTab(tab) {
   document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
   document.getElementById('cold-email-panel')?.classList.toggle('hidden', tab !== 'cold-email');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
+  if (tab === 'todo') loadEisenhowerDay();
   if (tab === 'trash') loadTrash();
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
@@ -464,6 +467,46 @@ function switchTab(tab) {
   if (tab === 'daily-tasks') loadDailyTasks();
   if (tab === 'cold-email') loadColdEmail();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
+}
+
+// ── To Do (Eisenhower matrix) ───────────────────────────────────
+const EISENHOWER_QUADS = ['do', 'schedule', 'delegate', 'delete'];
+let eisenhowerLoadedDate = null;
+let eisenhowerSaveTimers = {};
+
+function eisenhowerTodayISO() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function eisenhowerFlashSaved() {
+  const flag = document.getElementById('todo-saved-flag');
+  if (!flag) return;
+  flag.classList.add('show');
+  clearTimeout(eisenhowerFlashSaved._t);
+  eisenhowerFlashSaved._t = setTimeout(() => flag.classList.remove('show'), 1400);
+}
+
+function eisenhowerScheduleSave(quad) {
+  clearTimeout(eisenhowerSaveTimers[quad]);
+  eisenhowerSaveTimers[quad] = setTimeout(async () => {
+    const date = eisenhowerLoadedDate;
+    const body = {};
+    EISENHOWER_QUADS.forEach(q => { body[q] = document.getElementById('todo-input-' + q).value; });
+    try { await apiCall('PUT', '/eisenhower/' + date, body); eisenhowerFlashSaved(); } catch (e) {}
+  }, 400);
+}
+
+async function loadEisenhowerDay(date) {
+  const dateInput = document.getElementById('todo-date');
+  if (!date) date = dateInput.value || eisenhowerTodayISO();
+  dateInput.value = date;
+  eisenhowerLoadedDate = date;
+  const d = new Date(date + 'T00:00:00');
+  document.getElementById('todo-dow').textContent = d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  let data = {};
+  try { data = await apiCall('GET', '/eisenhower/' + date); } catch (e) {}
+  EISENHOWER_QUADS.forEach(q => { document.getElementById('todo-input-' + q).value = data[q] || ''; });
 }
 
 // ── Tags helpers ───────────────────────────────────────────────
@@ -4191,6 +4234,17 @@ document.getElementById('chase-import-close')?.addEventListener('click', () => {
 document.getElementById('chase-import-cancel')?.addEventListener('click', () => { document.getElementById('chase-import-modal').classList.add('hidden'); chaseImportPending = null; });
 document.getElementById('chase-import-confirm')?.addEventListener('click', confirmChaseImport);
 document.getElementById('chase-import-modal')?.addEventListener('click', e => { if (e.target === document.getElementById('chase-import-modal')) { chaseImportPending = null; e.target.classList.add('hidden'); } });
+// To Do (Eisenhower matrix)
+document.getElementById('todo-date').addEventListener('change', e => loadEisenhowerDay(e.target.value));
+document.getElementById('todo-today-btn').addEventListener('click', () => loadEisenhowerDay(eisenhowerTodayISO()));
+document.getElementById('todo-clear-btn').addEventListener('click', async () => {
+  if (!confirm('Clear all four boxes for this day?')) return;
+  EISENHOWER_QUADS.forEach(q => { document.getElementById('todo-input-' + q).value = ''; });
+  try { await apiCall('PUT', '/eisenhower/' + eisenhowerLoadedDate, { do: '', schedule: '', delegate: '', delete: '' }); } catch (e) {}
+});
+EISENHOWER_QUADS.forEach(q => {
+  document.getElementById('todo-input-' + q).addEventListener('input', () => eisenhowerScheduleSave(q));
+});
 // Calendar / reminders
 document.getElementById('add-reminder-btn').addEventListener('click', () => { switchTab('calendar'); openReminderModal(); });
 const calToggleBtn = document.getElementById('calendar-view-toggle-btn');
