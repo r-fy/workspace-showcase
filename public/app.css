@@ -906,6 +906,13 @@ header {
 .chase-preview-cat:last-child { border-bottom: none; }
 .chase-preview-cat span:last-child { color: #e0e0e0; font-weight: 500; min-width: 60px; text-align: right; }
 
+/* Prospect list import modal — same overlay pattern as #expense-modal/#chase-import-modal */
+#prospect-import-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center; z-index: 500;
+}
+#prospect-import-modal .expense-modal-box { width: 520px; }
+
 @media (max-width: 640px) {
   .expense-entry-cat, .expense-entry-note, .expense-entry-source, .expense-entry-frequency { display: none; }
   .exp-hdr[data-col="category"], .exp-hdr[data-col="note"], .exp-hdr[data-col="source"], .exp-hdr[data-col="frequency"] { display: none; }
@@ -1122,6 +1129,40 @@ header {
   .dialer-card { width: 100%; }
   .dial-key { height: 52px; } /* 44px+ touch targets */
   .call-play-btn, .call-dl-btn, .call-del-btn { width: 44px; height: 44px; font-size: 15px; }
+}
+
+/* ── Prospect lists (Dialer tab) ── */
+.prospect-list-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid #1e1e1e; max-width: 640px; margin: 0 auto; width: 100%;
+}
+.prospect-list-title { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+#prospect-rows { max-width: 640px; margin: 0 auto; padding: 4px 20px 8px; }
+.prospect-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 0;
+  border-bottom: 1px solid #1c1c1c; flex-wrap: wrap;
+}
+.prospect-row:last-child { border-bottom: none; }
+.prospect-row-main { flex: 1; min-width: 140px; }
+.prospect-row-name { font-size: 13px; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prospect-row-contact { font-size: 11px; color: #666; margin-top: 2px; }
+.prospect-outcome-select {
+  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
+  color: #ccc; font-size: 11px; padding: 5px 6px; font-family: inherit;
+}
+.prospect-row-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.prospect-dial-btn, .prospect-promote-btn {
+  font-size: 11px; padding: 5px 9px; border-radius: 4px; border: 1px solid #2a2a2a; color: #999;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.prospect-dial-btn:hover { border-color: #2a5a20; color: #8ce870; background: #1a3a13; }
+.prospect-dial-btn:disabled { opacity: 0.35; cursor: default; }
+.prospect-promote-btn:hover { border-color: #3a3a3a; color: #ccc; }
+.prospect-promote-btn.promoted { color: #5fc83b; border-color: #1a3a12; }
+.prospect-del-btn { color: #444; font-size: 13px; padding: 3px 6px; }
+.prospect-del-btn:hover { color: #f87171; }
+@media (max-width: 640px) {
+  .prospect-row-actions { width: 100%; justify-content: flex-end; }
 }
 
 /* ── Audits ─────────────────────────────────────────────────── */

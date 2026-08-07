@@ -129,6 +129,7 @@ async function fullSync() {
     notes = data.notes; boards = data.boards; allColumns = data.columns;
     reminders = data.reminders || [];
     calls = data.calls || [];
+    applyProspectSyncData(data);
     lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
@@ -152,7 +153,23 @@ function hashData(data) {
   const ns = (data.notes||[]).map(n=>n.id+':'+n.updated_at).sort().join('|');
   const rs = (data.reminders||[]).map(r=>r.id+':'+r.updated_at+':'+(r.next_fire_at||0)+':'+(r.snoozed_until||0)).sort().join('|');
   const cs = (data.calls||[]).map(c=>c.id+':'+c.status+':'+(c.recording_sid||'')).sort().join('|');
-  return ts + '$$' + ns + '$$' + rs + '$$' + cs;
+  const ps = (data.prospects||[]).map(p=>p.id+':'+p.updated_at+':'+p.outcome+':'+(p.promoted_lead_id||'')).sort().join('|');
+  return ts + '$$' + ns + '$$' + rs + '$$' + cs + '$$' + ps;
+}
+
+// Prospect lists ride /api/sync (like reminders/calls) so an outside change —
+// e.g. the future n8n scrape workflow inserting rows, or another device
+// updating an outcome — shows up live without a manual refresh. Sidebar
+// counts always refresh; the open list's row data only refreshes while the
+// Dialer tab is actually showing.
+function applyProspectSyncData(data) {
+  prospectLists = data.prospect_lists || [];
+  if (currentTab !== 'dialer') return;
+  renderProspectListsPanel();
+  if (currentProspectListId && currentProspectList) {
+    currentProspectList.prospects = (data.prospects || []).filter(p => p.list_id === currentProspectListId);
+    renderProspectListView();
+  }
 }
 
 function buildBoardData(boardId, columns, tasks) {
@@ -180,6 +197,7 @@ async function pollSync() {
     notes = data.notes; boards = data.boards; allColumns = data.columns;
     reminders = data.reminders || [];
     calls = data.calls || [];
+    applyProspectSyncData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
     if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') renderCallLog();
@@ -4624,8 +4642,14 @@ document.getElementById('new-call-btn').addEventListener('click', () => {
   if (isMobile()) closeSidebar();
   setTimeout(() => document.getElementById('dial-number')?.focus(), 50);
 });
-document.getElementById('prospect-import-btn').addEventListener('click', () =>
-  toast('Prospect lists aren\'t built yet — ask Claude when you have a list ready'));
+document.getElementById('prospect-new-list-btn').addEventListener('click', newProspectList);
+document.getElementById('prospect-import-btn').addEventListener('click', openProspectImportModal);
+document.getElementById('prospect-import-close').addEventListener('click', closeProspectImportModal);
+document.getElementById('prospect-import-cancel').addEventListener('click', closeProspectImportModal);
+document.getElementById('prospect-import-confirm').addEventListener('click', submitProspectImport);
+document.getElementById('prospect-import-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('prospect-import-modal')) closeProspectImportModal();
+});
 // CRM: nav +, inner tab strip, floating call bar, disposition modal
 document.getElementById('new-lead-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('crm'); newLeadForm(); });
 document.querySelectorAll('.crm-subtab').forEach(b => b.addEventListener('click', () => switchCrmSub(b.dataset.sub)));
@@ -5129,6 +5153,8 @@ async function loadDialerTab() {
   renderCallLog();
   initDialer();
   loadUsagePanel();
+  loadProspectLists();
+  if (currentProspectListId) openProspectList(currentProspectListId); else renderProspectListView();
 }
 
 // Typing a number for a lead that had none (or correcting one) persists it
@@ -5144,6 +5170,183 @@ async function savePhoneBackToLead(raw) {
     const row = leads.find(l => l.id === currentLeadId); if (row) row.phone_number = val;
     toast('Phone saved to lead');
   } catch (e) { toast('Could not save phone to lead'); }
+}
+
+// ── Prospect lists (Dialer tab) ──────────────────────────────────────────
+// Lightweight tier below rfy-crm leads: bulk-import a raw dial list, work it
+// with a simple per-row outcome, one-click "Promote" carries real signal
+// into a full lead. See BUILD-SPEC-prospect-lists.md. No offline support
+// (like Expenses/Calendar) — this rides direct apiCall, not the idb path.
+const PROSPECT_OUTCOMES = [
+  ['not_yet_called', 'Not yet called'],
+  ['no_answer', 'No answer'],
+  ['voicemail', 'Voicemail'],
+  ['booked', 'Booked'],
+  ['not_interested', 'Not interested'],
+];
+let prospectLists = [];          // rollup rows: {..., count, by_outcome}
+let currentProspectListId = null;
+let currentProspectList = null;  // full record incl. prospects[] from GET /prospect-lists/:id
+
+async function loadProspectLists() {
+  try { prospectLists = await apiCall('GET', '/prospect-lists'); } catch (e) { return; }
+  renderProspectListsPanel();
+}
+
+function renderProspectListsPanel() {
+  const area = document.getElementById('prospect-lists');
+  if (!area) return;
+  const rows = prospectLists.map(l => {
+    const summary = PROSPECT_OUTCOMES
+      .filter(([k]) => l.by_outcome && l.by_outcome[k])
+      .map(([k, label]) => `${l.by_outcome[k]} ${label.toLowerCase()}`)
+      .join(', ') || 'empty';
+    return `<div class="note-item${l.id === currentProspectListId ? ' active' : ''}" data-id="${l.id}">
+      <div class="note-item-title">${escHtml(l.name)}</div>
+      <div class="note-item-snippet">${l.count} prospect${l.count === 1 ? '' : 's'} — ${escHtml(summary)}</div>
+    </div>`;
+  }).join('') || '<div style="padding:16px 12px;color:#444;font-size:12px;">No prospect lists yet — "+ New list" to start one.</div>';
+  area.innerHTML = rows;
+  area.querySelectorAll('.note-item[data-id]').forEach(el => el.addEventListener('click', () => openProspectList(el.dataset.id)));
+}
+
+async function newProspectList() {
+  const name = prompt('List name:');
+  if (!name || !name.trim()) return;
+  const source = prompt('Source (optional — e.g. "Outscraper local SEO"):') || '';
+  let list;
+  try { list = await apiCall('POST', '/prospect-lists', { name: name.trim(), source: source.trim() }); }
+  catch (e) { toast('Could not create list'); return; }
+  await loadProspectLists();
+  openProspectList(list.id);
+}
+
+async function openProspectList(id) {
+  let list;
+  try { list = await apiCall('GET', '/prospect-lists/' + id); } catch (e) { toast('Could not load list'); return; }
+  currentProspectListId = id;
+  currentProspectList = list;
+  renderProspectListsPanel();
+  renderProspectListView();
+  if (isMobile()) closeSidebar();
+}
+
+function renderProspectListView() {
+  const el = document.getElementById('prospect-list-view');
+  if (!el) return;
+  if (!currentProspectList) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+  const l = currentProspectList;
+  const rowsHtml = (l.prospects || []).map(p => {
+    const outcomeOpts = PROSPECT_OUTCOMES.map(([k, label]) =>
+      `<option value="${k}"${p.outcome === k ? ' selected' : ''}>${escHtml(label)}</option>`).join('');
+    const contact = [fmtPhone(p.phone) || p.phone, p.email].filter(Boolean).join(' · ') || '—';
+    const promoteBtn = p.promoted_lead_id
+      ? `<button class="prospect-promote-btn promoted" data-open-lead="${p.promoted_lead_id}">✓ Lead</button>`
+      : `<button class="prospect-promote-btn" data-promote-id="${p.id}">Promote</button>`;
+    return `<div class="prospect-row" data-id="${p.id}">
+      <div class="prospect-row-main">
+        <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}</div>
+        <div class="prospect-row-contact">${escHtml(contact)}${p.city ? ' · ' + escHtml(p.city) : ''}</div>
+      </div>
+      <select class="prospect-outcome-select" data-outcome-id="${p.id}">${outcomeOpts}</select>
+      <div class="prospect-row-actions">
+        <button class="prospect-dial-btn" data-dial-id="${p.id}"${p.phone ? '' : ' disabled'} title="Dial">📞</button>
+        ${promoteBtn}
+        <button class="prospect-del-btn" data-del-id="${p.id}" title="Delete row">✕</button>
+      </div>
+    </div>`;
+  }).join('') || '<div class="agenda-empty">No prospects yet — Import to add some.</div>';
+
+  el.innerHTML = `
+    <div class="prospect-list-header">
+      <span class="prospect-list-title">${escHtml(l.name)}${l.source ? ` <span style="color:#555;font-size:11px;font-weight:400;">(${escHtml(l.source)})</span>` : ''}</span>
+      <button class="del-task-btn" id="prospect-list-del-btn">🗑 Delete list</button>
+    </div>
+    <div id="prospect-rows">${rowsHtml}</div>`;
+
+  el.querySelectorAll('[data-outcome-id]').forEach(sel =>
+    sel.addEventListener('change', () => updateProspectOutcome(sel.dataset.outcomeId, sel.value)));
+  el.querySelectorAll('[data-dial-id]').forEach(btn =>
+    btn.addEventListener('click', () => dialProspect(btn.dataset.dialId)));
+  el.querySelectorAll('[data-promote-id]').forEach(btn =>
+    btn.addEventListener('click', () => promoteProspect(btn.dataset.promoteId)));
+  el.querySelectorAll('[data-open-lead]').forEach(btn =>
+    btn.addEventListener('click', () => { switchTab('crm'); openLead(btn.dataset.openLead); }));
+  el.querySelectorAll('[data-del-id]').forEach(btn =>
+    btn.addEventListener('click', () => deleteProspectRow(btn.dataset.delId)));
+  document.getElementById('prospect-list-del-btn')?.addEventListener('click', deleteProspectListActive);
+}
+
+async function updateProspectOutcome(id, outcome) {
+  const p = currentProspectList?.prospects.find(x => x.id === id);
+  try {
+    await apiCall('PUT', '/prospects/' + id, { outcome });
+    if (p) p.outcome = outcome;
+    await loadProspectLists(); // counts changed
+  } catch (e) { toast('Could not update outcome'); renderProspectListView(); }
+}
+
+// Reuses the exact same call path as the standalone Dialer — fill the number,
+// call startCall(). No second call path (auto-link-by-phone-match, recording,
+// disposition picker all already work unchanged).
+function dialProspect(id) {
+  const p = currentProspectList?.prospects.find(x => x.id === id);
+  if (!p || !p.phone) return;
+  const inp = document.getElementById('dial-number');
+  if (inp) inp.value = p.phone;
+  startCall();
+}
+
+async function promoteProspect(id) {
+  let lead;
+  try { lead = await apiCall('POST', '/prospects/' + id + '/promote'); }
+  catch (e) { toast(e.message || 'Could not promote'); return; }
+  toast('Promoted to lead: ' + (lead.business_name || 'Untitled lead'));
+  const p = currentProspectList?.prospects.find(x => x.id === id);
+  if (p) p.promoted_lead_id = lead.id;
+  renderProspectListView();
+  if (confirm('Open the new lead now?')) { switchTab('crm'); openLead(lead.id); }
+}
+
+async function deleteProspectRow(id) {
+  if (!confirm('Delete this prospect row?')) return;
+  try { await apiCall('DELETE', '/prospects/' + id); }
+  catch (e) { toast('Could not delete'); return; }
+  if (currentProspectList) currentProspectList.prospects = currentProspectList.prospects.filter(x => x.id !== id);
+  renderProspectListView();
+  loadProspectLists();
+}
+
+async function deleteProspectListActive() {
+  if (!currentProspectListId) return;
+  if (!confirm('Delete this entire list and all its prospects? This can\'t be undone.')) return;
+  try { await apiCall('DELETE', '/prospect-lists/' + currentProspectListId); }
+  catch (e) { toast('Could not delete list'); return; }
+  currentProspectListId = null; currentProspectList = null;
+  renderProspectListView();
+  loadProspectLists();
+}
+
+function openProspectImportModal() {
+  if (!currentProspectListId) { toast('Pick or create a list first'); return; }
+  const ta = document.getElementById('prospect-import-csv');
+  if (ta) ta.value = '';
+  document.getElementById('prospect-import-modal').classList.remove('hidden');
+}
+function closeProspectImportModal() {
+  document.getElementById('prospect-import-modal').classList.add('hidden');
+}
+async function submitProspectImport() {
+  const csv = document.getElementById('prospect-import-csv').value.trim();
+  if (!csv) { toast('Paste some CSV first'); return; }
+  let result;
+  try { result = await apiCall('POST', '/prospect-lists/' + currentProspectListId + '/import', { csv }); }
+  catch (e) { toast('Import failed'); return; }
+  closeProspectImportModal();
+  toast(`Imported ${result.imported}, skipped ${result.skipped}`);
+  await openProspectList(currentProspectListId);
+  await loadProspectLists();
 }
 
 // ── Disposition picker + one-click-through call queue (rfy-crm §1.6/1.7) ──

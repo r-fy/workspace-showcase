@@ -381,6 +381,40 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`); } 
 // no-answer goes to voicemail. Pre-v161 rows are all outbound by definition.
 try { db.exec(`ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'`); } catch(e) {}
 
+// Prospect lists (Dialer tab): a lightweight tier below CRM leads for a raw
+// dial (or cold-email) list — bulk import, simple per-row outcome — before a
+// contact earns a full lead record. One-click "Promote" carries a row into a
+// real lead once there's signal. Deliberately NO soft-delete (unlike
+// leads/calls) — this tier is disposable by design, a bad batch is nukeable
+// in one click. See the "Incorporate prospect lists for dialing" Kanban task.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS prospect_lists (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    name TEXT NOT NULL DEFAULT 'Untitled list',
+    source TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS prospects (
+    id TEXT PRIMARY KEY,
+    list_id TEXT NOT NULL REFERENCES prospect_lists(id),
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    name TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    city TEXT NOT NULL DEFAULT '',
+    niche TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    outcome TEXT NOT NULL DEFAULT 'not_yet_called',
+    promoted_lead_id TEXT DEFAULT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_prospects_list ON prospects(list_id, outcome);
+`);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -493,6 +527,19 @@ app.use('/uploads', uploadsAuth, express.static(UPLOADS_DIR));
 
 function uid() { return crypto.randomBytes(8).toString('hex'); }
 function now() { return Date.now(); }
+
+// Shared CSV line parser (quoted-field aware) — used by /api/expenses/import
+// and /api/prospect-lists/:id/import, don't fork a second copy.
+function parseCSVLine(line) {
+  const fields = []; let current = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '"') {
+      if (inQuotes && line[i+1] === '"') { current += '"'; i++; } else inQuotes = !inQuotes;
+    } else if (line[i] === ',' && !inQuotes) { fields.push(current); current = ''; }
+    else current += line[i];
+  }
+  fields.push(current); return fields;
+}
 
 // Backfill: give every existing board a Top 3 tray column if it doesn't have one yet
 // (new boards get theirs in POST /api/boards). position=-1 is cosmetic only — the
@@ -744,18 +791,23 @@ app.get('/api/leads/:id', auth, (req, res) => {
   res.json({ ...lead, audits: leadAudits, followups: leadFollowups, replies: leadReplies });
 });
 
-app.post('/api/leads', auth, (req, res) => {
+// Shared insert used by POST /api/leads and the prospect-promote route — one
+// lead-creation path, not two divergent copies of the same INSERT.
+function createLead(fields, userId) {
   const { business_name = 'Untitled lead', website = '', primary_email = '', city = '', niche = '', notes = '',
-    contact_name = '', phone_number = '', address = '', source = '', disposition = '' } = req.body;
+    contact_name = '', phone_number = '', address = '', source = '', disposition = '' } = fields;
   const website_domain = normalizeDomain(website);
   const id = uid(), t = now();
-  try {
-    db.prepare('INSERT INTO leads (id, business_name, website, website_domain, primary_email, city, niche, status, notes, contact_name, phone_number, address, source, disposition, user_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, business_name, website, website_domain, primary_email, city, niche, 'active', notes, contact_name, phone_number, address, source, disposition, req.userId, t, t);
-  } catch (e) {
-    return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message });
-  }
-  res.json(db.prepare('SELECT * FROM leads WHERE id=?').get(id));
+  db.prepare('INSERT INTO leads (id, business_name, website, website_domain, primary_email, city, niche, status, notes, contact_name, phone_number, address, source, disposition, user_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, business_name, website, website_domain, primary_email, city, niche, 'active', notes, contact_name, phone_number, address, source, disposition, userId, t, t);
+  return db.prepare('SELECT * FROM leads WHERE id=?').get(id);
+}
+
+app.post('/api/leads', auth, (req, res) => {
+  let lead;
+  try { lead = createLead(req.body, req.userId); }
+  catch (e) { return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message }); }
+  res.json(lead);
 });
 
 app.put('/api/leads/:id', auth, (req, res) => {
@@ -811,6 +863,136 @@ app.post('/api/leads/:id/merge', auth, (req, res) => {
     db.prepare('UPDATE leads SET deleted_at=?, updated_at=? WHERE id=? AND user_id=?').run(t, t, source.id, req.userId);
   })();
   res.json({ ok: true });
+});
+
+// ── Prospect lists (Dialer tab) ──────────────────────────────
+// See the migration block above for the schema + design rationale.
+const OUTCOME_TYPES = ['not_yet_called', 'no_answer', 'voicemail', 'booked', 'not_interested'];
+
+function prospectListRollup(list) {
+  const rows = db.prepare('SELECT outcome, COUNT(*) c FROM prospects WHERE list_id=? GROUP BY outcome').all(list.id);
+  const by_outcome = {};
+  let count = 0;
+  for (const r of rows) { by_outcome[r.outcome] = r.c; count += r.c; }
+  return { count, by_outcome };
+}
+
+app.get('/api/prospect-lists', auth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM prospect_lists WHERE user_id=? ORDER BY created_at DESC').all(req.userId);
+  res.json(rows.map(l => ({ ...l, ...prospectListRollup(l) })));
+});
+
+app.post('/api/prospect-lists', auth, (req, res) => {
+  const name = String(req.body.name || '').trim() || 'Untitled list';
+  const source = String(req.body.source || '').trim();
+  const id = uid(), t = now();
+  db.prepare('INSERT INTO prospect_lists (id, user_id, name, source, created_at) VALUES (?,?,?,?,?)')
+    .run(id, req.userId, name, source, t);
+  res.json(db.prepare('SELECT * FROM prospect_lists WHERE id=?').get(id));
+});
+
+app.get('/api/prospect-lists/:id', auth, (req, res) => {
+  const list = db.prepare('SELECT * FROM prospect_lists WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!list) return res.status(404).json({ error: 'Not found' });
+  const prospects = db.prepare('SELECT * FROM prospects WHERE list_id=? AND user_id=? ORDER BY created_at ASC').all(list.id, req.userId);
+  res.json({ ...list, prospects });
+});
+
+// Hard delete, cascades its prospects — this tier has no trash tier of its own.
+app.delete('/api/prospect-lists/:id', auth, (req, res) => {
+  const list = db.prepare('SELECT id FROM prospect_lists WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!list) return res.status(404).json({ error: 'Not found' });
+  db.transaction(() => {
+    db.prepare('DELETE FROM prospects WHERE list_id=? AND user_id=?').run(list.id, req.userId);
+    db.prepare('DELETE FROM prospect_lists WHERE id=? AND user_id=?').run(list.id, req.userId);
+  })();
+  res.json({ ok: true });
+});
+
+// Bulk import: either a pasted CSV (header-driven, reuses the shared
+// parseCSVLine) or a plain JSON rows array — the latter is the path the
+// future Outscraper n8n workflow will POST into directly, no API change needed.
+app.post('/api/prospect-lists/:id/import', auth, (req, res) => {
+  const list = db.prepare('SELECT * FROM prospect_lists WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!list) return res.status(404).json({ error: 'Not found' });
+  let rawRows;
+  if (typeof req.body.csv === 'string' && req.body.csv.trim()) {
+    const lines = req.body.csv.split(/\r?\n/).filter(l => l.trim());
+    rawRows = [];
+    if (lines.length) {
+      const header = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
+      const cols = ['name', 'phone', 'email', 'source', 'city', 'niche', 'notes'];
+      const idx = Object.fromEntries(cols.map(c => [c, header.indexOf(c)]));
+      for (let i = 1; i < lines.length; i++) {
+        const f = parseCSVLine(lines[i]);
+        const row = {};
+        for (const c of cols) row[c] = idx[c] >= 0 ? (f[idx[c]] || '').trim() : '';
+        rawRows.push(row);
+      }
+    }
+  } else if (Array.isArray(req.body.rows)) {
+    rawRows = req.body.rows;
+  } else {
+    return res.status(400).json({ error: 'csv string or rows array required' });
+  }
+  const ins = db.prepare('INSERT INTO prospects (id, list_id, user_id, name, phone, email, source, city, niche, notes, outcome, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  const t = now();
+  let imported = 0, skipped = 0;
+  db.transaction(() => {
+    for (const r of rawRows) {
+      const name = String(r.name || '').trim();
+      const phone = String(r.phone || '').trim();
+      const email = String(r.email || '').trim();
+      if (!name && !phone && !email) { skipped++; continue; } // nothing to dial or email
+      const source = String(r.source || '').trim() || list.source;
+      ins.run(uid(), list.id, req.userId, name, phone, email, source,
+        String(r.city || '').trim(), String(r.niche || '').trim(), String(r.notes || '').trim(),
+        'not_yet_called', t, t);
+      imported++;
+    }
+  })();
+  res.json({ imported, skipped });
+});
+
+app.put('/api/prospects/:id', auth, (req, res) => {
+  const p = db.prepare('SELECT * FROM prospects WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  const { name = p.name, phone = p.phone, email = p.email, source = p.source, city = p.city, niche = p.niche, notes = p.notes, outcome = p.outcome } = req.body;
+  if (!OUTCOME_TYPES.includes(outcome)) return res.status(400).json({ error: 'invalid outcome' });
+  db.prepare('UPDATE prospects SET name=?, phone=?, email=?, source=?, city=?, niche=?, notes=?, outcome=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(name, phone, email, source, city, niche, notes, outcome, now(), req.params.id, req.userId);
+  res.json(db.prepare('SELECT * FROM prospects WHERE id=?').get(req.params.id));
+});
+
+// Fix a bad import line — single-row hard delete (the list itself has its own
+// hard-delete above for nuking a whole bad batch).
+app.delete('/api/prospects/:id', auth, (req, res) => {
+  db.prepare('DELETE FROM prospects WHERE id=? AND user_id=?').run(req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+// Real signal earned it: create a lead via the same insert POST /api/leads
+// uses, map the fields across, and mark the row promoted (stays in the list —
+// "old calls stay unlinked forever" philosophy, don't rewrite history).
+app.post('/api/prospects/:id/promote', auth, (req, res) => {
+  const p = db.prepare('SELECT * FROM prospects WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  let lead;
+  try {
+    lead = createLead({
+      business_name: p.name || 'Untitled lead',
+      phone_number: p.phone,
+      primary_email: p.email,
+      source: p.source,
+      city: p.city,
+      niche: p.niche,
+      notes: p.notes,
+    }, req.userId);
+  } catch (e) {
+    return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message });
+  }
+  db.prepare('UPDATE prospects SET promoted_lead_id=?, updated_at=? WHERE id=? AND user_id=?').run(lead.id, now(), p.id, req.userId);
+  res.json(lead);
 });
 
 // ── TRW Daily Tasks ──────────────────────────────────────────
@@ -1141,7 +1323,10 @@ app.get('/api/sync', auth, (req, res) => {
     .all(req.userId, now() - COMPLETED_KEEP_MS);
   // Newest 200 calls only — this rides the 2s poll, keep the payload bounded.
   const calls = db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId);
-  res.json({ notes, boards, columns, tasks, reminders, calls });
+  const prospect_lists = db.prepare('SELECT * FROM prospect_lists WHERE user_id=? ORDER BY created_at DESC').all(req.userId)
+    .map(l => ({ ...l, ...prospectListRollup(l) }));
+  const prospects = db.prepare('SELECT * FROM prospects WHERE user_id=? ORDER BY created_at ASC').all(req.userId);
+  res.json({ notes, boards, columns, tasks, reminders, calls, prospect_lists, prospects });
 });
 
 // ── Boards ────────────────────────────────────────────────────
@@ -1439,16 +1624,6 @@ app.get('/api/expenses/export.csv', auth, (req, res) => {
 app.post('/api/expenses/import', auth, (req, res) => {
   const { csv } = req.body;
   if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'csv string required' });
-  const parseCSVLine = line => {
-    const fields = []; let current = '', inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      if (line[i] === '"') {
-        if (inQuotes && line[i+1] === '"') { current += '"'; i++; } else inQuotes = !inQuotes;
-      } else if (line[i] === ',' && !inQuotes) { fields.push(current); current = ''; }
-      else current += line[i];
-    }
-    fields.push(current); return fields;
-  };
   const lines = csv.split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) return res.json({ imported: 0 });
   const header = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());

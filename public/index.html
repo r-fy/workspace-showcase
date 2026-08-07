@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=140">
+<link rel="stylesheet" href="/app.css?v=141">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -163,15 +163,13 @@
         <div class="calls-usage-info" id="calls-usage-info"></div>
       </div>
       <div id="dialer-panel" class="panel-section hidden">
-        <!-- Prospect lists placeholder (future project — see RFY-CRM-PLAN.md
-             §1.2): imported dial lists will live here, cheaper than full
-             leads, promote-to-lead on real signal. -->
-        <div class="calls-panel-info" style="padding:12px;">
-          <b>Prospect lists</b><br><br>
-          Not built yet. The plan: import a list (CSV or scrape), it shows up
-          here, you dial straight down it — rows stay lightweight until a
-          real conversation earns a promotion to a full CRM lead.
+        <!-- Prospect lists: a lightweight tier below rfy-crm leads — bulk
+             import a raw dial list, work it with a simple outcome, promote
+             to a full lead on real signal. See BUILD-SPEC-prospect-lists.md. -->
+        <div class="import-btn-wrap">
+          <button id="prospect-new-list-btn">+ New list</button>
         </div>
+        <div class="notes-list" id="prospect-lists"></div>
         <div class="import-btn-wrap">
           <button id="prospect-import-btn">⬆ Import prospect list</button>
         </div>
@@ -378,6 +376,9 @@
     <!-- Standalone Dialer view (v162): the dial pad, back as its own menu.
          #dialer-area moves in here when this tab is active. -->
     <div class="view hidden" id="dialer-view" style="flex-direction:column;overflow-y:auto;">
+      <!-- Active prospect list (rendered by JS) sits above the dial pad —
+           Dial fills #dial-number and reuses startCall(), no second call path. -->
+      <div id="prospect-list-view" class="hidden"></div>
       <div id="dialer-home"></div>
     </div>
 
@@ -529,6 +530,30 @@
       <div style="display:flex;gap:8px;">
         <button class="cancel-sel-btn" id="chase-import-cancel">Cancel</button>
         <button class="save-btn" id="chase-import-confirm">Import</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Prospect list import modal -->
+<div id="prospect-import-modal" class="hidden">
+  <div class="expense-modal-box">
+    <div class="expense-modal-header">
+      <span>Import prospects</span>
+      <button class="modal-close-btn" id="prospect-import-close">✕</button>
+    </div>
+    <div class="expense-modal-body">
+      <div style="font-size:11px;color:#555;line-height:1.6;">
+        Paste CSV with a header row: <code>name,phone,email,source,city,niche,notes</code>.
+        A blank source column falls back to the list's own source.
+      </div>
+      <textarea id="prospect-import-csv" class="daily-task-paste-box" style="min-height:180px;margin-top:0;" placeholder="name,phone,email,source,city,niche,notes&#10;Acme Roofing,555-111-2222,acme@example.com,scrape,Fresno,roofing,"></textarea>
+    </div>
+    <div class="expense-modal-footer">
+      <div></div>
+      <div style="display:flex;gap:8px;">
+        <button class="cancel-sel-btn" id="prospect-import-cancel">Cancel</button>
+        <button class="save-btn" id="prospect-import-confirm">Import</button>
       </div>
     </div>
   </div>
@@ -770,6 +795,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=162"></script>
+<script src="/app.js?v=163"></script>
 </body>
 </html>
