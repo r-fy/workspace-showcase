@@ -5240,6 +5240,83 @@ async function openProspectList(id) {
   if (isMobile()) closeSidebar();
 }
 
+// Parses the pipe-delimited scoring text the Outscraper n8n workflow writes
+// into prospects.notes (no dedicated columns for these, deliberately — see
+// BUILD-SPEC-prospect-lists.md). Returns null for anything else (manually
+// imported rows, plain notes) so the caller falls back to showing raw text.
+function parseProspectScore(notes) {
+  if (!notes) return null;
+  const m = {};
+  let mm;
+  if ((mm = notes.match(/Website:\s*([^|]*)\|/))) m.website = mm[1].trim();
+  if ((mm = notes.match(/Rating:\s*([\d.]+)\s*\((\d+)\s*reviews?\)/))) { m.rating = parseFloat(mm[1]); m.reviews = parseInt(mm[2], 10); }
+  if ((mm = notes.match(/Claimed:\s*(Yes|No)/))) m.claimed = mm[1];
+  if ((mm = notes.match(/Est\. rank:\s*(\d+)/))) m.rank = parseInt(mm[1], 10);
+  if ((mm = notes.match(/Completeness:\s*(\d+)/))) m.completeness = parseInt(mm[1], 10);
+  if ((mm = notes.match(/Review Strength:\s*(\d+)/))) m.reviewStrength = parseInt(mm[1], 10);
+  if ((mm = notes.match(/Ranking Readiness:\s*(\d+)/))) m.readiness = parseInt(mm[1], 10);
+  if ((mm = notes.match(/Quick wins:\s*([\s\S]+)$/))) m.wins = mm[1].split('|').map(w => w.trim()).filter(Boolean);
+  const core = ['rating', 'completeness', 'reviewStrength', 'readiness'];
+  if (!core.every(k => typeof m[k] === 'number' && !Number.isNaN(m[k]))) return null;
+  return m;
+}
+
+function prospectMeterRow(label, val) {
+  const pct = Math.max(0, Math.min(100, val));
+  return `<div class="prospect-meter-row">
+    <span class="prospect-meter-label">${escHtml(label)}</span>
+    <div class="prospect-meter-track"><div class="prospect-meter-fill" style="width:${pct}%"></div></div>
+    <span class="prospect-meter-val">${val}</span>
+  </div>`;
+}
+
+const STAR_PATH = 'M10 1l2.6 5.9 6.4.6-4.8 4.3 1.4 6.2L10 14.9 4.4 18l1.4-6.2L1 7.5l6.4-.6z';
+
+// Full scorecard (gauge + stars + meters + Quick Wins) when notes parses as
+// Can-style scoring data; otherwise the plain text block as before.
+function renderProspectScorePanel(p) {
+  if (!p.notes) return '';
+  const s = parseProspectScore(p.notes);
+  if (!s) return `<div class="prospect-row-notes hidden" data-notes-id="${p.id}">${escHtml(p.notes)}</div>`;
+
+  const CIRC = 226.19; // 2 * PI * r36
+  const offset = CIRC * (1 - Math.max(0, Math.min(100, s.readiness)) / 100);
+  const stars = Array.from({ length: 5 }, (_, i) =>
+    `<svg viewBox="0 0 20 20" class="${i < Math.round(s.rating) ? 'on' : ''}"><path d="${STAR_PATH}"/></svg>`).join('');
+  const winsHtml = (s.wins || []).map(w => `<li>${escHtml(w)}</li>`).join('');
+
+  return `<div class="prospect-row-notes prospect-row-notes-scored hidden" data-notes-id="${p.id}">
+    <div class="prospect-score-top">
+      <div class="prospect-gauge-wrap">
+        <div class="prospect-gauge">
+          <svg width="72" height="72" viewBox="0 0 84 84">
+            <circle cx="42" cy="42" r="36" fill="none" stroke="#1e1f22" stroke-width="7"/>
+            <circle cx="42" cy="42" r="36" fill="none" stroke="#5fc83b" stroke-width="7" stroke-linecap="round"
+              stroke-dasharray="${CIRC}" stroke-dashoffset="${offset}" transform="rotate(-90 42 42)"/>
+          </svg>
+          <div class="prospect-gauge-num">${s.readiness}</div>
+        </div>
+        <div class="prospect-gauge-cap">Readiness</div>
+      </div>
+      <div class="prospect-score-side">
+        <div class="prospect-stars-row">
+          <span class="prospect-stars">${stars}</span>
+          <b>${s.rating.toFixed(1)}</b>
+          ${s.reviews != null ? `<span class="prospect-score-faint"> · ${s.reviews} reviews</span>` : ''}
+        </div>
+        ${prospectMeterRow('Completeness', s.completeness)}
+        ${prospectMeterRow('Review strength', s.reviewStrength)}
+        <div class="prospect-facts">
+          ${s.claimed ? `<span><b>${s.claimed === 'Yes' ? 'Claimed' : 'Unclaimed'}</b></span>` : ''}
+          ${s.rank != null ? `<span>Est. rank <b>${s.rank}</b></span>` : ''}
+          ${s.website && s.website !== 'None' ? `<a href="${escHtml(s.website)}" target="_blank" rel="noopener">${escHtml(s.website.replace(/^https?:\/\//, ''))} ↗</a>` : ''}
+        </div>
+      </div>
+    </div>
+    ${winsHtml ? `<p class="prospect-wins-label">Quick wins</p><ul class="prospect-wins">${winsHtml}</ul>` : ''}
+  </div>`;
+}
+
 function renderProspectListView() {
   const el = document.getElementById('prospect-list-view');
   if (!el) return;
@@ -5264,7 +5341,7 @@ function renderProspectListView() {
         ${promoteBtn}
         <button class="prospect-del-btn" data-del-id="${p.id}" title="Delete row">✕</button>
       </div>
-      ${p.notes ? `<div class="prospect-row-notes hidden" data-notes-id="${p.id}">${escHtml(p.notes)}</div>` : ''}
+      ${renderProspectScorePanel(p)}
     </div>`;
   }).join('') || '<div class="agenda-empty">No prospects yet — Import to add some.</div>';
 

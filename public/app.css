@@ -1146,10 +1146,40 @@ header {
 .prospect-row:last-child { border-bottom: none; }
 .prospect-row-main { flex: 1; min-width: 140px; cursor: pointer; }
 .prospect-row-name { font-size: 13px; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.prospect-row-contact { font-size: 11px; color: #666; margin-top: 2px; }
+.prospect-row-contact { font-size: 11px; color: #7d7e83; margin-top: 2px; }
 .prospect-row-notes {
-  flex-basis: 100%; font-size: 11px; color: #888; white-space: pre-wrap;
-  padding: 8px 0 2px; border-top: 1px dashed #222; margin-top: 6px;
+  flex-basis: 100%; font-size: 11px; color: #a3a4a8; white-space: pre-wrap;
+  padding: 12px 0 2px; border-top: 1px dashed #222; margin-top: 6px;
+}
+.prospect-row-notes.prospect-row-notes-scored { white-space: normal; }
+.prospect-score-top { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.prospect-gauge-wrap { flex-shrink: 0; text-align: center; }
+.prospect-gauge { position: relative; width: 72px; height: 72px; }
+.prospect-gauge-num {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 17px; color: #e6e6e6; font-variant-numeric: tabular-nums;
+}
+.prospect-gauge-cap { font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: #7d7e83; margin-top: 4px; }
+.prospect-score-side { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 7px; }
+.prospect-stars-row { display: flex; align-items: center; gap: 4px; color: #ccc; }
+.prospect-stars { display: inline-flex; gap: 1px; }
+.prospect-stars svg { width: 11px; height: 11px; fill: #333; }
+.prospect-stars svg.on { fill: #8ce870; }
+.prospect-score-faint { color: #7d7e83; }
+.prospect-meter-row { display: flex; align-items: center; gap: 8px; }
+.prospect-meter-label { width: 96px; flex-shrink: 0; color: #a3a4a8; font-size: 10.5px; }
+.prospect-meter-track { flex: 1; height: 4px; background: #1e1f22; border-radius: 3px; overflow: hidden; }
+.prospect-meter-fill { height: 100%; background: #5fc83b; border-radius: 3px; }
+.prospect-meter-val { width: 22px; text-align: right; color: #ccc; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.prospect-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 10.5px; color: #a3a4a8; }
+.prospect-facts b { color: #ccc; font-weight: 500; }
+.prospect-facts a { color: #8ce870; text-decoration: none; }
+.prospect-wins-label { font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #7d7e83; margin: 14px 0 8px; }
+.prospect-wins { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.prospect-wins li { display: flex; gap: 8px; align-items: flex-start; color: #ccc; font-size: 11.5px; }
+.prospect-wins li::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: #5fc83b; margin-top: 5px; flex-shrink: 0; }
+@media (max-width: 640px) {
+  .prospect-score-top { flex-direction: column; align-items: flex-start; }
 }
 .prospect-outcome-select {
   background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
