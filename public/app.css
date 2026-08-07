@@ -77,6 +77,7 @@ header {
 .import-btn-wrap { padding: 10px 12px; border-top: 1px solid #1e1e1e; }
 .import-btn-wrap button { width: 100%; padding: 7px; font-size: 12px; color: #666; background: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a; transition: color 0.12s, border-color 0.12s; }
 .import-btn-wrap button:hover { color: #ccc; border-color: #444; }
+.import-btn-wrap button + button { margin-top: 6px; }
 
 /* ── Tags sidebar filter ────────────────────────────────────── */
 .tags-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px; border-bottom: 1px solid #1a1a1a; }
@@ -1143,9 +1144,13 @@ header {
   border-bottom: 1px solid #1c1c1c; flex-wrap: wrap;
 }
 .prospect-row:last-child { border-bottom: none; }
-.prospect-row-main { flex: 1; min-width: 140px; }
+.prospect-row-main { flex: 1; min-width: 140px; cursor: pointer; }
 .prospect-row-name { font-size: 13px; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .prospect-row-contact { font-size: 11px; color: #666; margin-top: 2px; }
+.prospect-row-notes {
+  flex-basis: 100%; font-size: 11px; color: #888; white-space: pre-wrap;
+  padding: 8px 0 2px; border-top: 1px dashed #222; margin-top: 6px;
+}
 .prospect-outcome-select {
   background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px;
   color: #ccc; font-size: 11px; padding: 5px 6px; font-family: inherit;

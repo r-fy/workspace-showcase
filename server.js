@@ -898,6 +898,27 @@ app.get('/api/prospect-lists/:id', auth, (req, res) => {
   res.json({ ...list, prospects });
 });
 
+// Fire-and-forget trigger for the "PROSPECTING WITH SPEED - OUTSCRAPER EDITION"
+// n8n workflow (id l53vzI7Uapu9JieD) — thin proxy so N8N_SCRAPE_WEBHOOK_URL
+// never ships to the browser. Results land later via the normal import route
+// above; this route doesn't wait for the scrape to finish.
+app.post('/api/prospect-lists/scrape', auth, async (req, res) => {
+  const query = String(req.body.query || '').trim();
+  if (!query) return res.status(400).json({ error: 'query required' });
+  if (!N8N_SCRAPE_WEBHOOK_URL) return res.status(503).json({ error: 'scrape trigger not configured' });
+  try {
+    const r = await fetch(N8N_SCRAPE_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    const data = await r.json().catch(() => ({}));
+    res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(502).json({ error: 'could not reach scrape trigger' });
+  }
+});
+
 // Hard delete, cascades its prospects — this tier has no trash tier of its own.
 app.delete('/api/prospect-lists/:id', auth, (req, res) => {
   const list = db.prepare('SELECT id FROM prospect_lists WHERE id=? AND user_id=?').get(req.params.id, req.userId);
@@ -1088,6 +1109,11 @@ app.put('/api/eisenhower/:date', auth, (req, res) => {
 const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY || '';
 const INSTANTLY_BASE = 'https://api.instantly.ai/api/v2';
 if (!INSTANTLY_API_KEY) console.warn('cold email pull disabled — INSTANTLY_API_KEY not configured');
+
+// n8n webhook URL that kicks off the Outscraper prospecting workflow — see
+// POST /api/prospect-lists/scrape below. Never logged, never sent to the client.
+const N8N_SCRAPE_WEBHOOK_URL = process.env.N8N_SCRAPE_WEBHOOK_URL || '';
+if (!N8N_SCRAPE_WEBHOOK_URL) console.warn('scrape-new-prospects button disabled — N8N_SCRAPE_WEBHOOK_URL not configured');
 
 async function instantlyGet(path) {
   const res = await fetch(INSTANTLY_BASE + path, { headers: { Authorization: 'Bearer ' + INSTANTLY_API_KEY } });

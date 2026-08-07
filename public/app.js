@@ -4643,6 +4643,7 @@ document.getElementById('new-call-btn').addEventListener('click', () => {
   setTimeout(() => document.getElementById('dial-number')?.focus(), 50);
 });
 document.getElementById('prospect-new-list-btn').addEventListener('click', newProspectList);
+document.getElementById('prospect-scrape-btn').addEventListener('click', scrapeNewProspects);
 document.getElementById('prospect-import-btn').addEventListener('click', openProspectImportModal);
 document.getElementById('prospect-import-close').addEventListener('click', closeProspectImportModal);
 document.getElementById('prospect-import-cancel').addEventListener('click', closeProspectImportModal);
@@ -5221,6 +5222,14 @@ async function newProspectList() {
   openProspectList(list.id);
 }
 
+async function scrapeNewProspects() {
+  const query = prompt('Search phrase (e.g. "roofers near me in Anaheim, California"):');
+  if (!query || !query.trim()) return;
+  try { await apiCall('POST', '/prospect-lists/scrape', { query: query.trim() }); }
+  catch (e) { toast('Could not start scrape'); return; }
+  toast("Scrape started — check back in a few minutes, it'll show up in your list picker.");
+}
+
 async function openProspectList(id) {
   let list;
   try { list = await apiCall('GET', '/prospect-lists/' + id); } catch (e) { toast('Could not load list'); return; }
@@ -5245,7 +5254,7 @@ function renderProspectListView() {
       ? `<button class="prospect-promote-btn promoted" data-open-lead="${p.promoted_lead_id}">✓ Lead</button>`
       : `<button class="prospect-promote-btn" data-promote-id="${p.id}">Promote</button>`;
     return `<div class="prospect-row" data-id="${p.id}">
-      <div class="prospect-row-main">
+      <div class="prospect-row-main" data-toggle-notes="${p.id}">
         <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}</div>
         <div class="prospect-row-contact">${escHtml(contact)}${p.city ? ' · ' + escHtml(p.city) : ''}</div>
       </div>
@@ -5255,6 +5264,7 @@ function renderProspectListView() {
         ${promoteBtn}
         <button class="prospect-del-btn" data-del-id="${p.id}" title="Delete row">✕</button>
       </div>
+      ${p.notes ? `<div class="prospect-row-notes hidden" data-notes-id="${p.id}">${escHtml(p.notes)}</div>` : ''}
     </div>`;
   }).join('') || '<div class="agenda-empty">No prospects yet — Import to add some.</div>';
 
@@ -5275,6 +5285,10 @@ function renderProspectListView() {
     btn.addEventListener('click', () => { switchTab('crm'); openLead(btn.dataset.openLead); }));
   el.querySelectorAll('[data-del-id]').forEach(btn =>
     btn.addEventListener('click', () => deleteProspectRow(btn.dataset.delId)));
+  el.querySelectorAll('[data-toggle-notes]').forEach(main =>
+    main.addEventListener('click', () => {
+      document.querySelector(`.prospect-row-notes[data-notes-id="${main.dataset.toggleNotes}"]`)?.classList.toggle('hidden');
+    }));
   document.getElementById('prospect-list-del-btn')?.addEventListener('click', deleteProspectListActive);
 }
 
