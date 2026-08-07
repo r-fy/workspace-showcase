@@ -321,6 +321,28 @@ header {
 .no-board-msg button { padding: 8px 20px; border: 1px solid #2a2a2a; border-radius: 6px; color: #666; font-size: 13px; transition: all 0.12s; }
 .no-board-msg button:hover { border-color: #555; color: #ccc; }
 
+/* ── Top 3 tray ─────────────────────────────────────────────── */
+/* Stacks above the horizontal column strip inside #kanban-area (which is
+   itself display:flex row via inline style — this wrapper flips it to column). */
+.kanban-outer { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.kanban-outer .kanban-board { flex: 1; }
+.top3-tray { flex-shrink: 0; padding: 16px 16px 0; }
+.top3-col {
+  background: #1a1408; border: 1px solid #4a3410; border-radius: 8px;
+}
+.top3-header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.top3-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: #f5a623; flex: 1; }
+.top3-count { font-size: 11px; color: #a67a2e; }
+.top3-tasks {
+  display: flex; flex-wrap: wrap; gap: 10px; padding: 0 12px 12px; min-height: 60px;
+}
+.top3-tasks.drop-active { background: rgba(245,166,35,0.08); border-radius: 4px; outline: 1px dashed #4a3410; }
+.task-card-top3 {
+  width: 300px; flex-shrink: 0; padding: 14px 16px; border-color: #3a2a10; background: #201808;
+}
+.task-card-top3:hover { border-color: #f5a623; background: #241a08; }
+.task-card-top3 .task-title { font-size: 15px; }
+
 /* ── Task modal ─────────────────────────────────────────────── */
 #task-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 500; }
 .modal-box { width: 580px; max-width: 95vw; max-height: 88vh; background: #161616; border: 1px solid #2a2a2a; border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; }
@@ -555,6 +577,8 @@ header {
     scroll-snap-align: start;
     flex-shrink: 0;
   }
+  .top3-tray { padding: 12px 12px 0; }
+  .task-card-top3 { width: 100%; }
   .add-col-card { display: none; }
   .mobile-col-nav { display: flex; }
 

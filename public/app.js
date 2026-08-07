@@ -3548,26 +3548,33 @@ async function loadBoardOffline(id) {
 function updateMobileColNav() {
   const nav = document.getElementById('mobile-col-nav');
   if (!nav) return;
-  const show = isMobile() && currentBoardData.length > 0;
+  const cols = nonTop3Cols();
+  const show = isMobile() && cols.length > 0;
   nav.style.display = show ? 'flex' : 'none';
   if (!show) return;
-  const col = currentBoardData[mobileColIdx];
+  const col = cols[mobileColIdx];
   const label = document.getElementById('col-nav-label');
-  if (label && col) label.textContent = `${col.name}  ${mobileColIdx + 1}/${currentBoardData.length}`;
+  if (label && col) label.textContent = `${col.name}  ${mobileColIdx + 1}/${cols.length}`;
   const prevBtn = document.getElementById('prev-col-btn');
   const nextBtn = document.getElementById('next-col-btn');
   if (prevBtn) prevBtn.disabled = mobileColIdx === 0;
-  if (nextBtn) nextBtn.disabled = mobileColIdx >= currentBoardData.length - 1;
+  if (nextBtn) nextBtn.disabled = mobileColIdx >= cols.length - 1;
 }
 function goToMobileCol(idx) {
-  if (!currentBoardData.length) return;
-  mobileColIdx = Math.max(0, Math.min(idx, currentBoardData.length - 1));
+  const cols = nonTop3Cols();
+  if (!cols.length) return;
+  mobileColIdx = Math.max(0, Math.min(idx, cols.length - 1));
   const board = document.getElementById('kanban-board');
   if (board) board.scrollLeft = mobileColIdx * board.clientWidth;
   updateMobileColNav();
 }
 
 // ── Kanban render ──────────────────────────────────────────────
+// The Top 3 tray (kind='top3') is a real column server-side, but it's kept out
+// of the horizontal column strip and rendered as its own pinned row instead.
+function nonTop3Cols() { return currentBoardData.filter(c => c.kind !== 'top3'); }
+function getTop3Col() { return currentBoardData.find(c => c.kind === 'top3'); }
+
 function renderKanban() {
   const area = document.getElementById('kanban-area');
   renderTaskTagsBar();
@@ -3581,14 +3588,18 @@ function renderKanban() {
     document.getElementById('first-board-btn')?.addEventListener('click', promptNewBoard);
     return;
   }
-  if (!currentBoardData.length) {
+  const cols = nonTop3Cols();
+  if (!cols.length) {
     area.innerHTML = `<div class="no-board-msg"><span>No columns yet.</span><button id="first-col-btn">+ Add a column</button></div>`;
     document.getElementById('first-col-btn')?.addEventListener('click', promptNewColumn);
     return;
   }
-  area.innerHTML = `<div class="kanban-board" id="kanban-board"></div>`;
+  area.innerHTML = `<div class="kanban-outer"><div class="top3-tray" id="top3-tray"></div><div class="kanban-board" id="kanban-board"></div></div>`;
+  const top3 = getTop3Col();
+  if (top3) document.getElementById('top3-tray').appendChild(createTop3El(top3));
+
   const board = document.getElementById('kanban-board');
-  currentBoardData.forEach(col => board.appendChild(createColEl(col)));
+  cols.forEach(col => board.appendChild(createColEl(col)));
   const addCard = document.createElement('div');
   addCard.className = 'add-col-card'; addCard.textContent = '+ Add column';
   addCard.addEventListener('click', promptNewColumn);
@@ -3696,6 +3707,41 @@ function createColEl(col) {
   return el;
 }
 
+// Top 3 tray: same drag-in/drag-out/reorder mechanics as a real column
+// (it IS one, kind='top3') — just rendered separately with bigger cards and
+// no rename/delete controls. The 3-item cap is enforced centrally in reorderTask.
+function createTop3El(col) {
+  const visibleTasks = activeTaskTag ? col.tasks.filter(t => taskTags(t).includes(activeTaskTag)) : col.tasks;
+  const el = document.createElement('div');
+  el.className = 'top3-col';
+  el.dataset.colId = col.id;
+  el.innerHTML = `
+    <div class="top3-header">
+      <span class="top3-label">🔥 Top 3</span>
+      <span class="top3-count">${col.tasks.length}/3</span>
+      <button class="icon-btn add-task-btn" title="Add task">+</button>
+    </div>
+    <div class="top3-tasks" id="tasks-${col.id}" data-col-id="${col.id}"></div>
+  `;
+  el.querySelector('.add-task-btn').addEventListener('click', () => openNewTaskModal(col.id));
+
+  const tasksList = el.querySelector('.top3-tasks');
+  tasksList.addEventListener('dragover', e => {
+    if (Array.from(e.dataTransfer.types).includes('col-drag')) return;
+    e.preventDefault(); e.stopPropagation(); tasksList.classList.add('drop-active');
+  });
+  tasksList.addEventListener('dragleave', e => { if (!tasksList.contains(e.relatedTarget)) tasksList.classList.remove('drop-active'); });
+  tasksList.addEventListener('drop', e => {
+    if (Array.from(e.dataTransfer.types).includes('col-drag')) return;
+    e.preventDefault(); e.stopPropagation(); tasksList.classList.remove('drop-active');
+    const taskId = e.dataTransfer.getData('text/plain');
+    if (taskId) reorderTask(taskId, col.id, null, false);
+  });
+
+  visibleTasks.forEach(task => tasksList.appendChild(createTaskEl(task, col, true)));
+  return el;
+}
+
 async function reorderColumns(fromId, toId, insertBefore) {
   const fi = currentBoardData.findIndex(c=>c.id===fromId), ti = currentBoardData.findIndex(c=>c.id===toId);
   if (fi<0||ti<0) return;
@@ -3742,14 +3788,18 @@ async function reorderNotes(fromId, toId, insertBefore) {
 }
 
 async function reorderTask(taskId, targetColId, refTaskId, insertBefore) {
+  const targetCol = currentBoardData.find(c => c.id === targetColId);
+  if (!targetCol) return;
+  if (targetCol.kind === 'top3' && targetCol.tasks.length >= 3 && !targetCol.tasks.some(t => t.id === taskId)) {
+    toast('Top 3 is full — remove one first');
+    return;
+  }
   let movedTask = null;
   for (const c of currentBoardData) {
     const idx = c.tasks.findIndex(t => t.id === taskId);
     if (idx >= 0) { [movedTask] = c.tasks.splice(idx, 1); movedTask.column_id = targetColId; break; }
   }
   if (!movedTask) return;
-  const targetCol = currentBoardData.find(c => c.id === targetColId);
-  if (!targetCol) return;
   const refIdx = refTaskId ? targetCol.tasks.findIndex(t => t.id === refTaskId) : -1;
   const insertIdx = refIdx >= 0 ? (insertBefore ? refIdx : refIdx + 1) : targetCol.tasks.length;
   targetCol.tasks.splice(insertIdx, 0, movedTask);
@@ -3788,10 +3838,10 @@ async function uploadImage(file) {
   return data.url;
 }
 
-function createTaskEl(task, col) {
+function createTaskEl(task, col, isTop3) {
   const inDone = isDoneCol(col);
   const el = document.createElement('div');
-  el.className = 'task-card' + (selectedTasks.has(task.id) ? ' selected' : '');
+  el.className = 'task-card' + (isTop3 ? ' task-card-top3' : '') + (selectedTasks.has(task.id) ? ' selected' : '');
   el.dataset.taskId = task.id;
   el.setAttribute('draggable', 'true');
   const checks = countTaskChecks(task.description);
@@ -3917,9 +3967,12 @@ async function bulkDeleteTasks() {
 function populateColSelectForBoard(boardId, colId) {
   const sel = document.getElementById('modal-col-select');
   if (!sel) return;
-  const cols = boardId === currentBoardId
+  // Top 3 is drag-only for getting IN — but if the task is already parked there,
+  // keep it as the shown option so a plain title edit + Save doesn't bump it out.
+  const cols = (boardId === currentBoardId
     ? currentBoardData.slice()
-    : allColumns.filter(c => c.board_id === boardId).sort((a, b) => a.position - b.position);
+    : allColumns.filter(c => c.board_id === boardId).sort((a, b) => a.position - b.position)
+  ).filter(c => c.kind !== 'top3' || c.id === colId);
   sel.innerHTML = cols.map(c =>
     `<option value="${c.id}"${c.id === colId ? ' selected' : ''}>${escHtml(c.name)}</option>`
   ).join('');

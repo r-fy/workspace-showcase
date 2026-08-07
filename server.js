@@ -122,6 +122,8 @@ try { db.exec(`ALTER TABLE tasks   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'own
 // Claude mark: flags a task as greenlit for Claude Code to work on (read via direct DB query)
 try { db.exec(`ALTER TABLE tasks ADD COLUMN claude_marked INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
 try { db.exec(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+// Top 3 tray: a fixed per-board column (kind='top3') for pinning up to 3 urgent tasks.
+try { db.exec(`ALTER TABLE columns ADD COLUMN kind TEXT DEFAULT NULL`); } catch(e) {}
 try { db.exec(`ALTER TABLE notes ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
 // Initialize note positions (newest first) when all are at the default 0
 {
@@ -491,6 +493,26 @@ app.use('/uploads', uploadsAuth, express.static(UPLOADS_DIR));
 
 function uid() { return crypto.randomBytes(8).toString('hex'); }
 function now() { return Date.now(); }
+
+// Backfill: give every existing board a Top 3 tray column if it doesn't have one yet
+// (new boards get theirs in POST /api/boards). position=-1 is cosmetic only — the
+// frontend identifies this column by kind='top3', not by position.
+{
+  const missing = db.prepare(`SELECT id, user_id FROM boards WHERE id NOT IN (SELECT board_id FROM columns WHERE kind='top3')`).all();
+  const insTop3 = db.prepare('INSERT INTO columns (id, board_id, name, position, user_id, kind) VALUES (?, ?, ?, -1, ?, ?)');
+  missing.forEach(b => insTop3.run(uid(), b.id, 'Top 3', b.user_id, 'top3'));
+}
+
+// Top 3 is capped at 3 tasks — check before letting a task land in a top3 column.
+// excludeTaskId lets a task already in the tray (being reordered) skip its own count.
+function top3CapExceeded(columnId, userId, excludeTaskId) {
+  const col = db.prepare('SELECT kind FROM columns WHERE id=? AND user_id=?').get(columnId, userId);
+  if (!col || col.kind !== 'top3') return false;
+  const count = db.prepare(
+    'SELECT COUNT(*) AS c FROM tasks WHERE column_id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL AND id != ?'
+  ).get(columnId, userId, excludeTaskId || '').c;
+  return count >= 3;
+}
 
 // Shared by leads.website_domain (write time) and reply auto-matching (read
 // time) so both sides normalize identically — see CRM-UNIFICATION-PLAN.md §3.
@@ -1138,6 +1160,8 @@ app.post('/api/boards', auth, (req, res) => {
     const ins = db.prepare('INSERT INTO columns (id, board_id, name, position, user_id) VALUES (?, ?, ?, ?, ?)');
     db.transaction(() => cols.forEach((c, i) => ins.run(uid(), id, c, i, req.userId)))();
   }
+  db.prepare('INSERT INTO columns (id, board_id, name, position, user_id, kind) VALUES (?, ?, ?, -1, ?, ?)')
+    .run(uid(), id, 'Top 3', req.userId, 'top3');
   res.json(db.prepare('SELECT * FROM boards WHERE id = ?').get(id));
 });
 
@@ -1196,6 +1220,7 @@ app.delete('/api/columns/:id', auth, (req, res) => {
 app.post('/api/tasks', auth, (req, res) => {
   const { column_id, title, description = '', claude_marked = 0, tags = '' } = req.body;
   if (!column_id || !title) return res.status(400).json({ error: 'column_id and title required' });
+  if (top3CapExceeded(column_id, req.userId, null)) return res.status(400).json({ error: 'Top 3 is full' });
   const maxPos = db.prepare('SELECT COALESCE(MAX(position),-1) AS m FROM tasks WHERE column_id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(column_id, req.userId).m;
   const id = uid(), t = now();
   db.prepare('INSERT INTO tasks (id, column_id, title, description, position, claude_marked, tags, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -1211,6 +1236,9 @@ app.put('/api/tasks/:id', auth, (req, res) => {
     column_id = task.column_id, position = task.position,
     claude_marked = task.claude_marked, tags = task.tags
   } = req.body;
+  if (column_id !== task.column_id && top3CapExceeded(column_id, req.userId, task.id)) {
+    return res.status(400).json({ error: 'Top 3 is full' });
+  }
   db.prepare('UPDATE tasks SET title=?, description=?, column_id=?, position=?, claude_marked=?, tags=?, updated_at=? WHERE id=? AND user_id=?')
     .run(title, description, column_id, position, claude_marked ? 1 : 0, tags, now(), req.params.id, req.userId);
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id));
