@@ -328,7 +328,7 @@ const NAV_TAB_LABELS = {
   todo: 'To Do',
   notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
   crm: 'CRM', dialer: 'Dialer', 'daily-tasks': 'TRW Daily Tasks',
-  tourist: 'Tourist', 'cold-email': 'Cold Email',
+  tourist: 'Tourist', 'cold-email': 'Cold Email', archive: 'Archive',
 };
 // Tab renames across versions: the old Leads/Audits/Follow-ups tabs collapsed
 // into CRM (v160); the old Calls tab is the standalone Dialer again (v162).
@@ -444,6 +444,7 @@ function switchTab(tab) {
   document.getElementById('expenses-view')?.classList.toggle('hidden', tab !== 'expenses');
   document.getElementById('calendar-view')?.classList.toggle('hidden', tab !== 'calendar');
   document.getElementById('trash-view')?.classList.toggle('hidden', tab !== 'trash');
+  document.getElementById('archive-view')?.classList.toggle('hidden', tab !== 'archive');
   document.getElementById('crm-view')?.classList.toggle('hidden', tab !== 'crm');
   document.getElementById('dialer-view')?.classList.toggle('hidden', tab !== 'dialer');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
@@ -460,6 +461,7 @@ function switchTab(tab) {
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'todo') loadEisenhowerDay();
   if (tab === 'trash') loadTrash();
+  if (tab === 'archive') loadArchive();
   if (tab === 'expenses') loadExpenses();
   if (tab === 'calendar') loadCalendar();
   if (tab === 'crm') loadCrm();
@@ -772,6 +774,68 @@ async function loadTrash() {
     renderTrashView(data);
   } catch(e) {
     if (content) content.innerHTML = '<div class="trash-empty">Could not load trash — check connection</div>';
+  }
+}
+
+// ── Archive ────────────────────────────────────────────────────
+function renderArchiveView(data) {
+  const content = document.getElementById('archive-content');
+  if (!content) return;
+  const notes = data.notes || [];
+  const tasks = data.tasks || [];
+  const reminders = data.reminders || [];
+  const boards = data.boards || [];
+  if (!notes.length && !tasks.length && !reminders.length && !boards.length) {
+    content.innerHTML = '<div class="trash-empty">Archive is empty</div>';
+    return;
+  }
+  const section = (label, type, items, nameKey) => !items.length ? '' :
+    `<div class="trash-section-label">${label}</div>` +
+    items.map(it => `<div class="trash-item">
+      <div class="trash-item-info">
+        <span class="trash-item-title">${escHtml(it[nameKey])}</span>
+        <span class="trash-item-date">Archived ${fmtDate(it.archived_at)}</span>
+      </div>
+      <div class="trash-item-actions">
+        <button class="trash-restore-btn" data-type="${type}" data-id="${it.id}">Restore</button>
+        <button class="trash-perm-btn" data-type="${type}" data-id="${it.id}">Delete forever</button>
+      </div>
+    </div>`).join('');
+  content.innerHTML =
+    section('Notes', 'note', notes, 'title') +
+    section('Projects', 'task', tasks, 'title') +
+    section('Reminders', 'reminder', reminders, 'title') +
+    section('Boards', 'board', boards, 'name');
+  content.querySelectorAll('.trash-restore-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await apiCall('POST', '/archive/restore', { type: btn.dataset.type, id: btn.dataset.id });
+        await fullSync(); loadArchive(); toast('Restored');
+      } catch(e) { toast('Could not restore — check connection'); }
+    });
+  });
+  content.querySelectorAll('.trash-perm-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const msg = btn.dataset.type === 'board'
+        ? 'Permanently delete this board and all its data? This cannot be undone.'
+        : 'Delete forever? This moves it to Trash for final cleanup.';
+      if (!confirm(msg)) return;
+      try {
+        await apiCall('POST', '/archive/delete', { type: btn.dataset.type, id: btn.dataset.id });
+        loadArchive(); toast(btn.dataset.type === 'board' ? 'Board deleted' : 'Moved to Trash');
+      } catch(e) { toast('Could not delete — check connection'); }
+    });
+  });
+}
+
+async function loadArchive() {
+  const content = document.getElementById('archive-content');
+  if (content) content.innerHTML = '<div class="trash-empty">Loading…</div>';
+  try {
+    const data = await apiFetch('GET', '/archive');
+    renderArchiveView(data);
+  } catch(e) {
+    if (content) content.innerHTML = '<div class="trash-empty">Could not load archive — check connection</div>';
   }
 }
 
@@ -1705,7 +1769,7 @@ function renderAgenda() {
           ${r.description ? `<div class="agenda-item-desc">${escHtml(r.description)}</div>` : ''}
         </div>
         ${!opts.done ? `<button class="agenda-done-btn" data-id="${r.id}" title="Mark done">✓</button>` : ''}
-        <button class="agenda-del-btn" data-id="${r.id}" title="Delete">🗑</button>
+        <button class="agenda-del-btn" data-id="${r.id}" title="Archive">🗄</button>
       </div>`).join('');
 
   list.innerHTML =
@@ -1723,7 +1787,7 @@ function renderAgenda() {
     });
   });
   list.querySelectorAll('.agenda-del-btn').forEach(btn => {
-    btn.addEventListener('click', e => { e.stopPropagation(); deleteReminder(btn.dataset.id); });
+    btn.addEventListener('click', e => { e.stopPropagation(); archiveReminder(btn.dataset.id); });
   });
   document.getElementById('clear-completed-btn')?.addEventListener('click', e => {
     e.stopPropagation(); clearCompleted();
@@ -1928,16 +1992,16 @@ async function saveReminder() {
   }
 }
 
-// Called with an explicit id from the inline agenda 🗑, without one from the
-// modal's Delete button (falls back to the open reminder).
-async function deleteReminder(id) {
+// Called with an explicit id from the inline agenda 🗄, without one from the
+// modal's Archive button (falls back to the open reminder).
+async function archiveReminder(id) {
   id = typeof id === 'string' ? id : currentReminderId;
   if (!id) return;
-  if (!confirm('Delete this reminder?')) return;
+  if (!confirm('Archive this reminder?')) return;
   reminders = reminders.filter(r => r.id !== id);
   if (id === currentReminderId) closeReminderModal();
   renderCalendarActive();
-  try { await apiCall('DELETE', '/reminders/' + id); } catch(e) {}
+  try { await apiCall('POST', '/reminders/' + id + '/archive'); } catch(e) {}
 }
 
 async function clearCompleted() {
@@ -3155,7 +3219,7 @@ function renderEditor(note) {
         <div class="color-palette" id="color-palette" hidden></div>
       </div>
       <button class="share-note-btn tb-btn" id="share-note-btn" title="Share / export"><span class="tb-icon">↗</span><span class="tb-label">Share</span></button>
-      <button class="del-note-btn tb-btn" id="del-note-btn" title="Delete note"><span class="tb-icon">🗑</span><span class="tb-label">Delete</span></button>
+      <button class="del-note-btn tb-btn" id="del-note-btn" title="Archive note"><span class="tb-icon">🗄</span><span class="tb-label">Archive</span></button>
       <button class="toc-bar-btn" id="toc-bar-btn" title="Toggle outline" style="display:none">▤</button>
     </div>
     <div class="editor-body">
@@ -3186,7 +3250,7 @@ function renderEditor(note) {
   document.getElementById('editor-title').addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); noteEditor?.focus(); }
   });
-  document.getElementById('del-note-btn').addEventListener('click', deleteCurrentNote);
+  document.getElementById('del-note-btn').addEventListener('click', archiveCurrentNote);
 }
 
 function saveNoteDebounced() { clearTimeout(saveNoteTimer); saveNoteTimer = setTimeout(saveCurrentNote, 600); }
@@ -3253,15 +3317,15 @@ function shareCurrentNote() {
   toast('Saved as ' + filename);
 }
 
-async function deleteCurrentNote() {
+async function archiveCurrentNote() {
   if (!currentNoteId) { toast('No note open'); return; }
-  if (!confirm('Delete this note?')) return;
+  if (!confirm('Archive this note?')) return;
   const id = currentNoteId;
   notes = notes.filter(n => n.id !== id); delete notesFullCache[id];
   await idbDelete('notes', id); currentNoteId = null;
   WEditor.destroy(noteEditor); noteEditor = null;
   renderNotesList(); renderTagsBar(); // renderNotesList repopulates the empty-state grid
-  try { await apiCall('DELETE', '/notes/'+id); } catch(e) {}
+  try { await apiCall('POST', '/notes/'+id+'/archive'); } catch(e) {}
 }
 
 async function newNote() {
@@ -3407,7 +3471,7 @@ function renderBoardsBar() {
   list.innerHTML = boards.map(b => `
     <div class="board-item${b.id===currentBoardId?' active':''}" draggable="true" data-bid="${b.id}">
       <span class="board-item-name">${escHtml(b.name)}</span>
-      <button class="board-item-del" data-id="${b.id}" title="Delete board">✕</button>
+      <button class="board-item-del" data-id="${b.id}" title="Archive board">🗄</button>
     </div>
   `).join('');
   list.querySelectorAll('.board-item').forEach(el => {
@@ -3436,7 +3500,7 @@ function renderBoardsBar() {
       e.preventDefault(); reorderBoards(fromId, el.dataset.bid, insertBefore);
     });
   });
-  list.querySelectorAll('.board-item-del').forEach(el => el.addEventListener('click', e => { e.stopPropagation(); deleteBoard(el.dataset.id); }));
+  list.querySelectorAll('.board-item-del').forEach(el => el.addEventListener('click', e => { e.stopPropagation(); archiveBoard(el.dataset.id); }));
 }
 
 async function promptRenameBoard(id) {
@@ -3449,18 +3513,18 @@ async function promptRenameBoard(id) {
   try { await apiCall('PUT', '/boards/' + id, { name: board.name }); } catch(e) { toast('Could not rename board'); }
 }
 
-async function deleteBoard(id) {
+async function archiveBoard(id) {
   const board = boards.find(b => b.id === id);
-  if (!board || !confirm(`Delete board "${board.name}" and all its data?`)) return;
+  if (!board || !confirm(`Archive board "${board.name}"?`)) return;
   boards = boards.filter(b => b.id !== id);
   if (currentBoardId === id) { currentBoardId = boards.length ? boards[0].id : null; currentBoardData = []; }
   await idbDelete('boards', id); renderBoardsBar();
   if (currentBoardId) await loadBoard(currentBoardId); else renderKanban();
-  try { await apiCall('DELETE', '/boards/'+id); } catch(e) {}
+  try { await apiCall('POST', '/boards/'+id+'/archive'); } catch(e) {}
 }
 async function deleteCurrentBoard() {
   if (!currentBoardId) { toast('No board selected'); return; }
-  deleteBoard(currentBoardId);
+  archiveBoard(currentBoardId);
 }
 async function selectBoard(id) {
   currentBoardId = id; selectedTasks.clear(); updateBulkActions(); activeTaskTag = null;
@@ -3841,12 +3905,12 @@ async function promptRenameCol(col) {
   try { await apiCall('PUT','/columns/'+col.id,{name:name.trim()}); } catch(e) {}
 }
 async function bulkDeleteTasks() {
-  if(!selectedTasks.size||!confirm(`Delete ${selectedTasks.size} task(s)?`)) return;
+  if(!selectedTasks.size||!confirm(`Archive ${selectedTasks.size} task(s)?`)) return;
   const ids=[...selectedTasks];
   for(const col of currentBoardData) col.tasks=col.tasks.filter(t=>!selectedTasks.has(t.id));
   for(const id of ids) await idbDelete('tasks',id);
   selectedTasks.clear(); updateBulkActions(); renderKanban();
-  try { await apiCall('DELETE','/tasks',{ids}); } catch(e) {}
+  try { await apiCall('POST','/tasks/archive',{ids}); } catch(e) {}
 }
 
 // ── Task Modal ─────────────────────────────────────────────────
@@ -3978,14 +4042,14 @@ async function saveTaskModal() {
   destroyTaskModal();
 }
 
-async function deleteTaskFromModal() {
+async function archiveTaskFromModal() {
   if (modalTaskId === 'new') { destroyTaskModal(); return; }
-  if (!confirm('Delete this task?')) return;
+  if (!confirm('Archive this task?')) return;
   const id = modalTaskId;
   for (const col of currentBoardData) col.tasks = col.tasks.filter(t => t.id !== id);
   selectedTasks.delete(id); updateBulkActions(); destroyTaskModal();
   await idbDelete('tasks', id); renderKanban();
-  try { await apiCall('DELETE', '/tasks/'+id); } catch(e) {}
+  try { await apiCall('POST', '/tasks/'+id+'/archive'); } catch(e) {}
 }
 
 async function closeTaskModal() {
@@ -4056,6 +4120,7 @@ document.getElementById('pin-back').addEventListener('click', pinBack);
 document.getElementById('pin-ok').addEventListener('click', pinSubmit);
 document.getElementById('add-board-btn').addEventListener('click', promptNewBoard);
 document.getElementById('trash-btn').addEventListener('click', () => switchTab('trash'));
+document.getElementById('archive-btn').addEventListener('click', () => switchTab('archive'));
 document.getElementById('lock-btn').addEventListener('click', showLogin);
 document.addEventListener('keydown', e => {
   if (!document.getElementById('login-overlay').classList.contains('hidden')) {
@@ -4263,7 +4328,7 @@ CAL_SPLIT_MQ.addEventListener('change', () => { if (currentTab === 'calendar') r
 document.getElementById('reminder-modal-close').addEventListener('click', closeReminderModal);
 document.getElementById('reminder-modal-cancel').addEventListener('click', closeReminderModal);
 document.getElementById('reminder-modal-save').addEventListener('click', saveReminder);
-document.getElementById('reminder-modal-delete').addEventListener('click', deleteReminder);
+document.getElementById('reminder-modal-delete').addEventListener('click', archiveReminder);
 document.getElementById('reminder-modal').addEventListener('click', e => { if (e.target === document.getElementById('reminder-modal')) closeReminderModal(); });
 document.getElementById('reminder-modal').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('input:not([type="time"])')) { e.preventDefault(); saveReminder(); }
@@ -4533,7 +4598,7 @@ document.getElementById('cold-email-refresh-btn').addEventListener('click', e =>
 document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTasks);
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);
-document.getElementById('modal-delete').addEventListener('click',deleteTaskFromModal);
+document.getElementById('modal-delete').addEventListener('click',archiveTaskFromModal);
 document.getElementById('modal-claude-mark').addEventListener('click',()=>setClaudeMarkBtn(!modalClaudeMarked));
 document.getElementById('modal-board-select')?.addEventListener('change', e => {
   const colSel = document.getElementById('modal-col-select');

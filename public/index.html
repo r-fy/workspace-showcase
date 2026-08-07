@@ -185,6 +185,7 @@
         <div class="ce-campaign-list" id="ce-campaign-list"></div>
       </div>
       <div class="left-panel-footer">
+        <button class="icon-btn" id="archive-btn" title="Archive">🗄</button>
         <button class="icon-btn" id="trash-btn" title="Trash">🗑</button>
         <button class="icon-btn" id="lock-btn" title="Lock">🔒</button>
       </div>
@@ -285,6 +286,14 @@
         <button class="empty-trash-btn" id="empty-trash-btn">Empty trash</button>
       </div>
       <div id="trash-content" class="trash-content"></div>
+    </div>
+
+    <!-- Archive view -->
+    <div class="view hidden" id="archive-view" style="flex-direction:column;overflow-y:auto;">
+      <div class="trash-header">
+        <span class="trash-title">Archive</span>
+      </div>
+      <div id="archive-content" class="trash-content"></div>
     </div>
 
     <!-- Expenses view -->
@@ -498,7 +507,7 @@
       </div>
       <div id="bulk-actions" class="bulk-actions hidden">
         <span id="sel-count">0 selected</span>
-        <button class="danger-btn" id="bulk-delete-btn">Delete selected</button>
+        <button class="danger-btn" id="bulk-delete-btn">Archive selected</button>
         <button class="cancel-sel-btn" id="cancel-sel-btn">Cancel</button>
       </div>
       <div id="task-tags-bar" class="tags-bar" style="display:none"></div>
@@ -684,7 +693,7 @@
       </div>
     </div>
     <div class="expense-modal-footer">
-      <button class="del-task-btn" id="reminder-modal-delete">Delete</button>
+      <button class="del-task-btn" id="reminder-modal-delete">Archive</button>
       <div style="display:flex;gap:8px;">
         <button class="cancel-sel-btn" id="reminder-modal-cancel">Cancel</button>
         <button class="save-btn" id="reminder-modal-save">Save</button>
@@ -708,7 +717,7 @@
       <div id="modal-editor-mount"></div>
     </div>
     <div class="modal-footer">
-      <button class="del-task-btn" id="modal-delete">Delete</button>
+      <button class="del-task-btn" id="modal-delete">Archive</button>
       <div class="modal-move-selects">
         <select class="modal-board-select" id="modal-board-select" title="Move to board"></select>
         <select class="modal-col-select" id="modal-col-select" title="Move to column"></select>
@@ -761,6 +770,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=160"></script>
+<script src="/app.js?v=161"></script>
 </body>
 </html>
