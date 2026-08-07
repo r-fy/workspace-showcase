@@ -110,6 +110,10 @@ db.exec(`
 try { db.exec(`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 try { db.exec(`ALTER TABLE notes ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
 try { db.exec(`ALTER TABLE tasks ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
+// Archive: a separate hidden-but-recoverable state from Trash (deleted_at).
+try { db.exec(`ALTER TABLE notes ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE tasks ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE boards ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
 // Multi-user: scope all data by user_id (existing rows default to 'owner')
 try { db.exec(`ALTER TABLE notes   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
 try { db.exec(`ALTER TABLE boards  ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
@@ -184,6 +188,7 @@ db.exec(`
 // for — it re-arms automatically when next_fire_at advances.
 try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_minutes INTEGER DEFAULT NULL`); } catch(e) {}
 try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_fired_for INTEGER DEFAULT NULL`); } catch(e) {}
+try { db.exec(`ALTER TABLE reminders ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
 
 // Calls tab: one row per outbound call, written by the Twilio webhooks below.
 // Recordings stay on Twilio's storage — recording_sid is the pointer, audio is
@@ -1042,11 +1047,11 @@ app.get('/api/cold-email/status', auth, (req, res) => {
 
 // ── Notes ────────────────────────────────────────────────────
 app.get('/api/notes', auth, (req, res) => {
-  res.json(db.prepare('SELECT id, title, updated_at, position FROM notes WHERE deleted_at IS NULL AND user_id=? ORDER BY position ASC').all(req.userId));
+  res.json(db.prepare('SELECT id, title, updated_at, position FROM notes WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? ORDER BY position ASC').all(req.userId));
 });
 
 app.get('/api/notes/:id', auth, (req, res) => {
-  const note = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  const note = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(req.params.id, req.userId);
   if (!note) return res.status(404).json({ error: 'Not found' });
   res.json(note);
 });
@@ -1054,7 +1059,7 @@ app.get('/api/notes/:id', auth, (req, res) => {
 app.post('/api/notes', auth, (req, res) => {
   const { title = 'Untitled', content = '' } = req.body;
   const id = uid(), t = now();
-  db.prepare('UPDATE notes SET position = position + 1 WHERE user_id=? AND deleted_at IS NULL').run(req.userId);
+  db.prepare('UPDATE notes SET position = position + 1 WHERE user_id=? AND deleted_at IS NULL AND archived_at IS NULL').run(req.userId);
   db.prepare('INSERT INTO notes (id, title, content, user_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
     .run(id, title, content, req.userId, t, t);
   res.json({ id, title, content, position: 0, created_at: t, updated_at: t });
@@ -1063,7 +1068,7 @@ app.post('/api/notes', auth, (req, res) => {
 app.put('/api/notes/:id', auth, (req, res) => {
   const { title, content, tags, position } = req.body;
   const t = now();
-  const n = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  const n = db.prepare('SELECT * FROM notes WHERE id = ? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(req.params.id, req.userId);
   if (!n) return res.status(404).json({ error: 'Not found' });
   if (position !== undefined && title === undefined && content === undefined && tags === undefined) {
     db.prepare('UPDATE notes SET position=? WHERE id=? AND user_id=?').run(position, req.params.id, req.userId);
@@ -1074,9 +1079,14 @@ app.put('/api/notes/:id', auth, (req, res) => {
   res.json(db.prepare('SELECT * FROM notes WHERE id = ?').get(req.params.id));
 });
 
-// Soft-delete note (moves to trash)
+// Soft-delete note (moves to trash) — only reachable now via the Archive tab's "Delete forever"
 app.delete('/api/notes/:id', auth, (req, res) => {
   db.prepare('UPDATE notes SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+app.post('/api/notes/:id/archive', auth, (req, res) => {
+  db.prepare('UPDATE notes SET archived_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
   res.json({ ok: true });
 });
 
@@ -1101,11 +1111,11 @@ app.post('/api/notes/import', auth, (req, res) => {
 
 // Full sync snapshot
 app.get('/api/sync', auth, (req, res) => {
-  const notes = db.prepare('SELECT * FROM notes WHERE deleted_at IS NULL AND user_id=? ORDER BY position ASC').all(req.userId);
-  const boards = db.prepare('SELECT * FROM boards WHERE user_id=? ORDER BY position').all(req.userId);
+  const notes = db.prepare('SELECT * FROM notes WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? ORDER BY position ASC').all(req.userId);
+  const boards = db.prepare('SELECT * FROM boards WHERE archived_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
   const columns = db.prepare('SELECT * FROM columns WHERE user_id=? ORDER BY position').all(req.userId);
-  const tasks = db.prepare('SELECT * FROM tasks WHERE deleted_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
-  const reminders = db.prepare('SELECT * FROM reminders WHERE deleted_at IS NULL AND user_id=? AND (completed_at IS NULL OR completed_at > ?) ORDER BY next_fire_at ASC')
+  const tasks = db.prepare('SELECT * FROM tasks WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
+  const reminders = db.prepare('SELECT * FROM reminders WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? AND (completed_at IS NULL OR completed_at > ?) ORDER BY next_fire_at ASC')
     .all(req.userId, now() - COMPLETED_KEEP_MS);
   // Newest 200 calls only — this rides the 2s poll, keep the payload bounded.
   const calls = db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId);
@@ -1114,7 +1124,7 @@ app.get('/api/sync', auth, (req, res) => {
 
 // ── Boards ────────────────────────────────────────────────────
 app.get('/api/boards', auth, (req, res) => {
-  res.json(db.prepare('SELECT * FROM boards WHERE user_id=? ORDER BY position, created_at').all(req.userId));
+  res.json(db.prepare('SELECT * FROM boards WHERE archived_at IS NULL AND user_id=? ORDER BY position, created_at').all(req.userId));
 });
 
 app.post('/api/boards', auth, (req, res) => {
@@ -1139,8 +1149,15 @@ app.put('/api/boards/:id', auth, (req, res) => {
   res.json(db.prepare('SELECT * FROM boards WHERE id = ?').get(req.params.id));
 });
 
+// Permanent hard-delete — boards have no trash tier, only reachable via the
+// Archive tab's "Delete forever" (archive first, then this).
 app.delete('/api/boards/:id', auth, (req, res) => {
   db.prepare('DELETE FROM boards WHERE id = ? AND user_id=?').run(req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+app.post('/api/boards/:id/archive', auth, (req, res) => {
+  db.prepare('UPDATE boards SET archived_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
   res.json({ ok: true });
 });
 
@@ -1148,7 +1165,7 @@ app.delete('/api/boards/:id', auth, (req, res) => {
 app.get('/api/boards/:boardId/columns', auth, (req, res) => {
   const cols = db.prepare('SELECT * FROM columns WHERE board_id=? AND user_id=? ORDER BY position').all(req.params.boardId, req.userId);
   const tasks = db.prepare(
-    'SELECT * FROM tasks WHERE deleted_at IS NULL AND user_id=? AND column_id IN (SELECT id FROM columns WHERE board_id=?) ORDER BY position'
+    'SELECT * FROM tasks WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? AND column_id IN (SELECT id FROM columns WHERE board_id=?) ORDER BY position'
   ).all(req.userId, req.params.boardId);
   res.json(cols.map(c => ({ ...c, tasks: tasks.filter(t => t.column_id === c.id) })));
 });
@@ -1179,7 +1196,7 @@ app.delete('/api/columns/:id', auth, (req, res) => {
 app.post('/api/tasks', auth, (req, res) => {
   const { column_id, title, description = '', claude_marked = 0, tags = '' } = req.body;
   if (!column_id || !title) return res.status(400).json({ error: 'column_id and title required' });
-  const maxPos = db.prepare('SELECT COALESCE(MAX(position),-1) AS m FROM tasks WHERE column_id=? AND user_id=? AND deleted_at IS NULL').get(column_id, req.userId).m;
+  const maxPos = db.prepare('SELECT COALESCE(MAX(position),-1) AS m FROM tasks WHERE column_id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(column_id, req.userId).m;
   const id = uid(), t = now();
   db.prepare('INSERT INTO tasks (id, column_id, title, description, position, claude_marked, tags, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, column_id, title, description, maxPos + 1, claude_marked ? 1 : 0, tags, req.userId, t, t);
@@ -1199,7 +1216,7 @@ app.put('/api/tasks/:id', auth, (req, res) => {
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id));
 });
 
-// Bulk soft-delete
+// Bulk soft-delete — only reachable now via the Archive tab's "Delete forever"
 app.delete('/api/tasks', auth, (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids array required' });
@@ -1209,9 +1226,23 @@ app.delete('/api/tasks', auth, (req, res) => {
   res.json({ deleted: ids.length });
 });
 
-// Soft-delete single task
+// Soft-delete single task — only reachable now via the Archive tab's "Delete forever"
 app.delete('/api/tasks/:id', auth, (req, res) => {
   db.prepare('UPDATE tasks SET deleted_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
+app.post('/api/tasks/archive', auth, (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids array required' });
+  const arc = db.prepare('UPDATE tasks SET archived_at=? WHERE id=? AND user_id=?');
+  const t = now();
+  db.transaction(() => ids.forEach(id => arc.run(t, id, req.userId)))();
+  res.json({ archived: ids.length });
+});
+
+app.post('/api/tasks/:id/archive', auth, (req, res) => {
+  db.prepare('UPDATE tasks SET archived_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
   res.json({ ok: true });
 });
 
@@ -1280,6 +1311,41 @@ app.delete('/api/trash/empty', auth, (req, res) => {
   db.prepare('DELETE FROM notes WHERE deleted_at IS NOT NULL AND user_id=?').run(req.userId);
   db.prepare('DELETE FROM tasks WHERE deleted_at IS NOT NULL AND user_id=?').run(req.userId);
   db.prepare('DELETE FROM reminders WHERE deleted_at IS NOT NULL AND user_id=?').run(req.userId);
+  res.json({ ok: true });
+});
+
+// ── Archive ───────────────────────────────────────────────────
+// Hidden-but-recoverable state, separate from Trash. Notes/tasks/reminders/
+// boards all archive here; "delete forever" hands notes/tasks/reminders off
+// to the existing Trash (deleted_at) so restore/empty logic isn't duplicated.
+// Boards have no trash tier, so their "delete forever" is a real hard delete.
+app.get('/api/archive', auth, (req, res) => {
+  const notes = db.prepare('SELECT id, title, archived_at FROM notes WHERE archived_at IS NOT NULL AND deleted_at IS NULL AND user_id=? ORDER BY archived_at DESC').all(req.userId);
+  const tasks = db.prepare('SELECT id, title, column_id, archived_at FROM tasks WHERE archived_at IS NOT NULL AND deleted_at IS NULL AND user_id=? ORDER BY archived_at DESC').all(req.userId);
+  const reminders = db.prepare('SELECT id, title, archived_at FROM reminders WHERE archived_at IS NOT NULL AND deleted_at IS NULL AND user_id=? ORDER BY archived_at DESC').all(req.userId);
+  const boards = db.prepare('SELECT id, name, archived_at FROM boards WHERE archived_at IS NOT NULL AND user_id=? ORDER BY archived_at DESC').all(req.userId);
+  res.json({ notes, tasks, reminders, boards });
+});
+
+app.post('/api/archive/restore', auth, (req, res) => {
+  const { type, id } = req.body;
+  if (!type || !id) return res.status(400).json({ error: 'type and id required' });
+  if (type === 'note') db.prepare('UPDATE notes SET archived_at=NULL WHERE id=? AND user_id=?').run(id, req.userId);
+  else if (type === 'task') db.prepare('UPDATE tasks SET archived_at=NULL WHERE id=? AND user_id=?').run(id, req.userId);
+  else if (type === 'reminder') db.prepare('UPDATE reminders SET archived_at=NULL WHERE id=? AND user_id=?').run(id, req.userId);
+  else if (type === 'board') db.prepare('UPDATE boards SET archived_at=NULL WHERE id=? AND user_id=?').run(id, req.userId);
+  else return res.status(400).json({ error: 'type must be note, task, reminder, or board' });
+  res.json({ ok: true });
+});
+
+app.post('/api/archive/delete', auth, (req, res) => {
+  const { type, id } = req.body;
+  if (!type || !id) return res.status(400).json({ error: 'type and id required' });
+  if (type === 'note') db.prepare('UPDATE notes SET deleted_at=?, archived_at=NULL WHERE id=? AND user_id=?').run(now(), id, req.userId);
+  else if (type === 'task') db.prepare('UPDATE tasks SET deleted_at=?, archived_at=NULL WHERE id=? AND user_id=?').run(now(), id, req.userId);
+  else if (type === 'reminder') db.prepare('UPDATE reminders SET deleted_at=?, archived_at=NULL WHERE id=? AND user_id=?').run(now(), id, req.userId);
+  else if (type === 'board') db.prepare('DELETE FROM boards WHERE id=? AND user_id=?').run(id, req.userId);
+  else return res.status(400).json({ error: 'type must be note, task, reminder, or board' });
   res.json({ ok: true });
 });
 
@@ -1422,7 +1488,7 @@ function reminderFields(body) {
 const COMPLETED_KEEP_MS = 60 * 86400000;
 
 app.get('/api/reminders', auth, (req, res) => {
-  res.json(db.prepare('SELECT * FROM reminders WHERE user_id=? AND deleted_at IS NULL AND (completed_at IS NULL OR completed_at > ?) ORDER BY next_fire_at ASC')
+  res.json(db.prepare('SELECT * FROM reminders WHERE user_id=? AND deleted_at IS NULL AND archived_at IS NULL AND (completed_at IS NULL OR completed_at > ?) ORDER BY next_fire_at ASC')
     .all(req.userId, now() - COMPLETED_KEEP_MS));
 });
 
@@ -1442,7 +1508,7 @@ app.post('/api/reminders', auth, (req, res) => {
 });
 
 app.put('/api/reminders/:id', auth, (req, res) => {
-  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(req.params.id, req.userId);
   if (!r) return res.status(404).json({ error: 'Not found' });
   const f = reminderFields({ ...r, ...req.body });
   if (f.error) return res.status(400).json({ error: f.error });
@@ -1479,8 +1545,13 @@ app.delete('/api/reminders/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/reminders/:id/archive', auth, (req, res) => {
+  db.prepare('UPDATE reminders SET archived_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
 app.post('/api/reminders/:id/complete', auth, (req, res) => {
-  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(req.params.id, req.userId);
   if (!r) return res.status(404).json({ error: 'Not found' });
   // One-off, or a recurring series already exhausted past its end date: done for good.
   if (r.recur_type === 'none' || r.next_fire_at === null) {
@@ -1500,7 +1571,7 @@ app.post('/api/reminders/:id/complete', auth, (req, res) => {
 });
 
 app.post('/api/reminders/:id/snooze', auth, (req, res) => {
-  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  const r = db.prepare('SELECT * FROM reminders WHERE id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(req.params.id, req.userId);
   if (!r) return res.status(404).json({ error: 'Not found' });
   if (r.completed_at) return res.status(400).json({ error: 'reminder is completed' });
   const minutes = parseInt(req.body.minutes, 10);
@@ -1873,7 +1944,7 @@ async function checkReminders() {
   try {
     const t = now();
     const due = db.prepare(`SELECT * FROM reminders
-      WHERE next_fire_at IS NOT NULL AND next_fire_at <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
+      WHERE next_fire_at IS NOT NULL AND next_fire_at <= ? AND completed_at IS NULL AND deleted_at IS NULL AND archived_at IS NULL`).all(t);
     for (const r of due) {
       // Advance BEFORE the (async) send so a slow push can't double-fire on the next tick.
       if (r.recur_type === 'none') {
@@ -1892,7 +1963,7 @@ async function checkReminders() {
       await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: r.description || fireTimeLabel(r.next_fire_at) });
     }
     const snoozed = db.prepare(`SELECT * FROM reminders
-      WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND completed_at IS NULL AND deleted_at IS NULL`).all(t);
+      WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND completed_at IS NULL AND deleted_at IS NULL AND archived_at IS NULL`).all(t);
     for (const r of snoozed) {
       db.prepare('UPDATE reminders SET snoozed_until=NULL WHERE id=?').run(r.id);
       await sendPushToUser(r.user_id, { id: r.id, title: r.title, body: '(snoozed) ' + (r.description || '') });
@@ -1907,7 +1978,7 @@ async function checkReminders() {
         AND (lead_fired_for IS NULL OR lead_fired_for != next_fire_at)
         AND next_fire_at - (lead_minutes * 60000) <= ?
         AND next_fire_at > ?
-        AND completed_at IS NULL AND deleted_at IS NULL`).all(t, t);
+        AND completed_at IS NULL AND deleted_at IS NULL AND archived_at IS NULL`).all(t, t);
     for (const r of leads) {
       // Mark BEFORE the async send — same no-double-fire discipline as due.
       db.prepare('UPDATE reminders SET lead_fired_for=? WHERE id=?').run(r.next_fire_at, r.id);
