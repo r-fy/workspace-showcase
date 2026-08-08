@@ -5256,6 +5256,7 @@ function parseProspectScore(notes) {
   if ((mm = notes.match(/Completeness:\s*(\d+)/))) m.completeness = parseInt(mm[1], 10);
   if ((mm = notes.match(/Review Strength:\s*(\d+)/))) m.reviewStrength = parseInt(mm[1], 10);
   if ((mm = notes.match(/Ranking Readiness:\s*(\d+)/))) m.readiness = parseInt(mm[1], 10);
+  if ((mm = notes.match(/GBP:\s*(\S+)/))) m.gbpUrl = mm[1].trim();
   if ((mm = notes.match(/Quick wins:\s*([\s\S]+)$/))) m.wins = mm[1].split('|').map(w => w.trim()).filter(Boolean);
   const core = ['rating', 'completeness', 'reviewStrength', 'readiness'];
   if (!core.every(k => typeof m[k] === 'number' && !Number.isNaN(m[k]))) return null;
@@ -5309,6 +5310,7 @@ function buildScoreCardBody(s) {
           ${s.claimed ? `<span><b>${s.claimed === 'Yes' ? 'Claimed' : 'Unclaimed'}</b></span>` : ''}
           ${s.rank != null ? `<span>Est. rank <b>${s.rank}</b></span>` : ''}
           ${s.website && s.website !== 'None' ? `<a href="${escHtml(s.website)}" target="_blank" rel="noopener">${escHtml(s.website.replace(/^https?:\/\//, ''))} ↗</a>` : ''}
+          ${s.gbpUrl ? `<a href="${escHtml(s.gbpUrl)}" target="_blank" rel="noopener">Google Business Profile ↗</a>` : ''}
         </div>
       </div>
     </div>
