@@ -1152,6 +1152,10 @@ header {
   padding: 12px 0 2px; border-top: 1px dashed #222; margin-top: 6px;
 }
 .prospect-row-notes.prospect-row-notes-scored { white-space: normal; }
+.lead-score-card {
+  border: 1px solid #1c1c1c; border-top: 1px solid #1c1c1c; border-radius: 6px;
+  padding: 14px 16px; margin: 0 0 14px;
+}
 .prospect-score-top { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
 .prospect-gauge-wrap { flex-shrink: 0; text-align: center; }
 .prospect-gauge { position: relative; width: 72px; height: 72px; }

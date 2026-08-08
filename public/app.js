@@ -4859,6 +4859,7 @@ function renderLeadEditor(d, isNew) {
         <label>Disposition</label>
         <div class="tags-bar" id="lead-dispo-pills" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
       </div>
+      ${renderLeadScoreCard(d.notes)}
       <div class="expense-field-row">
         <label>Notes</label>
         <textarea id="lead-notes" style="min-height:70px;">${escHtml(d.notes || '')}</textarea>
@@ -5274,19 +5275,17 @@ const STAR_PATH = 'M10 1l2.6 5.9 6.4.6-4.8 4.3 1.4 6.2L10 14.9 4.4 18l1.4-6.2L1 
 
 // Full scorecard (gauge + stars + meters + Quick Wins) when notes parses as
 // Can-style scoring data; otherwise the plain text block as before.
-function renderProspectScorePanel(p) {
-  if (!p.notes) return '';
-  const s = parseProspectScore(p.notes);
-  if (!s) return `<div class="prospect-row-notes hidden" data-notes-id="${p.id}">${escHtml(p.notes)}</div>`;
-
+// Shared scorecard body (gauge + stars + meters + facts + quick wins) — used
+// by both the Dialer's click-to-expand row and the CRM lead editor's
+// read-only card, so the two never drift out of sync.
+function buildScoreCardBody(s) {
   const CIRC = 226.19; // 2 * PI * r36
   const offset = CIRC * (1 - Math.max(0, Math.min(100, s.readiness)) / 100);
   const stars = Array.from({ length: 5 }, (_, i) =>
     `<svg viewBox="0 0 20 20" class="${i < Math.round(s.rating) ? 'on' : ''}"><path d="${STAR_PATH}"/></svg>`).join('');
   const winsHtml = (s.wins || []).map(w => `<li>${escHtml(w)}</li>`).join('');
 
-  return `<div class="prospect-row-notes prospect-row-notes-scored hidden" data-notes-id="${p.id}">
-    <div class="prospect-score-top">
+  return `<div class="prospect-score-top">
       <div class="prospect-gauge-wrap">
         <div class="prospect-gauge">
           <svg width="72" height="72" viewBox="0 0 84 84">
@@ -5313,8 +5312,22 @@ function renderProspectScorePanel(p) {
         </div>
       </div>
     </div>
-    ${winsHtml ? `<p class="prospect-wins-label">Quick wins</p><ul class="prospect-wins">${winsHtml}</ul>` : ''}
-  </div>`;
+    ${winsHtml ? `<p class="prospect-wins-label">Quick wins</p><ul class="prospect-wins">${winsHtml}</ul>` : ''}`;
+}
+
+function renderProspectScorePanel(p) {
+  if (!p.notes) return '';
+  const s = parseProspectScore(p.notes);
+  if (!s) return `<div class="prospect-row-notes hidden" data-notes-id="${p.id}">${escHtml(p.notes)}</div>`;
+  return `<div class="prospect-row-notes prospect-row-notes-scored hidden" data-notes-id="${p.id}">${buildScoreCardBody(s)}</div>`;
+}
+
+// Read-only card above the editable Notes textarea on a lead — same scoring
+// data as the Dialer's prospect scorecard, carried across on Promote.
+function renderLeadScoreCard(notes) {
+  const s = parseProspectScore(notes);
+  if (!s) return '';
+  return `<div class="prospect-row-notes prospect-row-notes-scored lead-score-card">${buildScoreCardBody(s)}</div>`;
 }
 
 function renderProspectListView() {
