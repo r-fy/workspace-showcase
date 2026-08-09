@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=145">
+<link rel="stylesheet" href="/app.css?v=147">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -376,9 +376,10 @@
 
     <!-- Standalone Dialer view (v162): the dial pad, back as its own menu.
          #dialer-area moves in here when this tab is active. -->
-    <div class="view hidden" id="dialer-view" style="flex-direction:column;overflow-y:auto;">
-      <!-- Active prospect list (rendered by JS) sits above the dial pad —
-           Dial fills #dial-number and reuses startCall(), no second call path. -->
+    <div class="view hidden" id="dialer-view">
+      <!-- Active prospect list (rendered by JS) sits side by side with the
+           dial pad — Dial fills #dial-number and reuses startCall(), no
+           second call path. Stacks on mobile (see @media 640px). -->
       <div id="prospect-list-view" class="hidden"></div>
       <div id="dialer-home"></div>
     </div>
@@ -796,6 +797,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=168"></script>
+<script src="/app.js?v=169"></script>
 </body>
 </html>

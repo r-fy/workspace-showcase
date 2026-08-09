@@ -919,6 +919,15 @@ app.post('/api/prospect-lists/scrape', auth, async (req, res) => {
   }
 });
 
+app.patch('/api/prospect-lists/:id', auth, (req, res) => {
+  const list = db.prepare('SELECT id FROM prospect_lists WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!list) return res.status(404).json({ error: 'Not found' });
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  db.prepare('UPDATE prospect_lists SET name=? WHERE id=?').run(name, list.id);
+  res.json(db.prepare('SELECT * FROM prospect_lists WHERE id=?').get(list.id));
+});
+
 // Hard delete, cascades its prospects — this tier has no trash tier of its own.
 app.delete('/api/prospect-lists/:id', auth, (req, res) => {
   const list = db.prepare('SELECT id FROM prospect_lists WHERE id=? AND user_id=?').get(req.params.id, req.userId);

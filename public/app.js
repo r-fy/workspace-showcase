@@ -5363,7 +5363,10 @@ function renderProspectListView() {
   el.innerHTML = `
     <div class="prospect-list-header">
       <span class="prospect-list-title">${escHtml(l.name)}${l.source ? ` <span style="color:#555;font-size:11px;font-weight:400;">(${escHtml(l.source)})</span>` : ''}</span>
-      <button class="del-task-btn" id="prospect-list-del-btn">🗑 Delete list</button>
+      <div class="prospect-list-header-actions">
+        <button class="del-task-btn prospect-list-rename-btn" id="prospect-list-rename-btn">✏️ Rename</button>
+        <button class="del-task-btn" id="prospect-list-del-btn">🗑 Delete list</button>
+      </div>
     </div>
     <div id="prospect-rows">${rowsHtml}</div>`;
 
@@ -5382,6 +5385,18 @@ function renderProspectListView() {
       document.querySelector(`.prospect-row-notes[data-notes-id="${main.dataset.toggleNotes}"]`)?.classList.toggle('hidden');
     }));
   document.getElementById('prospect-list-del-btn')?.addEventListener('click', deleteProspectListActive);
+  document.getElementById('prospect-list-rename-btn')?.addEventListener('click', renameProspectListActive);
+}
+
+async function renameProspectListActive() {
+  if (!currentProspectListId || !currentProspectList) return;
+  const name = prompt('Rename list:', currentProspectList.name);
+  if (!name || !name.trim() || name.trim() === currentProspectList.name) return;
+  try { await apiCall('PATCH', '/prospect-lists/' + currentProspectListId, { name: name.trim() }); }
+  catch (e) { toast('Could not rename list'); return; }
+  currentProspectList.name = name.trim();
+  renderProspectListView();
+  loadProspectLists();
 }
 
 async function updateProspectOutcome(id, outcome) {

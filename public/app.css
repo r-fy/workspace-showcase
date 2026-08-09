@@ -1132,12 +1132,23 @@ header {
   .call-play-btn, .call-dl-btn, .call-del-btn { width: 44px; height: 44px; font-size: 15px; }
 }
 
+/* #dialer-view (standalone Dialer tab): leads list left, dial pad right,
+   each scrolling independently. Stacks on mobile (below, 640px). */
+#dialer-view #prospect-list-view { flex: 1; overflow-y: auto; min-width: 0; }
+#dialer-view #dialer-home { flex: 0 0 400px; overflow-y: auto; border-left: 1px solid #1e1e1e; }
+@media (max-width: 900px) {
+  #dialer-view { flex-direction: column; overflow-y: auto; }
+  #dialer-view #prospect-list-view, #dialer-view #dialer-home { flex: none; overflow-y: visible; border-left: none; }
+}
+
 /* ── Prospect lists (Dialer tab) ── */
 .prospect-list-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 20px; border-bottom: 1px solid #1e1e1e; max-width: 640px; margin: 0 auto; width: 100%;
 }
 .prospect-list-title { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+.prospect-list-header-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.prospect-list-rename-btn:hover { color: #e0e0e0; }
 #prospect-rows { max-width: 640px; margin: 0 auto; padding: 4px 20px 8px; }
 .prospect-row {
   display: flex; align-items: center; gap: 10px; padding: 9px 0;
