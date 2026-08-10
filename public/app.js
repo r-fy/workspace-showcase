@@ -5186,6 +5186,7 @@ const PROSPECT_OUTCOMES = [
   ['gatekeeper', 'Gatekeeper'],
   ['booked', 'Booked'],
   ['not_interested', 'Not interested'],
+  ['bad_fit', 'Bad fit'],
 ];
 let prospectLists = [];          // rollup rows: {..., count, by_outcome}
 let currentProspectListId = null;
