@@ -2409,8 +2409,8 @@ function renderCallLog() {
     return `<div class="call-item${c.starred ? ' starred' : ''}" data-id="${c.id}">
       <div class="call-item-header">
         <div class="call-item-id">
-          <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
           ${chipName ? `<div class="call-item-name">${escHtml(chipName)}</div>` : ''}
+          <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
         </div>
         <div class="call-item-actions">
           <button class="call-star-btn${c.starred ? ' starred' : ''}" data-star-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}">${c.starred ? '★' : '☆'}</button>
