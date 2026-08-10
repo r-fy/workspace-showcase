@@ -5183,6 +5183,7 @@ const PROSPECT_OUTCOMES = [
   ['not_yet_called', 'Not yet called'],
   ['no_answer', 'No answer'],
   ['voicemail', 'Voicemail'],
+  ['gatekeeper', 'Gatekeeper'],
   ['booked', 'Booked'],
   ['not_interested', 'Not interested'],
 ];
