@@ -808,11 +808,21 @@ app.get('/api/leads/:id', auth, (req, res) => {
   res.json({ ...lead, audits: leadAudits, followups: leadFollowups, replies: leadReplies });
 });
 
+// Prospect notes (Outscraper scoring template, see parseProspectScore in
+// app.js) embed "Website: <url> | ..." — pulled out here so a promoted
+// prospect's website survives into the lead even though it has no dedicated
+// prospects.website column.
+function extractWebsiteFromNotes(notes) {
+  const m = String(notes || '').match(/Website:\s*([^|]*)\|/);
+  return m ? m[1].trim() : '';
+}
+
 // Shared insert used by POST /api/leads and the prospect-promote route — one
 // lead-creation path, not two divergent copies of the same INSERT.
 function createLead(fields, userId) {
-  const { business_name = 'Untitled lead', website = '', primary_email = '', city = '', niche = '', notes = '',
+  const { business_name = 'Untitled lead', primary_email = '', city = '', niche = '', notes = '',
     contact_name = '', phone_number = '', address = '', source = '', disposition = '' } = fields;
+  const website = fields.website || extractWebsiteFromNotes(notes);
   const website_domain = normalizeDomain(website);
   const id = uid(), t = now();
   db.prepare('INSERT INTO leads (id, business_name, website, website_domain, primary_email, city, niche, status, notes, contact_name, phone_number, address, source, disposition, user_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')

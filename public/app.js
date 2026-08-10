@@ -4980,7 +4980,31 @@ function renderLeadEditor(d, isNew) {
   renderLeadDispoPills();
   document.getElementById('lead-save-btn').addEventListener('click', () => isNew ? createLead() : saveLead());
   document.getElementById('lead-delete-btn')?.addEventListener('click', deleteCurrentLead);
+  if (isNew) document.getElementById('lead-business-name').addEventListener('blur', autofillLeadFromProspect);
   if (!isNew) renderLeadTimeline();
+}
+
+// Manually adding a lead that was already dialed as a prospect shouldn't mean
+// retyping what the dialer already knows — match by exact name (case-
+// insensitive) against every prospect ever imported, fill only the fields
+// still blank (never overwrite something the user already typed).
+function autofillLeadFromProspect() {
+  const nameEl = document.getElementById('lead-business-name');
+  const name = nameEl?.value.trim().toLowerCase();
+  if (!name) return;
+  const p = allProspects.find(x => (x.name || '').trim().toLowerCase() === name);
+  if (!p) return;
+  const fill = (id, val) => { const el = document.getElementById(id); if (el && !el.value.trim() && val) el.value = val; };
+  const websiteMatch = (p.notes || '').match(/Website:\s*([^|]*)\|/);
+  fill('lead-website', websiteMatch ? websiteMatch[1].trim() : '');
+  fill('lead-phone', p.phone);
+  fill('lead-email', p.email);
+  fill('lead-city', p.city);
+  fill('lead-niche', p.niche);
+  fill('lead-source', p.source);
+  const notesEl = document.getElementById('lead-notes');
+  if (notesEl && !notesEl.value.trim() && p.notes) notesEl.value = p.notes;
+  toast('Filled in from prospect list');
 }
 
 function renderLeadDispoPills() {
