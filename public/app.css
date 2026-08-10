@@ -1238,6 +1238,8 @@ header {
 .prospect-dial-btn:disabled { opacity: 0.35; cursor: default; }
 .prospect-promote-btn:hover { border-color: #3a3a3a; color: #ccc; }
 .prospect-promote-btn.promoted { color: #5fc83b; border-color: #1a3a12; }
+.prospect-unpromote-btn { color: #555; font-size: 12px; padding: 5px 7px; border-radius: 4px; }
+.prospect-unpromote-btn:hover { color: #f0b429; border: 1px solid #3a2f0f; background: #241d0a; }
 .prospect-del-btn { color: #444; font-size: 13px; padding: 3px 6px; }
 .prospect-del-btn:hover { color: #f87171; }
 @media (max-width: 640px) {

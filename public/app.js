@@ -5360,7 +5360,8 @@ function renderProspectListView() {
       `<option value="${k}"${p.outcome === k ? ' selected' : ''}>${escHtml(label)}</option>`).join('');
     const contact = [fmtPhone(p.phone) || p.phone, p.email].filter(Boolean).join(' · ') || '—';
     const promoteBtn = p.promoted_lead_id
-      ? `<button class="prospect-promote-btn promoted" data-open-lead="${p.promoted_lead_id}">✓ Lead</button>`
+      ? `<button class="prospect-promote-btn promoted" data-open-lead="${p.promoted_lead_id}">✓ Lead</button>
+         <button class="prospect-unpromote-btn" data-unpromote-id="${p.id}" title="Undo promote — back to a normal prospect">↩</button>`
       : `<button class="prospect-promote-btn" data-promote-id="${p.id}">Promote</button>`;
     const rowClass = [
       p.outcome && p.outcome !== 'not_yet_called' ? 'called' : '',
@@ -5399,6 +5400,8 @@ function renderProspectListView() {
     btn.addEventListener('click', () => promoteProspect(btn.dataset.promoteId)));
   el.querySelectorAll('[data-open-lead]').forEach(btn =>
     btn.addEventListener('click', () => { switchTab('crm'); openLead(btn.dataset.openLead); }));
+  el.querySelectorAll('[data-unpromote-id]').forEach(btn =>
+    btn.addEventListener('click', () => unpromoteProspect(btn.dataset.unpromoteId)));
   el.querySelectorAll('[data-del-id]').forEach(btn =>
     btn.addEventListener('click', () => deleteProspectRow(btn.dataset.delId)));
   el.querySelectorAll('[data-notes-id]').forEach(panel => {
@@ -5519,6 +5522,18 @@ async function promoteProspect(id) {
   if (p) p.promoted_lead_id = lead.id;
   renderProspectListView();
   if (confirm('Open the new lead now?')) { switchTab('crm'); openLead(lead.id); }
+}
+
+// Only clears the prospect's own promoted flag — never touches the lead
+// (covers both "I promoted too soon" and "I already deleted that lead from
+// CRM and this row is just stuck showing ✓ Lead").
+async function unpromoteProspect(id) {
+  try { await apiCall('POST', '/prospects/' + id + '/unpromote'); }
+  catch (e) { toast('Could not undo promote'); return; }
+  const p = currentProspectList?.prospects.find(x => x.id === id);
+  if (p) p.promoted_lead_id = null;
+  renderProspectListView();
+  toast('Back to a normal prospect');
 }
 
 async function deleteProspectRow(id) {

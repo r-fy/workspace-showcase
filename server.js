@@ -1045,6 +1045,17 @@ app.post('/api/prospects/:id/promote', auth, (req, res) => {
   res.json(lead);
 });
 
+// Clears the prospect-side promoted flag only — never touches the lead
+// itself (it may still be live, or already deleted from CRM; either way this
+// is just "stop showing this prospect as promoted"). Lets a bad/premature
+// promote be undone without losing whatever real data the lead accumulated.
+app.post('/api/prospects/:id/unpromote', auth, (req, res) => {
+  const p = db.prepare('SELECT * FROM prospects WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE prospects SET promoted_lead_id=NULL, updated_at=? WHERE id=? AND user_id=?').run(now(), req.params.id, req.userId);
+  res.json(db.prepare('SELECT * FROM prospects WHERE id=?').get(req.params.id));
+});
+
 // ── TRW Daily Tasks ──────────────────────────────────────────
 const DAILY_TASK_CATEGORIES = ['business_masters', 'daily_marketing', 'daily_seo_task'];
 
