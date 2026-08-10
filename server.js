@@ -751,6 +751,16 @@ app.delete('/api/followups/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Hard delete — cold_email_replies has no trash tier (it's a synced mirror of
+// Instantly's inbox, not user-authored data). Dismissing a stale/spam auto-
+// reply here can resurface it on the next hourly pull if Instantly still
+// returns it in its last-50-received window; nothing to do about that short
+// of tracking dismissals separately, not worth it unless it's a real problem.
+app.delete('/api/replies/:id', auth, (req, res) => {
+  db.prepare('DELETE FROM cold_email_replies WHERE id=? AND user_id=?').run(req.params.id, req.userId);
+  res.json({ ok: true });
+});
+
 // Stateless render — used for the live preview + the printable/exportable
 // document. Takes data straight from the request so unsaved edits preview
 // immediately, no round trip through the DB.

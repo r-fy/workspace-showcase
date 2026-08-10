@@ -5133,6 +5133,7 @@ function renderUnmatchedView() {
         <span class="lead-timeline-label">${escHtml(labelFn(x))}</span>
         <button class="cancel-sel-btn" data-attach="${x.id}" data-attach-type="${type}">Attach to lead…</button>
         <button class="cancel-sel-btn" data-newlead="${x.id}" data-newlead-type="${type}" data-newlead-name="${escHtml(labelFn(x))}">New lead</button>
+        <button class="cancel-sel-btn" data-dismiss="${x.id}" data-dismiss-type="${type}" title="Delete — not useful, don't want to link it">🗑</button>
       </div>`).join('');
   }
   const empty = !u.audits.length && !u.followups.length && !u.replies.length;
@@ -5146,6 +5147,17 @@ function renderUnmatchedView() {
     </div>`;
   area.querySelectorAll('[data-attach]').forEach(btn => btn.addEventListener('click', () => attachToExistingLead(btn.dataset.attachType, btn.dataset.attach)));
   area.querySelectorAll('[data-newlead]').forEach(btn => btn.addEventListener('click', () => createLeadFromUnmatched(btn.dataset.newleadType, btn.dataset.newlead, btn.dataset.newleadName)));
+  area.querySelectorAll('[data-dismiss]').forEach(btn => btn.addEventListener('click', () => dismissUnmatched(btn.dataset.dismissType, btn.dataset.dismiss)));
+}
+
+const UNMATCHED_DELETE_ROUTE = { audit: '/audits/', followup: '/followups/', reply: '/replies/' };
+async function dismissUnmatched(type, id) {
+  if (!confirm('Delete this permanently?')) return;
+  try {
+    await apiCall('DELETE', UNMATCHED_DELETE_ROUTE[type] + id);
+    toast('Deleted');
+    openUnmatched();
+  } catch (e) { toast('Could not delete'); }
 }
 
 async function attachToExistingLead(type, id) {
