@@ -2354,6 +2354,28 @@ function callDisplayName(c) {
   return null;
 }
 
+// Same categorization the row badge shows — shared with the status filter
+// bar so its pills always match what's actually on screen.
+function callStatusInfo(c) {
+  const inbound = c.direction === 'inbound';
+  return inbound && c.status === 'missed'
+    ? (c.recording_sid ? { label: 'Voicemail', cls: 'call-status-bad' } : { label: 'Missed', cls: 'call-status-bad' })
+    : inbound && c.status === 'ringing' ? { label: 'Ringing', cls: 'call-status-dim' }
+    : CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
+}
+const CALL_STATUS_COLOR = { 'call-status-ok': '#5fc83b', 'call-status-bad': '#f87171', 'call-status-dim': '#888' };
+let activeCallStatus = null; // one status label, or null for "all" — same single-select pattern as the Notes/Projects tag filter bars
+
+function renderCallStatusFilterBar(scopedCalls) {
+  const byLabel = new Map();
+  scopedCalls.forEach(c => { const st = callStatusInfo(c); if (!byLabel.has(st.label)) byLabel.set(st.label, st.cls); });
+  if (byLabel.size < 2 && !activeCallStatus) return ''; // not worth a filter bar for a single status type
+  const pills = [...byLabel.entries()].map(([label, cls]) =>
+    `<span class="tag-filter-pill${label === activeCallStatus ? ' active' : ''}" data-status="${escHtml(label)}" style="--tag-c:${CALL_STATUS_COLOR[cls] || '#888'}">${escHtml(label)}</span>`
+  ).join('');
+  return `<div class="tags-bar" id="call-status-filter-bar">${pills}${activeCallStatus ? `<span class="tag-filter-clear" id="call-status-clear">✕</span>` : ''}</div>`;
+}
+
 function renderCallLog() {
   const log = document.getElementById('call-log');
   if (!log) return;
@@ -2366,18 +2388,21 @@ function renderCallLog() {
   // calls; in the standalone Dialer tab show everything (with a name chip on
   // linked rows). Pre-CRM calls have no lead_id (never backfilled, §1.8).
   const inCrm = dialerInCrm();
-  const leadCalls = inCrm && currentLeadId ? calls.filter(c => c.lead_id === currentLeadId) : calls;
-  if (!leadCalls.length) {
+  const scopedCalls = inCrm && currentLeadId ? calls.filter(c => c.lead_id === currentLeadId) : calls;
+  const filterBarHtml = renderCallStatusFilterBar(scopedCalls);
+  const leadCalls = activeCallStatus ? scopedCalls.filter(c => callStatusInfo(c).label === activeCallStatus) : scopedCalls;
+  if (!scopedCalls.length) {
     log.innerHTML = `<div class="agenda-empty">${inCrm ? 'No calls for this lead yet — dial the number above' : 'No calls yet — dial a number above'}</div>`;
     return;
   }
-  log.innerHTML = '<div class="agenda-section-label">Call log</div>' + leadCalls.map(c => {
+  if (!leadCalls.length) {
+    log.innerHTML = '<div class="agenda-section-label">Call log</div>' + filterBarHtml + `<div class="agenda-empty">No ${escHtml(activeCallStatus)} calls</div>`;
+    wireCallStatusFilter(log);
+    return;
+  }
+  log.innerHTML = '<div class="agenda-section-label">Call log</div>' + filterBarHtml + leadCalls.map(c => {
+    const st = callStatusInfo(c);
     const inbound = c.direction === 'inbound';
-    // Inbound "missed" with a recording attached = the caller left a voicemail.
-    const st = inbound && c.status === 'missed'
-      ? (c.recording_sid ? { label: 'Voicemail', cls: 'call-status-bad' } : { label: 'Missed', cls: 'call-status-bad' })
-      : inbound && c.status === 'ringing' ? { label: 'Ringing', cls: 'call-status-dim' }
-      : CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
     const num = inbound ? c.from_number : c.to_number;
     const chipName = !inCrm ? callDisplayName(c) : null;
     const notesOpen = openCallNotesIds.has(c.id);
@@ -2428,6 +2453,19 @@ function renderCallLog() {
   });
   log.querySelectorAll('.call-del-btn').forEach(btn => {
     btn.addEventListener('click', () => deleteCall(btn.dataset.id));
+  });
+  wireCallStatusFilter(log);
+}
+
+function wireCallStatusFilter(log) {
+  log.querySelectorAll('.tag-filter-pill[data-status]').forEach(el => {
+    el.addEventListener('click', () => {
+      activeCallStatus = el.dataset.status === activeCallStatus ? null : el.dataset.status;
+      renderCallLog();
+    });
+  });
+  log.querySelector('#call-status-clear')?.addEventListener('click', () => {
+    activeCallStatus = null; renderCallLog();
   });
 }
 
