@@ -167,7 +167,12 @@ function applyProspectSyncData(data) {
   if (currentTab !== 'dialer') return;
   renderProspectListsPanel();
   if (currentProspectListId && currentProspectList) {
-    currentProspectList.prospects = (data.prospects || []).filter(p => p.list_id === currentProspectListId);
+    currentProspectList.prospects = (data.prospects || []).filter(p => p.list_id === currentProspectListId).map(p => {
+      const pending = pendingProspectOutcomes[p.id];
+      if (pending === undefined) return p;
+      if (p.outcome === pending) { delete pendingProspectOutcomes[p.id]; return p; }
+      return { ...p, outcome: pending }; // PUT hasn't landed in this snapshot yet — keep the user's pick
+    });
     renderProspectListView();
   }
 }
@@ -5192,6 +5197,9 @@ const PROSPECT_OUTCOMES = [
 let prospectLists = [];          // rollup rows: {..., count, by_outcome}
 let currentProspectListId = null;
 let currentProspectList = null;  // full record incl. prospects[] from GET /prospect-lists/:id
+let lastDialedProspectId = null; // highlighted row — set on Dial, cleared only by dialing another
+const openProspectNotesIds = new Set(); // ids with the score/notes panel expanded — survives re-renders
+const pendingProspectOutcomes = {}; // id -> outcome not yet confirmed by a sync payload, wins over stale ones
 
 async function loadProspectLists() {
   try { prospectLists = await apiCall('GET', '/prospect-lists'); } catch (e) { return; }
@@ -5348,7 +5356,7 @@ function renderProspectListView() {
     const promoteBtn = p.promoted_lead_id
       ? `<button class="prospect-promote-btn promoted" data-open-lead="${p.promoted_lead_id}">✓ Lead</button>`
       : `<button class="prospect-promote-btn" data-promote-id="${p.id}">Promote</button>`;
-    return `<div class="prospect-row" data-id="${p.id}">
+    return `<div class="prospect-row${p.id === lastDialedProspectId ? ' dialed' : ''}" data-id="${p.id}">
       <div class="prospect-row-main" data-toggle-notes="${p.id}">
         <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}</div>
         <div class="prospect-row-contact">${escHtml(contact)}${p.city ? ' · ' + escHtml(p.city) : ''}</div>
@@ -5383,9 +5391,14 @@ function renderProspectListView() {
     btn.addEventListener('click', () => { switchTab('crm'); openLead(btn.dataset.openLead); }));
   el.querySelectorAll('[data-del-id]').forEach(btn =>
     btn.addEventListener('click', () => deleteProspectRow(btn.dataset.delId)));
+  el.querySelectorAll('[data-notes-id]').forEach(panel => {
+    if (openProspectNotesIds.has(panel.dataset.notesId)) panel.classList.remove('hidden');
+  });
   el.querySelectorAll('[data-toggle-notes]').forEach(main =>
     main.addEventListener('click', () => {
-      document.querySelector(`.prospect-row-notes[data-notes-id="${main.dataset.toggleNotes}"]`)?.classList.toggle('hidden');
+      const id = main.dataset.toggleNotes;
+      if (openProspectNotesIds.has(id)) openProspectNotesIds.delete(id); else openProspectNotesIds.add(id);
+      document.querySelector(`.prospect-row-notes[data-notes-id="${id}"]`)?.classList.toggle('hidden');
     }));
   document.getElementById('prospect-list-del-btn')?.addEventListener('click', deleteProspectListActive);
   document.getElementById('prospect-list-rename-btn')?.addEventListener('click', renameProspectListActive);
@@ -5404,11 +5417,12 @@ async function renameProspectListActive() {
 
 async function updateProspectOutcome(id, outcome) {
   const p = currentProspectList?.prospects.find(x => x.id === id);
+  if (p) p.outcome = outcome; // optimistic — a sync tick landing mid-request must not revert this
+  pendingProspectOutcomes[id] = outcome;
   try {
     await apiCall('PUT', '/prospects/' + id, { outcome });
-    if (p) p.outcome = outcome;
     await loadProspectLists(); // counts changed
-  } catch (e) { toast('Could not update outcome'); renderProspectListView(); }
+  } catch (e) { delete pendingProspectOutcomes[id]; toast('Could not update outcome'); renderProspectListView(); }
 }
 
 // Reuses the exact same call path as the standalone Dialer — fill the number,
@@ -5419,6 +5433,8 @@ function dialProspect(id) {
   if (!p || !p.phone) return;
   const inp = document.getElementById('dial-number');
   if (inp) inp.value = p.phone;
+  lastDialedProspectId = id;
+  renderProspectListView();
   startCall();
 }
 
