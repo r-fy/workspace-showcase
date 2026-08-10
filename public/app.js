@@ -5356,7 +5356,11 @@ function renderProspectListView() {
     const promoteBtn = p.promoted_lead_id
       ? `<button class="prospect-promote-btn promoted" data-open-lead="${p.promoted_lead_id}">✓ Lead</button>`
       : `<button class="prospect-promote-btn" data-promote-id="${p.id}">Promote</button>`;
-    return `<div class="prospect-row${p.id === lastDialedProspectId ? ' dialed' : ''}" data-id="${p.id}">
+    const rowClass = [
+      p.outcome && p.outcome !== 'not_yet_called' ? 'called' : '',
+      p.id === lastDialedProspectId ? 'dialed' : '',
+    ].filter(Boolean).join(' ');
+    return `<div class="prospect-row${rowClass ? ' ' + rowClass : ''}" data-id="${p.id}">
       <div class="prospect-row-main" data-toggle-notes="${p.id}">
         <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}</div>
         <div class="prospect-row-contact">${escHtml(contact)}${p.city ? ' · ' + escHtml(p.city) : ''}</div>

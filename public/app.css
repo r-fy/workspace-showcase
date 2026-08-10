@@ -1155,6 +1155,7 @@ header {
   border-bottom: 1px solid #1c1c1c; flex-wrap: wrap;
 }
 .prospect-row:last-child { border-bottom: none; }
+.prospect-row.called { background: #11202b; border-left: 3px solid #4a90e0; padding-left: 8px; margin-left: -11px; }
 .prospect-row.dialed { background: #132010; border-left: 3px solid #5fc83b; padding-left: 8px; margin-left: -11px; }
 .prospect-row-main { flex: 1; min-width: 140px; cursor: pointer; }
 .prospect-row-name { font-size: 13px; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
