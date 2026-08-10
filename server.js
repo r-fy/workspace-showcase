@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const multer = require('multer');
 const net = require('net');
-const { advance, computeInitialNextFire } = require('./recurrence');
+const { advance, computeInitialNextFire, laWall, laEpoch } = require('./recurrence');
 // web-push is in package.json (Docker installs it); tolerate a local checkout
 // without node_modules so the server still boots for dev/testing.
 let webpush = null;
@@ -413,7 +413,22 @@ db.exec(`
     updated_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_prospects_list ON prospects(list_id, outcome);
+
+  -- Insert-only log of every outcome pick on a prospect — powers the daily
+  -- dialing stats (v180). prospects.outcome only holds the CURRENT value, so
+  -- without this a day's "who got marked what" is lost the moment it's
+  -- re-marked later; this keeps every day's breakdown answerable forever.
+  CREATE TABLE IF NOT EXISTS prospect_outcome_events (
+    id TEXT PRIMARY KEY,
+    prospect_id TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    outcome TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_prospect_outcome_events_user ON prospect_outcome_events(user_id, created_at);
 `);
+try { db.exec(`ALTER TABLE calls ADD COLUMN prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL`); } catch(e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_prospect ON calls(prospect_id, started_at)`); } catch(e) {}
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
@@ -989,8 +1004,13 @@ app.put('/api/prospects/:id', auth, (req, res) => {
   if (!p) return res.status(404).json({ error: 'Not found' });
   const { name = p.name, phone = p.phone, email = p.email, source = p.source, city = p.city, niche = p.niche, notes = p.notes, outcome = p.outcome } = req.body;
   if (!OUTCOME_TYPES.includes(outcome)) return res.status(400).json({ error: 'invalid outcome' });
+  const t = now();
   db.prepare('UPDATE prospects SET name=?, phone=?, email=?, source=?, city=?, niche=?, notes=?, outcome=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(name, phone, email, source, city, niche, notes, outcome, now(), req.params.id, req.userId);
+    .run(name, phone, email, source, city, niche, notes, outcome, t, req.params.id, req.userId);
+  if (outcome !== p.outcome) {
+    db.prepare('INSERT INTO prospect_outcome_events (id, prospect_id, user_id, outcome, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(uid(), req.params.id, req.userId, outcome, t);
+  }
   res.json(db.prepare('SELECT * FROM prospects WHERE id=?').get(req.params.id));
 });
 
@@ -1349,6 +1369,45 @@ app.post('/api/notes/import', auth, (req, res) => {
 });
 
 // Full sync snapshot
+// Daily cold-calling stats (v180): dial count, first-dial time, total talk
+// time, and per-outcome counts, all scoped to a single LA calendar day and
+// all prospect lists combined. Bounded to that day's epoch range via
+// laEpoch, so this stays cheap even as call/event history grows — no full
+// table scans. Re-marking a prospect twice in the same day only counts its
+// LAST outcome that day (events are read in created_at order).
+function laDateStr(epochMs) {
+  const w = laWall(epochMs);
+  return `${w.y}-${String(w.m).padStart(2, '0')}-${String(w.d).padStart(2, '0')}`;
+}
+function laDayBounds(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const start = laEpoch(y, m, d, 0, 0);
+  const nd = new Date(Date.UTC(y, m - 1, d + 1));
+  const end = laEpoch(nd.getUTCFullYear(), nd.getUTCMonth() + 1, nd.getUTCDate(), 0, 0);
+  return { start, end };
+}
+function computeProspectStatsForDate(userId, dateStr) {
+  const { start, end } = laDayBounds(dateStr);
+  const calls = db.prepare('SELECT started_at, duration FROM calls WHERE user_id=? AND prospect_id IS NOT NULL AND started_at >= ? AND started_at < ?')
+    .all(userId, start, end);
+  const events = db.prepare('SELECT prospect_id, outcome FROM prospect_outcome_events WHERE user_id=? AND created_at >= ? AND created_at < ? ORDER BY created_at ASC')
+    .all(userId, start, end);
+  const lastPerProspect = {};
+  for (const e of events) lastPerProspect[e.prospect_id] = e.outcome; // ASC order — last write wins
+  const by_outcome = {};
+  for (const outcome of Object.values(lastPerProspect)) by_outcome[outcome] = (by_outcome[outcome] || 0) + 1;
+  let first_dial_at = null, talk_seconds = 0;
+  for (const c of calls) {
+    if (first_dial_at === null || c.started_at < first_dial_at) first_dial_at = c.started_at;
+    talk_seconds += c.duration || 0;
+  }
+  return { date: dateStr, dial_count: calls.length, first_dial_at, talk_seconds, by_outcome };
+}
+app.get('/api/prospect-stats', auth, (req, res) => {
+  const date = req.query.date || laDateStr(now());
+  res.json(computeProspectStatsForDate(req.userId, date));
+});
+
 app.get('/api/sync', auth, (req, res) => {
   const notes = db.prepare('SELECT * FROM notes WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? ORDER BY position ASC').all(req.userId);
   const boards = db.prepare('SELECT * FROM boards WHERE archived_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
@@ -1361,7 +1420,8 @@ app.get('/api/sync', auth, (req, res) => {
   const prospect_lists = db.prepare('SELECT * FROM prospect_lists WHERE user_id=? ORDER BY created_at DESC').all(req.userId)
     .map(l => ({ ...l, ...prospectListRollup(l) }));
   const prospects = db.prepare('SELECT * FROM prospects WHERE user_id=? ORDER BY created_at ASC').all(req.userId);
-  res.json({ notes, boards, columns, tasks, reminders, calls, prospect_lists, prospects });
+  const prospect_stats_today = computeProspectStatsForDate(req.userId, laDateStr(now()));
+  res.json({ notes, boards, columns, tasks, reminders, calls, prospect_lists, prospects, prospect_stats_today });
 });
 
 // ── Boards ────────────────────────────────────────────────────
@@ -1889,9 +1949,13 @@ app.post('/api/twilio/voice', twilioWebhook, (req, res) => {
     // unlinked (no auto-match by phone — normal path always knows the lead).
     const rawLeadId = String(req.body.LeadId || '');
     const leadId = rawLeadId && db.prepare('SELECT 1 FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(rawLeadId, userId) ? rawLeadId : null;
-    db.prepare(`INSERT OR IGNORE INTO calls (id, user_id, call_sid, to_number, from_number, status, lead_id, started_at, created_at)
-      VALUES (?, ?, ?, ?, ?, 'initiated', ?, ?, ?)`)
-      .run(uid(), userId, req.body.CallSid || null, to, TWILIO_CALLER_ID, leadId, now(), now());
+    // Same pattern as LeadId — dialProspect() passes ProspectId so the daily
+    // stats bar can attribute this call's talk time to a specific prospect.
+    const rawProspectId = String(req.body.ProspectId || '');
+    const prospectId = rawProspectId && db.prepare('SELECT 1 FROM prospects WHERE id=? AND user_id=?').get(rawProspectId, userId) ? rawProspectId : null;
+    db.prepare(`INSERT OR IGNORE INTO calls (id, user_id, call_sid, to_number, from_number, status, lead_id, prospect_id, started_at, created_at)
+      VALUES (?, ?, ?, ?, ?, 'initiated', ?, ?, ?, ?)`)
+      .run(uid(), userId, req.body.CallSid || null, to, TWILIO_CALLER_ID, leadId, prospectId, now(), now());
     const dial = twiml.dial({
       callerId: TWILIO_CALLER_ID,
       answerOnBridge: true,                        // browser leg stays "ringing" until the callee answers

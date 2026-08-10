@@ -1142,6 +1142,33 @@ header {
 }
 
 /* ── Prospect lists (Dialer tab) ── */
+.pstat-bar {
+  padding: 14px 16px; border-bottom: 1px solid #1e1e1e;
+}
+.pstat-bar:empty { display: none; }
+.pstat-header { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 10px; }
+.pstat-nav-btn {
+  color: #666; font-size: 15px; padding: 1px 7px; border-radius: 4px; line-height: 1.4;
+}
+.pstat-nav-btn:hover:not(:disabled) { color: #ccc; background: #1a1a1a; }
+.pstat-nav-btn:disabled { opacity: 0.3; }
+.pstat-date { font-size: 12px; font-weight: 600; color: #ccc; min-width: 84px; text-align: center; }
+.pstat-today-btn {
+  font-size: 10.5px; color: #8ce870; border: 1px solid #1a3a12; border-radius: 4px; padding: 2px 7px; margin-left: 2px;
+}
+.pstat-today-btn:hover { background: #1a3a13; }
+.pstat-row { display: flex; gap: 8px; }
+.pstat-tile { flex: 1; text-align: center; background: #141414; border: 1px solid #1e1e1e; border-radius: 6px; padding: 8px 4px; }
+.pstat-num { font-size: 15px; color: #e0e0e0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pstat-label { font-size: 9.5px; letter-spacing: 0.05em; text-transform: uppercase; color: #7d7e83; margin-top: 3px; }
+.pstat-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pstat-chip {
+  font-size: 11px; color: #a3a4a8; background: #141414; border: 1px solid #1e1e1e; border-radius: 20px;
+  padding: 4px 10px 4px 8px; display: flex; align-items: center; gap: 5px;
+}
+.pstat-chip-num { color: #8ce870; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pstat-empty { font-size: 11px; color: #555; margin-top: 10px; }
+
 .prospect-list-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 20px; border-bottom: 1px solid #1e1e1e; max-width: 640px; margin: 0 auto; width: 100%;

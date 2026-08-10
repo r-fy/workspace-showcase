@@ -165,6 +165,7 @@ function hashData(data) {
 function applyProspectSyncData(data) {
   prospectLists = data.prospect_lists || [];
   if (currentTab !== 'dialer') return;
+  if (prospectStatsDate === null && data.prospect_stats_today) renderProspectStatsBar(data.prospect_stats_today);
   renderProspectListsPanel();
   if (currentProspectListId && currentProspectList) {
     currentProspectList.prospects = (data.prospects || []).filter(p => p.list_id === currentProspectListId).map(p => {
@@ -2289,10 +2290,12 @@ async function startCall() {
   showCallFloatBar('Calling ' + fmtPhone(num) + '…');
   document.getElementById('dial-call-btn').classList.add('hidden');
   document.getElementById('dial-hangup-btn').classList.remove('hidden');
+  const prospectIdForCall = dialingProspectId; dialingProspectId = null;
   try {
-    // Triggers the mic permission prompt on first use. LeadId is a custom
-    // param the /api/twilio/voice webhook validates and stamps on the calls row.
-    twCall = await twDevice.connect({ params: { To: num, LeadId: crmCallLeadId || '' } });
+    // Triggers the mic permission prompt on first use. LeadId/ProspectId are
+    // custom params the /api/twilio/voice webhook validates and stamps on
+    // the calls row (ProspectId only set when dialed via dialProspect()).
+    twCall = await twDevice.connect({ params: { To: num, LeadId: crmCallLeadId || '', ProspectId: prospectIdForCall || '' } });
   } catch(e) {
     console.warn('twilio connect failed:', e);
     const msg = String(e && (e.message || e.name) || '');
@@ -5162,6 +5165,7 @@ async function loadDialerTab() {
   loadUsagePanel();
   loadProspectLists();
   if (currentProspectListId) openProspectList(currentProspectListId); else renderProspectListView();
+  loadProspectStatsForDate(prospectStatsDate || laTodayStr());
 }
 
 // Typing a number for a lead that had none (or correcting one) persists it
@@ -5200,6 +5204,8 @@ let currentProspectList = null;  // full record incl. prospects[] from GET /pros
 let lastDialedProspectId = null; // highlighted row — set on Dial, cleared only by dialing another
 const openProspectNotesIds = new Set(); // ids with the score/notes panel expanded — survives re-renders
 const pendingProspectOutcomes = {}; // id -> outcome not yet confirmed by a sync payload, wins over stale ones
+let dialingProspectId = null;    // one-shot: set by dialProspect(), read+cleared by startCall()
+let prospectStatsDate = null;    // null = viewing "today" (live via sync); 'YYYY-MM-DD' = a frozen past day
 
 async function loadProspectLists() {
   try { prospectLists = await apiCall('GET', '/prospect-lists'); } catch (e) { return; }
@@ -5426,7 +5432,68 @@ async function updateProspectOutcome(id, outcome) {
   try {
     await apiCall('PUT', '/prospects/' + id, { outcome });
     await loadProspectLists(); // counts changed
+    if (prospectStatsDate === null) loadProspectStatsForDate(laTodayStr()); // instant feedback on today's tally
   } catch (e) { delete pendingProspectOutcomes[id]; toast('Could not update outcome'); renderProspectListView(); }
+}
+
+// Daily cold-calling stats bar (v180) — dials, first-dial time, total talk
+// time, and per-outcome tally for a single day, all prospect lists combined.
+// "Today" stays live via the 2s /api/sync poll; ‹ › browses past days
+// (frozen — a real day-by-day log via prospect_outcome_events, not just
+// today's current-state snapshot, so history stays answerable).
+function laTodayStr() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }); }
+
+function fmtTalkTime(secs) {
+  secs = parseInt(secs, 10) || 0;
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+async function loadProspectStatsForDate(dateStr) {
+  let stats;
+  try { stats = await apiCall('GET', '/prospect-stats?date=' + dateStr); } catch (e) { return; }
+  renderProspectStatsBar(stats);
+}
+
+function renderProspectStatsBar(stats) {
+  const el = document.getElementById('prospect-stats-bar');
+  if (!el || !stats) return;
+  const viewingToday = stats.date === laTodayStr();
+  const startTime = stats.first_dial_at
+    ? new Date(stats.first_dial_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : '—';
+  const dateLabel = viewingToday ? 'Today'
+    : new Date(stats.date + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  const outcomeChips = PROSPECT_OUTCOMES
+    .filter(([k]) => k !== 'not_yet_called' && stats.by_outcome[k])
+    .map(([k, label]) => `<div class="pstat-chip"><span class="pstat-chip-num">${stats.by_outcome[k]}</span> ${escHtml(label)}</div>`)
+    .join('') || '<div class="pstat-empty">Nothing marked yet</div>';
+  el.innerHTML = `
+    <div class="pstat-header">
+      <button class="pstat-nav-btn" id="pstat-prev" title="Previous day">‹</button>
+      <span class="pstat-date">${dateLabel}</span>
+      <button class="pstat-nav-btn" id="pstat-next"${viewingToday ? ' disabled' : ''} title="Next day">›</button>
+      ${viewingToday ? '' : '<button class="pstat-today-btn" id="pstat-today">Today</button>'}
+    </div>
+    <div class="pstat-row">
+      <div class="pstat-tile"><div class="pstat-num">${stats.dial_count}</div><div class="pstat-label">Dials</div></div>
+      <div class="pstat-tile"><div class="pstat-num">${startTime}</div><div class="pstat-label">Start</div></div>
+      <div class="pstat-tile"><div class="pstat-num">${fmtTalkTime(stats.talk_seconds)}</div><div class="pstat-label">Talk time</div></div>
+    </div>
+    <div class="pstat-chips">${outcomeChips}</div>`;
+  document.getElementById('pstat-prev')?.addEventListener('click', () => shiftProspectStatsDay(stats.date, -1));
+  document.getElementById('pstat-next')?.addEventListener('click', () => shiftProspectStatsDay(stats.date, 1));
+  document.getElementById('pstat-today')?.addEventListener('click', () => { prospectStatsDate = null; loadProspectStatsForDate(laTodayStr()); });
+}
+
+function shiftProspectStatsDay(fromDate, delta) {
+  const d = new Date(fromDate + 'T12:00:00');
+  d.setDate(d.getDate() + delta);
+  const next = d.toLocaleDateString('en-CA');
+  prospectStatsDate = next === laTodayStr() ? null : next;
+  loadProspectStatsForDate(next);
 }
 
 // Reuses the exact same call path as the standalone Dialer — fill the number,
@@ -5438,6 +5505,7 @@ function dialProspect(id) {
   const inp = document.getElementById('dial-number');
   if (inp) inp.value = p.phone;
   lastDialedProspectId = id;
+  dialingProspectId = id;
   renderProspectListView();
   startCall();
 }

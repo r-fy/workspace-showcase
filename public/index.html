@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=149">
+<link rel="stylesheet" href="/app.css?v=150">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -381,7 +381,9 @@
            dial pad — Dial fills #dial-number and reuses startCall(), no
            second call path. Stacks on mobile (see @media 640px). -->
       <div id="prospect-list-view" class="hidden"></div>
-      <div id="dialer-home"></div>
+      <div id="dialer-home">
+        <div id="prospect-stats-bar" class="pstat-bar"></div>
+      </div>
     </div>
 
     <!-- TRW Daily Tasks view -->
@@ -797,6 +799,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=174"></script>
+<script src="/app.js?v=175"></script>
 </body>
 </html>
