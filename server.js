@@ -882,7 +882,7 @@ app.post('/api/leads/:id/merge', auth, (req, res) => {
 
 // ── Prospect lists (Dialer tab) ──────────────────────────────
 // See the migration block above for the schema + design rationale.
-const OUTCOME_TYPES = ['not_yet_called', 'no_answer', 'voicemail', 'gatekeeper', 'booked', 'not_interested', 'bad_fit', 'follow_up_later'];
+const OUTCOME_TYPES = ['bad_fit', 'booked', 'follow_up_later', 'gatekeeper', 'interested', 'no_answer', 'not_interested', 'not_yet_called', 'voicemail'];
 
 function prospectListRollup(list) {
   const rows = db.prepare('SELECT outcome, COUNT(*) c FROM prospects WHERE list_id=? GROUP BY outcome').all(list.id);

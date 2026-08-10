@@ -5189,14 +5189,15 @@ async function savePhoneBackToLead(raw) {
 // into a full lead. See BUILD-SPEC-prospect-lists.md. No offline support
 // (like Expenses/Calendar) — this rides direct apiCall, not the idb path.
 const PROSPECT_OUTCOMES = [
-  ['not_yet_called', 'Not yet called'],
-  ['no_answer', 'No answer'],
-  ['voicemail', 'Voicemail'],
-  ['gatekeeper', 'Gatekeeper'],
-  ['booked', 'Booked'],
-  ['not_interested', 'Not interested'],
   ['bad_fit', 'Bad fit'],
+  ['booked', 'Booked'],
   ['follow_up_later', 'Follow up later'],
+  ['gatekeeper', 'Gatekeeper'],
+  ['interested', 'Interested'],
+  ['no_answer', 'No answer'],
+  ['not_interested', 'Not interested'],
+  ['not_yet_called', 'Not yet called'],
+  ['voicemail', 'Voicemail'],
 ];
 let prospectLists = [];          // rollup rows: {..., count, by_outcome}
 let currentProspectListId = null;
