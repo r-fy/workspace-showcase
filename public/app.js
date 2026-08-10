@@ -2382,24 +2382,29 @@ function renderCallLog() {
     const chipName = !inCrm ? callDisplayName(c) : null;
     const notesOpen = openCallNotesIds.has(c.id);
     return `<div class="call-item${c.starred ? ' starred' : ''}" data-id="${c.id}">
-      <div class="call-item-main">
-        <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}${chipName ? ` <span class="note-tag">${escHtml(chipName)}</span>` : ''}</div>
-        <div class="call-item-meta">
-          <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(c.started_at))}</span>
-          <span class="call-status ${st.cls}">${escHtml(st.label)}</span>
-          ${c.duration ? `<span class="call-dur">${escHtml(fmtCallDur(c.duration))}</span>` : ''}
+      <div class="call-item-header">
+        <div class="call-item-id">
+          <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
+          ${chipName ? `<div class="call-item-name">${escHtml(chipName)}</div>` : ''}
         </div>
-        <div class="call-audio-slot" id="call-audio-${escHtml(c.recording_sid || c.id)}"></div>
-        <div class="call-notes-wrap${notesOpen ? '' : ' hidden'}" data-notes-wrap="${c.id}">
-          <textarea class="call-notes-input" data-id="${c.id}" placeholder="Feedback for yourself on this call…">${escHtml(c.notes || '')}</textarea>
+        <div class="call-item-actions">
+          <button class="call-star-btn${c.starred ? ' starred' : ''}" data-star-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}">${c.starred ? '★' : '☆'}</button>
+          <button class="call-notes-btn${c.notes ? ' has-notes' : ''}" data-notes-id="${c.id}" title="Notes">📝</button>
+          ${c.recording_sid ? `
+            <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" title="Play recording">▶</button>
+            <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>` : ''}
+          <button class="call-del-btn" data-id="${escHtml(c.id)}" title="Delete call">🗑</button>
         </div>
       </div>
-      <button class="call-star-btn${c.starred ? ' starred' : ''}" data-star-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}">${c.starred ? '★' : '☆'}</button>
-      <button class="call-notes-btn${c.notes ? ' has-notes' : ''}" data-notes-id="${c.id}" title="Notes">📝</button>
-      ${c.recording_sid ? `
-        <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" title="Play recording">▶</button>
-        <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>` : ''}
-      <button class="call-del-btn" data-id="${escHtml(c.id)}" title="Delete call">🗑</button>
+      <div class="call-item-meta">
+        <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(c.started_at))}</span>
+        <span class="call-status ${st.cls}">${escHtml(st.label)}</span>
+        ${c.duration ? `<span class="call-dur">${escHtml(fmtCallDur(c.duration))}</span>` : ''}
+      </div>
+      <div class="call-audio-slot" id="call-audio-${escHtml(c.recording_sid || c.id)}"></div>
+      <div class="call-notes-wrap${notesOpen ? '' : ' hidden'}" data-notes-wrap="${c.id}">
+        <textarea class="call-notes-input" data-id="${c.id}" placeholder="Feedback for yourself on this call…">${escHtml(c.notes || '')}</textarea>
+      </div>
     </div>`;
   }).join('');
   log.querySelectorAll('.call-star-btn').forEach(btn => {

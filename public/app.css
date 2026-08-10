@@ -1103,13 +1103,16 @@ header {
 .calls-usage-info b { color: #8ce870; }
 .call-log { max-width: 460px; margin: 0 auto; }
 .call-item {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; flex-direction: column; gap: 6px;
   padding: 9px 10px; border-radius: 6px;
 }
 .call-item:hover { background: #181818; }
-.call-item-main { flex: 1; min-width: 0; }
+.call-item-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.call-item-id { min-width: 0; }
 .call-item-number { font-size: 13px; color: #ccc; }
-.call-item-meta { display: flex; align-items: center; gap: 8px; margin-top: 2px; flex-wrap: wrap; }
+.call-item-name { font-size: 13px; color: #8ce870; font-weight: 600; margin-top: 1px; }
+.call-item-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.call-item-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .call-status { font-size: 10px; padding: 1px 7px; border-radius: 8px; border: 1px solid #2a2a2a; }
 .call-status-ok { border-color: #2a5a20; color: #5fc83b; }
 .call-status-bad { border-color: #5a2020; color: #f87171; }
