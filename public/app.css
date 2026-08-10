@@ -1116,7 +1116,9 @@ header {
 .call-status-dim { color: #777; }
 .call-dur { font-size: 11px; color: #666; }
 .call-audio-slot audio { width: 100%; height: 32px; margin-top: 6px; }
-.call-play-btn, .call-dl-btn, .call-del-btn {
+.call-item.starred { background: #201c0e; }
+.call-item.starred:hover { background: #26200f; }
+.call-play-btn, .call-dl-btn, .call-del-btn, .call-star-btn, .call-notes-btn {
   width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
   border: 1px solid #2a2a2a; color: #555; font-size: 12px;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
@@ -1124,12 +1126,24 @@ header {
 .call-play-btn:hover { border-color: #2a5a20; color: #8ce870; background: #1a3a13; }
 .call-dl-btn:hover { border-color: #3a3a3a; color: #ccc; background: #1e1e1e; }
 .call-del-btn:hover { border-color: #5a2020; color: #f87171; background: #2a1010; }
+.call-star-btn { font-size: 14px; }
+.call-star-btn:hover { border-color: #4a3a10; color: #f0b429; background: #241d0a; }
+.call-star-btn.starred { color: #f0b429; border-color: #4a3a10; }
+.call-notes-btn:hover { border-color: #3a3a3a; color: #ccc; background: #1e1e1e; }
+.call-notes-btn.has-notes { color: #8ce870; border-color: #1a3a12; }
+.call-notes-wrap { margin-top: 8px; }
+.call-notes-wrap.hidden { display: none; }
+.call-notes-input {
+  width: 100%; min-height: 50px; resize: vertical; font-family: inherit; font-size: 12px;
+  background: #141414; border: 1px solid #1e1e1e; border-radius: 6px; color: #ccc; padding: 8px;
+}
+.call-notes-input:focus { outline: none; border-color: #2a5a20; }
 
 @media (max-width: 640px) {
   .dialer-area { padding: 12px; }
   .dialer-card { width: 100%; }
   .dial-key { height: 52px; } /* 44px+ touch targets */
-  .call-play-btn, .call-dl-btn, .call-del-btn { width: 44px; height: 44px; font-size: 15px; }
+  .call-play-btn, .call-dl-btn, .call-del-btn, .call-star-btn, .call-notes-btn { width: 44px; height: 44px; font-size: 15px; }
 }
 
 /* #dialer-view (standalone Dialer tab): leads list left, dial pad right,

@@ -212,6 +212,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id, started_at);
 `);
+try { db.exec(`ALTER TABLE calls ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
+try { db.exec(`ALTER TABLE calls ADD COLUMN notes TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 
 // Audits tab: one JSON blob per audit (identity, current_situation, findings
 // with sources, heatmaps, gsc, narrative — same shape as AUTOMATED_AUDITS'
@@ -2079,6 +2081,17 @@ app.post('/api/twilio/inbound-status', twilioWebhook, (req, res) => {
 
 app.get('/api/calls', auth, (req, res) => {
   res.json(db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId));
+});
+
+// Star (favorite) a recording and/or leave yourself a note on it — personal
+// feedback on how the call went, kept with the recording rather than in a
+// separate system.
+app.put('/api/calls/:id', auth, (req, res) => {
+  const call = db.prepare('SELECT * FROM calls WHERE id=? AND user_id=?').get(req.params.id, req.userId);
+  if (!call) return res.status(404).json({ error: 'Not found' });
+  const { starred = call.starred, notes = call.notes } = req.body;
+  db.prepare('UPDATE calls SET starred=?, notes=? WHERE id=? AND user_id=?').run(starred ? 1 : 0, notes, req.params.id, req.userId);
+  res.json(db.prepare('SELECT * FROM calls WHERE id=?').get(req.params.id));
 });
 
 // Deletes the call log entry entirely — if it has a recording, that's

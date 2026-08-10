@@ -152,7 +152,7 @@ function hashData(data) {
   const ts = (data.tasks||[]).map(t=>t.id+':'+t.updated_at+':'+t.column_id).sort().join('|');
   const ns = (data.notes||[]).map(n=>n.id+':'+n.updated_at).sort().join('|');
   const rs = (data.reminders||[]).map(r=>r.id+':'+r.updated_at+':'+(r.next_fire_at||0)+':'+(r.snoozed_until||0)).sort().join('|');
-  const cs = (data.calls||[]).map(c=>c.id+':'+c.status+':'+(c.recording_sid||'')).sort().join('|');
+  const cs = (data.calls||[]).map(c=>c.id+':'+c.status+':'+(c.recording_sid||'')+':'+c.starred+':'+c.notes).sort().join('|');
   const ps = (data.prospects||[]).map(p=>p.id+':'+p.updated_at+':'+p.outcome+':'+(p.promoted_lead_id||'')).sort().join('|');
   return ts + '$$' + ns + '$$' + rs + '$$' + cs + '$$' + ps;
 }
@@ -162,8 +162,10 @@ function hashData(data) {
 // updating an outcome — shows up live without a manual refresh. Sidebar
 // counts always refresh; the open list's row data only refreshes while the
 // Dialer tab is actually showing.
+let allProspects = []; // every prospect across every list — for the call log's name lookup, not scoped to whichever list is open
 function applyProspectSyncData(data) {
   prospectLists = data.prospect_lists || [];
+  allProspects = data.prospects || [];
   if (currentTab !== 'dialer') return;
   if (prospectStatsDate === null && data.prospect_stats_today) renderProspectStatsBar(data.prospect_stats_today);
   renderProspectListsPanel();
@@ -2340,15 +2342,28 @@ const CALL_STATUS_LABEL = {
   'initiated': { label: 'In progress', cls: 'call-status-dim' },
 };
 
+const openCallNotesIds = new Set(); // call ids with the feedback-notes panel expanded — survives re-renders
+
+// Same name a call would show once its prospect/lead is looked up — lead_id
+// only gets stamped when a number matches an EXISTING lead at dial time
+// (leadForNumber), so a prospect dialed before it was promoted never gets
+// one; fall back to the prospect it was actually dialed as.
+function callDisplayName(c) {
+  if (c.lead_id) return leads.find(l => l.id === c.lead_id)?.business_name || null;
+  if (c.prospect_id) return allProspects.find(p => p.id === c.prospect_id)?.name || null;
+  return null;
+}
+
 function renderCallLog() {
   const log = document.getElementById('call-log');
   if (!log) return;
   // The 2s sync poll re-renders on ANY data change (notes, reminders, …) —
-  // an innerHTML rebuild would silently kill a recording mid-playback. Hold
-  // the re-render while a player is open; it catches up once it's closed.
-  if (log.querySelector('audio')) return;
+  // an innerHTML rebuild would silently kill a recording mid-playback, or
+  // wipe an in-progress feedback note. Hold the re-render while either is
+  // active; it catches up once they're closed/blurred.
+  if (log.querySelector('audio') || log.querySelector('.call-notes-input:focus')) return;
   // Context-sensitive: inside a lead's Calls sub-tab show only that lead's
-  // calls; in the standalone Dialer tab show everything (with a lead chip on
+  // calls; in the standalone Dialer tab show everything (with a name chip on
   // linked rows). Pre-CRM calls have no lead_id (never backfilled, §1.8).
   const inCrm = dialerInCrm();
   const leadCalls = inCrm && currentLeadId ? calls.filter(c => c.lead_id === currentLeadId) : calls;
@@ -2364,23 +2379,42 @@ function renderCallLog() {
       : inbound && c.status === 'ringing' ? { label: 'Ringing', cls: 'call-status-dim' }
       : CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
     const num = inbound ? c.from_number : c.to_number;
-    const chipLead = !inCrm && c.lead_id ? leads.find(l => l.id === c.lead_id) : null;
-    return `<div class="call-item" data-id="${c.id}">
+    const chipName = !inCrm ? callDisplayName(c) : null;
+    const notesOpen = openCallNotesIds.has(c.id);
+    return `<div class="call-item${c.starred ? ' starred' : ''}" data-id="${c.id}">
       <div class="call-item-main">
-        <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}${chipLead ? ` <span class="note-tag">${escHtml(chipLead.business_name)}</span>` : ''}</div>
+        <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}${chipName ? ` <span class="note-tag">${escHtml(chipName)}</span>` : ''}</div>
         <div class="call-item-meta">
           <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(c.started_at))}</span>
           <span class="call-status ${st.cls}">${escHtml(st.label)}</span>
           ${c.duration ? `<span class="call-dur">${escHtml(fmtCallDur(c.duration))}</span>` : ''}
         </div>
         <div class="call-audio-slot" id="call-audio-${escHtml(c.recording_sid || c.id)}"></div>
+        <div class="call-notes-wrap${notesOpen ? '' : ' hidden'}" data-notes-wrap="${c.id}">
+          <textarea class="call-notes-input" data-id="${c.id}" placeholder="Feedback for yourself on this call…">${escHtml(c.notes || '')}</textarea>
+        </div>
       </div>
+      <button class="call-star-btn${c.starred ? ' starred' : ''}" data-star-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}">${c.starred ? '★' : '☆'}</button>
+      <button class="call-notes-btn${c.notes ? ' has-notes' : ''}" data-notes-id="${c.id}" title="Notes">📝</button>
       ${c.recording_sid ? `
         <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" title="Play recording">▶</button>
         <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>` : ''}
       <button class="call-del-btn" data-id="${escHtml(c.id)}" title="Delete call">🗑</button>
     </div>`;
   }).join('');
+  log.querySelectorAll('.call-star-btn').forEach(btn => {
+    btn.addEventListener('click', () => toggleCallStar(btn.dataset.starId));
+  });
+  log.querySelectorAll('.call-notes-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.notesId;
+      if (openCallNotesIds.has(id)) openCallNotesIds.delete(id); else openCallNotesIds.add(id);
+      document.querySelector(`[data-notes-wrap="${id}"]`)?.classList.toggle('hidden');
+    });
+  });
+  log.querySelectorAll('.call-notes-input').forEach(ta => {
+    ta.addEventListener('input', () => saveCallNoteDebounced(ta.dataset.id, ta.value));
+  });
   log.querySelectorAll('.call-play-btn').forEach(btn => {
     btn.addEventListener('click', () => playRecording(btn.dataset.sid, btn));
   });
@@ -2390,6 +2424,27 @@ function renderCallLog() {
   log.querySelectorAll('.call-del-btn').forEach(btn => {
     btn.addEventListener('click', () => deleteCall(btn.dataset.id));
   });
+}
+
+async function toggleCallStar(id) {
+  const c = calls.find(x => x.id === id);
+  if (!c) return;
+  const next = c.starred ? 0 : 1;
+  c.starred = next; // optimistic
+  renderCallLog();
+  try { await apiCall('PUT', '/calls/' + id, { starred: !!next }); }
+  catch (e) { c.starred = next ? 0 : 1; toast('Could not save star'); renderCallLog(); }
+}
+
+let callNotesSaveTimer = null;
+function saveCallNoteDebounced(id, notes) {
+  const c = calls.find(x => x.id === id);
+  if (c) c.notes = notes; // keep the in-memory model current so a later re-render doesn't stomp what's on screen
+  clearTimeout(callNotesSaveTimer);
+  callNotesSaveTimer = setTimeout(async () => {
+    try { await apiCall('PUT', '/calls/' + id, { notes }); }
+    catch (e) { toast('Could not save note'); }
+  }, 600);
 }
 
 // Recordings sit behind auth, so a bare <audio src> can't load them — fetch
