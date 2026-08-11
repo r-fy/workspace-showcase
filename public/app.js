@@ -2574,7 +2574,7 @@ function renderSmsLog() {
       <div class="call-item-header">
         <div class="call-item-id">
           ${chipName ? `<div class="call-item-name">${escHtml(chipName)}</div>` : ''}
-          <div class="call-item-number"><span class="call-dir-in" title="${inbound ? 'Received' : 'Sent'}">${inbound ? '↙' : '↗'}</span> ${escHtml(fmtPhone(num))}</div>
+          <div class="call-item-number"><span class="${inbound ? 'call-dir-in' : 'call-dir-out'}" title="${inbound ? 'Received' : 'Sent'}">${inbound ? '↙' : '↗'}</span> ${escHtml(fmtPhone(num))}</div>
         </div>
       </div>
       <div class="call-item-meta">
