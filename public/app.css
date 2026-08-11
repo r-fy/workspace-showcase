@@ -1272,6 +1272,11 @@ header {
 .prospect-select-all-wrap input { accent-color: #5fc83b; cursor: pointer; }
 .prospect-row-check { accent-color: #5fc83b; cursor: pointer; flex-shrink: 0; width: 14px; height: 14px; margin: 0; }
 .prospect-row.selected { background: #0d1a0a; }
+.prospect-row.search-flash { animation: prospect-flash 1.8s ease-out; }
+@keyframes prospect-flash {
+  0%, 30% { background: #2a4a1a; }
+  100% { background: transparent; }
+}
 
 /* ── Audits ─────────────────────────────────────────────────── */
 .audit-item { padding: 8px 12px; cursor: pointer; border-left: 2px solid transparent; }

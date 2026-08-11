@@ -3477,8 +3477,8 @@ async function importMdFiles(files) {
 
 // ── Universal Search ───────────────────────────────────────────
 // (The ⌘K command palette that used to live in this search dropdown was
-// deleted outright in rfy-crm — confirmed unused. Search still covers
-// notes, boards, and tasks.)
+// deleted outright in rfy-crm — confirmed unused. Search covers notes,
+// boards, tasks, CRM leads, and dialer prospects.)
 let searchFlat = [];
 let searchIdx = -1;
 let searchDebounce = null;
@@ -3520,10 +3520,21 @@ async function renderSearch(q) {
     !t.deleted_at && (t.title.toLowerCase().includes(ql) || t.description?.toLowerCase().includes(ql))
   ).slice(0, 5);
 
+  const prospectResults = allProspects.filter(p =>
+    (p.name || '').toLowerCase().includes(ql) || (p.phone || '').includes(ql) || (p.city || '').toLowerCase().includes(ql)
+  ).slice(0, 5);
+
+  if (!leads.length) { try { leads = await apiCall('GET', '/leads'); } catch (e) {} }
+  const leadResults = leads.filter(l =>
+    (l.business_name || '').toLowerCase().includes(ql) || (l.website || '').toLowerCase().includes(ql) || (l.contact_name || '').toLowerCase().includes(ql)
+  ).slice(0, 5);
+
   searchFlat = [
     ...noteResults.map(n => ({ type: 'note', data: n })),
     ...boardResults.map(b => ({ type: 'board', data: b })),
     ...taskResults.map(t => ({ type: 'task', data: t })),
+    ...leadResults.map(l => ({ type: 'lead', data: l })),
+    ...prospectResults.map(p => ({ type: 'prospect', data: p })),
   ];
 
   if (!searchFlat.length) {
@@ -3567,6 +3578,26 @@ async function renderSearch(q) {
       </div></div>`;
     }
   }
+  if (leadResults.length) {
+    html += `<div class="search-section-header">Leads</div>`;
+    for (const l of leadResults) {
+      html += `<div class="search-item" data-fi="${fi++}"><div class="search-item-body">
+        <div class="search-item-title">${escHtml(l.business_name || 'Untitled lead')}</div>
+        ${l.website ? `<div class="search-item-sub">${escHtml(l.website)}</div>` : ''}
+      </div></div>`;
+    }
+  }
+  if (prospectResults.length) {
+    html += `<div class="search-section-header">Prospects</div>`;
+    for (const p of prospectResults) {
+      const listName = prospectLists.find(pl => pl.id === p.list_id)?.name || '';
+      const sub = [fmtPhone(p.phone) || p.phone, listName].filter(Boolean).join(' · ');
+      html += `<div class="search-item" data-fi="${fi++}"><div class="search-item-body">
+        <div class="search-item-title">${escHtml(p.name || 'Unnamed')}</div>
+        ${sub ? `<div class="search-item-sub">${escHtml(sub)}</div>` : ''}
+      </div></div>`;
+    }
+  }
   searchIdx = -1;
   dropdown.innerHTML = html;
   dropdown.classList.remove('hidden');
@@ -3587,6 +3618,21 @@ function activateSearch(idx) {
     const col = allColumns.find(c => c.id === item.data.column_id);
     if (col) { switchTab('tasks'); selectBoard(col.board_id).then(() => openTaskModal(item.data)); }
   }
+  else if (item.type === 'lead') { switchTab('crm'); openLead(item.data.id); }
+  else if (item.type === 'prospect') {
+    switchTab('dialer');
+    openProspectList(item.data.list_id).then(() => flashProspectRow(item.data.id));
+  }
+}
+
+// Jump straight to a prospect row after its list opens from search — scroll
+// it into view and flash it so it's findable in a list of hundreds.
+function flashProspectRow(id) {
+  const row = document.querySelector(`.prospect-row[data-id="${id}"]`);
+  if (!row) return;
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  row.classList.add('search-flash');
+  setTimeout(() => row.classList.remove('search-flash'), 1800);
 }
 
 // ── Boards ─────────────────────────────────────────────────────
