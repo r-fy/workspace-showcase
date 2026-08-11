@@ -1608,7 +1608,8 @@ header {
 .incoming-call-label { font-size: 12px; color: #8ce870; text-transform: uppercase; letter-spacing: 0.04em; }
 #incoming-call-who { font-size: 14px; color: #e0e0e0; font-weight: 600; }
 .incoming-call-bar .dial-call-btn, .incoming-call-bar .dial-hangup-btn { padding: 6px 14px; font-size: 12px; }
-.call-dir-in { color: #8ce870; }
+.call-dir-in { color: #8ce870; font-size: 1.5em; }
+.call-dir-out { color: #888; font-size: 1.5em; }
 
 /* ── To Do (Eisenhower matrix) ──────────────────────────────────── */
 .todo-wrap { padding: 22px 26px 26px; display: flex; flex-direction: column; gap: 18px; min-height: 100%; }
