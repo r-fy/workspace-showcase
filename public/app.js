@@ -30,6 +30,7 @@ let calendarViewMode = localStorage.getItem('calendar-view-mode') === 'month' ? 
 let calendarMonthVisible = localStorage.getItem('calendar-month-visible') !== '0';
 
 let calls = [];
+let smsMessages = []; // Texts panel — shares the dial-number input as its "to" target, no separate composer state
 let twDevice = null;        // Twilio Voice Device (created lazily on first Calls-tab open)
 let twCall = null;          // active Call, null when idle
 let twDialing = false;      // set synchronously on Call click — twCall only exists after connect() resolves
@@ -129,11 +130,12 @@ async function fullSync() {
     notes = data.notes; boards = data.boards; allColumns = data.columns;
     reminders = data.reminders || [];
     calls = data.calls || [];
+    smsMessages = data.sms || [];
     applyProspectSyncData(data);
     lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') renderCallLog();
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog(); renderSmsLog(); }
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
     notes = await idbGetAll('notes'); boards = await idbGetAll('boards');
@@ -153,8 +155,9 @@ function hashData(data) {
   const ns = (data.notes||[]).map(n=>n.id+':'+n.updated_at).sort().join('|');
   const rs = (data.reminders||[]).map(r=>r.id+':'+r.updated_at+':'+(r.next_fire_at||0)+':'+(r.snoozed_until||0)).sort().join('|');
   const cs = (data.calls||[]).map(c=>c.id+':'+c.status+':'+(c.recording_sid||'')+':'+c.starred+':'+c.notes).sort().join('|');
+  const ss = (data.sms||[]).map(s=>s.id+':'+s.status).sort().join('|');
   const ps = (data.prospects||[]).map(p=>p.id+':'+p.updated_at+':'+p.outcome+':'+(p.promoted_lead_id||'')).sort().join('|');
-  return ts + '$$' + ns + '$$' + rs + '$$' + cs + '$$' + ps;
+  return ts + '$$' + ns + '$$' + rs + '$$' + cs + '$$' + ss + '$$' + ps;
 }
 
 // Prospect lists ride /api/sync (like reminders/calls) so an outside change —
@@ -205,10 +208,11 @@ async function pollSync() {
     notes = data.notes; boards = data.boards; allColumns = data.columns;
     reminders = data.reminders || [];
     calls = data.calls || [];
+    smsMessages = data.sms || [];
     applyProspectSyncData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') renderCallLog();
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog(); renderSmsLog(); }
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
       const remote = data.notes.find(n => n.id === currentNoteId);
@@ -2545,6 +2549,66 @@ async function deleteCall(callId) {
   } catch(e) { toast('Could not delete — check connection'); }
 }
 
+// ── SMS (Texts, Dialer tab) ──────────────────────────────────────────────
+// Reuses #dial-number as the "to" target — same field the dial pad uses, no
+// separate composer state. A reply ↩ on an inbound row just fills that field.
+function smsDisplayName(s) {
+  return s.lead_id ? (leads.find(l => l.id === s.lead_id)?.business_name || null) : null;
+}
+
+function renderSmsLog() {
+  const log = document.getElementById('sms-log');
+  if (!log) return;
+  if (log.querySelector('.sms-body-input:focus')) return; // don't stomp an in-progress reply on the 2s poll
+  const inCrm = dialerInCrm();
+  const scoped = inCrm && currentLeadId ? smsMessages.filter(s => s.lead_id === currentLeadId) : smsMessages;
+  if (!scoped.length) {
+    log.innerHTML = `<div class="agenda-empty">${inCrm ? 'No texts with this lead yet' : 'No texts yet — type a number above and send one'}</div>`;
+    return;
+  }
+  log.innerHTML = '<div class="agenda-section-label">Texts</div>' + scoped.map(s => {
+    const inbound = s.direction === 'inbound';
+    const num = inbound ? s.from_number : s.to_number;
+    const chipName = !inCrm ? smsDisplayName(s) : null;
+    const failed = s.status === 'failed' || s.status === 'undelivered';
+    return `<div class="call-item" data-id="${s.id}">
+      <div class="call-item-header">
+        <div class="call-item-id">
+          ${chipName ? `<div class="call-item-name">${escHtml(chipName)}</div>` : ''}
+          <div class="call-item-number"><span class="call-dir-in" title="${inbound ? 'Received' : 'Sent'}">${inbound ? '↙' : '↗'}</span> ${escHtml(fmtPhone(num))}</div>
+        </div>
+        ${inbound ? `<button class="call-star-btn" data-reply-num="${escHtml(num)}" title="Reply">↩</button>` : ''}
+      </div>
+      <div class="call-item-meta">
+        <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(s.created_at))}</span>
+        ${!inbound ? `<span class="call-status ${failed ? 'call-status-bad' : 'call-status-dim'}">${escHtml(s.status)}</span>` : ''}
+      </div>
+      <div class="sms-body">${escHtml(s.body)}</div>
+    </div>`;
+  }).join('');
+  log.querySelectorAll('[data-reply-num]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const inp = document.getElementById('dial-number');
+      if (inp) inp.value = fmtPhone(btn.dataset.replyNum);
+      document.getElementById('sms-body-input')?.focus();
+    });
+  });
+}
+
+async function sendSms() {
+  const to = normalizeDialNumber(document.getElementById('dial-number')?.value);
+  const bodyEl = document.getElementById('sms-body-input');
+  const body = bodyEl?.value.trim();
+  if (!to) { toast('Enter a number first'); return; }
+  if (!body) return;
+  try {
+    const msg = await apiCall('POST', '/sms/send', { to, body, leadId: (dialerInCrm() && currentLeadId) ? currentLeadId : undefined });
+    smsMessages.unshift(msg);
+    bodyEl.value = '';
+    renderSmsLog();
+  } catch (e) { toast('Could not send — check connection'); }
+}
+
 // ── Push notifications setup ──
 function urlBase64ToUint8Array(base64) {
   const padding = '='.repeat((4 - base64.length % 4) % 4);
@@ -4788,6 +4852,10 @@ document.getElementById('dial-number').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); startCall(); }
 });
 document.getElementById('dial-number').addEventListener('change', e => savePhoneBackToLead(e.target.value));
+document.getElementById('sms-send-btn').addEventListener('click', sendSms);
+document.getElementById('sms-body-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSms(); }
+});
 // Standalone Dialer tab (v162)
 document.getElementById('new-call-btn').addEventListener('click', () => {
   switchTab('dialer');
@@ -5330,6 +5398,7 @@ function renderCrmCallsSub() {
   const inp = document.getElementById('dial-number');
   if (inp && !twCall && !twDialing) inp.value = currentLead?.phone_number || '';
   renderCallLog();
+  renderSmsLog();
   initDialer();
   loadUsagePanel();
 }
@@ -5341,6 +5410,7 @@ async function loadDialerTab() {
   moveDialerTo('dialer-home');
   if (!leads.length) { try { leads = await apiCall('GET', '/leads'); } catch (e) {} } // for name chips + auto-link
   renderCallLog();
+  renderSmsLog();
   initDialer();
   loadUsagePanel();
   loadProspectLists();
