@@ -1988,6 +1988,13 @@ function normalizeE164(raw) {
   return null;
 }
 
+// Same formatting the client's fmtPhone does — used in push notification
+// bodies so a US number reads as (555) 123-4567, not raw E.164.
+function fmtPhoneDisplay(n) {
+  const m = String(n || '').match(/^\+1([2-9]\d{2})(\d{3})(\d{4})$/);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : (n || 'Unknown number');
+}
+
 // Twilio fetches this when the browser SDK connects. From is "client:<user>",
 // To is the param the dial pad passed. Responds with TwiML that dials out with
 // the real caller ID and records both sides on separate tracks from answer.
@@ -2141,10 +2148,13 @@ app.post('/api/twilio/sms', twilioWebhook, (req, res) => {
   db.prepare(`INSERT OR IGNORE INTO sms_messages (id, user_id, message_sid, direction, to_number, from_number, body, status, lead_id, created_at)
     VALUES (?, ?, ?, 'inbound', ?, ?, ?, 'received', ?, ?)`)
     .run(uid(), userId, req.body.MessageSid || null, TWILIO_CALLER_ID, from, req.body.Body || '', lead ? lead.id : null, now());
+  // Leads with the sender's number (not just the lead name) — until the
+  // Twilio number is A2P 10DLC-registered, replies can't send from the app,
+  // so this number is what Raffi texts back from his own personal cell.
   sendPushToUser(userId, {
     type: 'sms',
-    title: 'New text' + (lead ? ' — ' + lead.business_name : ''),
-    body: (req.body.Body || '').slice(0, 120) || (from || 'Unknown number'),
+    title: 'New text — ' + fmtPhoneDisplay(from) + (lead ? ' (' + lead.business_name + ')' : ''),
+    body: (req.body.Body || '').slice(0, 150) || '(no message body)',
   }).catch(() => {});
   res.type('text/xml').send(new twilio.twiml.MessagingResponse().toString()); // empty = no auto-reply
 });
