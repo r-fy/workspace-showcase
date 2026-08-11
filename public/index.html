@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=158">
+<link rel="stylesheet" href="/app.css?v=159">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -368,7 +368,12 @@
               <button class="dial-call-btn" id="dial-call-btn">Call</button>
               <button class="dial-hangup-btn hidden" id="dial-hangup-btn">Hang Up</button>
             </div>
+            <div class="sms-compose">
+              <textarea id="sms-body-input" class="sms-body-input" rows="2" placeholder="Text the number above… (Enter to send)"></textarea>
+              <button class="dial-call-btn" id="sms-send-btn">Send</button>
+            </div>
           </div>
+          <div class="call-log" id="sms-log"></div>
           <div class="call-log" id="call-log"></div>
         </div>
       </div>
@@ -799,6 +804,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=186"></script>
+<script src="/app.js?v=187"></script>
 </body>
 </html>

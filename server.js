@@ -432,6 +432,26 @@ db.exec(`
 try { db.exec(`ALTER TABLE calls ADD COLUMN prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL`); } catch(e) {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_prospect ON calls(prospect_id, started_at)`); } catch(e) {}
 
+// SMS (Texts, lives in the Dialer tab): one row per message, same
+// lead/prospect-linking + webhook-signature-auth pattern as calls, no
+// recording/duration fields since there's nothing to record.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sms_messages (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    message_sid TEXT UNIQUE,
+    direction TEXT NOT NULL DEFAULT 'outbound',
+    to_number TEXT NOT NULL DEFAULT '',
+    from_number TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',
+    lead_id TEXT REFERENCES leads(id) DEFAULT NULL,
+    prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_sms_user ON sms_messages(user_id, created_at);
+`);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1457,11 +1477,12 @@ app.get('/api/sync', auth, (req, res) => {
     .all(req.userId, now() - COMPLETED_KEEP_MS);
   // Newest 200 calls only — this rides the 2s poll, keep the payload bounded.
   const calls = db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId);
+  const sms = db.prepare('SELECT * FROM sms_messages WHERE user_id=? ORDER BY created_at DESC LIMIT 200').all(req.userId);
   const prospect_lists = db.prepare('SELECT * FROM prospect_lists WHERE user_id=? ORDER BY created_at DESC').all(req.userId)
     .map(l => ({ ...l, ...prospectListRollup(l) }));
   const prospects = db.prepare('SELECT * FROM prospects WHERE user_id=? ORDER BY created_at ASC').all(req.userId);
   const prospect_stats_today = computeProspectStatsForDate(req.userId, laDateStr(now()));
-  res.json({ notes, boards, columns, tasks, reminders, calls, prospect_lists, prospects, prospect_stats_today });
+  res.json({ notes, boards, columns, tasks, reminders, calls, sms, prospect_lists, prospects, prospect_stats_today });
 });
 
 // ── Boards ────────────────────────────────────────────────────
@@ -2108,6 +2129,61 @@ app.post('/api/twilio/inbound-status', twilioWebhook, (req, res) => {
 
 app.get('/api/calls', auth, (req, res) => {
   res.json(db.prepare('SELECT * FROM calls WHERE user_id=? ORDER BY started_at DESC LIMIT 200').all(req.userId));
+});
+
+// ── SMS (Texts, Dialer tab) ────────────────────────────────────
+// The phone NUMBER's Messaging URL points here — same signature-validated
+// public-webhook pattern as the voice webhooks above, no PIN auth.
+app.post('/api/twilio/sms', twilioWebhook, (req, res) => {
+  const from = String(req.body.From || '');
+  const userId = Object.values(USERS)[0]; // single-user app — inbound always lands with the owner
+  const lead = leadByPhone(userId, from);
+  db.prepare(`INSERT OR IGNORE INTO sms_messages (id, user_id, message_sid, direction, to_number, from_number, body, status, lead_id, created_at)
+    VALUES (?, ?, ?, 'inbound', ?, ?, ?, 'received', ?, ?)`)
+    .run(uid(), userId, req.body.MessageSid || null, TWILIO_CALLER_ID, from, req.body.Body || '', lead ? lead.id : null, now());
+  sendPushToUser(userId, {
+    type: 'sms',
+    title: 'New text' + (lead ? ' — ' + lead.business_name : ''),
+    body: (req.body.Body || '').slice(0, 120) || (from || 'Unknown number'),
+  }).catch(() => {});
+  res.type('text/xml').send(new twilio.twiml.MessagingResponse().toString()); // empty = no auto-reply
+});
+
+app.get('/api/sms', auth, (req, res) => {
+  res.json(db.prepare('SELECT * FROM sms_messages WHERE user_id=? ORDER BY created_at DESC LIMIT 500').all(req.userId));
+});
+
+// Raw fetch + Basic auth, same convention as the recordings/usage calls
+// below rather than the twilio SDK client — logs the row from Twilio's own
+// response so message_sid/status are always accurate.
+app.post('/api/sms/send', auth, async (req, res) => {
+  if (!twilioEnabled) return res.status(503).json({ error: 'twilio not configured' });
+  const to = normalizeE164(req.body.to);
+  const body = String(req.body.body || '').trim();
+  if (!to) return res.status(400).json({ error: 'bad number' });
+  if (!body) return res.status(400).json({ error: 'empty message' });
+  const rawLeadId = String(req.body.leadId || '');
+  const leadId = rawLeadId && db.prepare('SELECT 1 FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(rawLeadId, req.userId) ? rawLeadId : null;
+  try {
+    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Basic ' + Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64'),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ From: TWILIO_CALLER_ID, To: to, Body: body }),
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(502).json({ error: data.message || 'Twilio send failed' });
+    const id = uid();
+    db.prepare(`INSERT INTO sms_messages (id, user_id, message_sid, direction, to_number, from_number, body, status, lead_id, created_at)
+      VALUES (?, ?, ?, 'outbound', ?, ?, ?, ?, ?, ?)`)
+      .run(id, req.userId, data.sid, to, TWILIO_CALLER_ID, body, data.status || 'queued', leadId, now());
+    res.json(db.prepare('SELECT * FROM sms_messages WHERE id=?').get(id));
+  } catch (err) {
+    console.warn('sms send failed:', err.message);
+    res.status(502).json({ error: 'could not reach Twilio' });
+  }
 });
 
 // Star (favorite) a recording and/or leave yourself a note on it — personal
