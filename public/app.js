@@ -5339,6 +5339,9 @@ let currentProspectList = null;  // full record incl. prospects[] from GET /pros
 let lastDialedProspectId = null; // highlighted row — set on Dial, cleared only by dialing another
 const openProspectNotesIds = new Set(); // ids with the score/notes panel expanded — survives re-renders
 const pendingProspectOutcomes = {}; // id -> outcome not yet confirmed by a sync payload, wins over stale ones
+const selectedProspects = new Set(); // bulk-select state — survives re-renders same as openProspectNotesIds
+let lastClickedProspectId = null;    // shift-click range anchor, mirrors the expenses list pattern
+let activeProspectOutcomeFilter = null; // outcome key, or null = show all
 let dialingProspectId = null;    // one-shot: set by dialProspect(), read+cleared by startCall()
 let prospectStatsDate = null;    // null = viewing "today" (live via sync); 'YYYY-MM-DD' = a frozen past day
 
@@ -5388,6 +5391,7 @@ async function openProspectList(id) {
   try { list = await apiCall('GET', '/prospect-lists/' + id); } catch (e) { toast('Could not load list'); return; }
   currentProspectListId = id;
   currentProspectList = list;
+  selectedProspects.clear(); lastClickedProspectId = null; activeProspectOutcomeFilter = null;
   renderProspectListsPanel();
   renderProspectListView();
   if (isMobile()) closeSidebar();
@@ -5490,7 +5494,31 @@ function renderProspectListView() {
   if (!currentProspectList) { el.classList.add('hidden'); el.innerHTML = ''; return; }
   el.classList.remove('hidden');
   const l = currentProspectList;
-  const rowsHtml = (l.prospects || []).map(p => {
+  const allProspectsInList = l.prospects || [];
+  // prune selection of anything no longer in the list (deleted elsewhere, sync tick, etc.)
+  const liveIds = new Set(allProspectsInList.map(p => p.id));
+  [...selectedProspects].forEach(id => { if (!liveIds.has(id)) selectedProspects.delete(id); });
+
+  const outcomeCounts = {};
+  allProspectsInList.forEach(p => { outcomeCounts[p.outcome] = (outcomeCounts[p.outcome] || 0) + 1; });
+  const presentOutcomes = PROSPECT_OUTCOMES.filter(([k]) => outcomeCounts[k]);
+  if (activeProspectOutcomeFilter && !outcomeCounts[activeProspectOutcomeFilter]) activeProspectOutcomeFilter = null;
+  const filterBarHtml = presentOutcomes.length >= 2 ? `
+    <div class="tags-bar prospect-filter-bar">
+      ${presentOutcomes.map(([k, label]) => `
+        <span class="tag-filter-pill${activeProspectOutcomeFilter === k ? ' active' : ''}" data-outcome-filter="${k}">${escHtml(label)} (${outcomeCounts[k]})</span>
+      `).join('')}
+      ${activeProspectOutcomeFilter ? '<span class="tag-filter-clear" data-outcome-filter-clear="1">Clear</span>' : ''}
+    </div>` : '';
+
+  const filtered = activeProspectOutcomeFilter
+    ? allProspectsInList.filter(p => p.outcome === activeProspectOutcomeFilter)
+    : allProspectsInList;
+
+  const anySelected = selectedProspects.size > 0;
+  const allFilteredSelected = filtered.length > 0 && filtered.every(p => selectedProspects.has(p.id));
+
+  const rowsHtml = filtered.map(p => {
     const outcomeOpts = PROSPECT_OUTCOMES.map(([k, label]) =>
       `<option value="${k}"${p.outcome === k ? ' selected' : ''}>${escHtml(label)}</option>`).join('');
     const contact = [fmtPhone(p.phone) || p.phone, p.email].filter(Boolean).join(' · ') || '—';
@@ -5501,8 +5529,10 @@ function renderProspectListView() {
     const rowClass = [
       p.outcome && p.outcome !== 'not_yet_called' ? 'called' : '',
       p.id === lastDialedProspectId ? 'dialed' : '',
+      selectedProspects.has(p.id) ? 'selected' : '',
     ].filter(Boolean).join(' ');
     return `<div class="prospect-row${rowClass ? ' ' + rowClass : ''}" data-id="${p.id}">
+      <input type="checkbox" class="prospect-row-check" data-id="${p.id}"${selectedProspects.has(p.id) ? ' checked' : ''}>
       <div class="prospect-row-main" data-toggle-notes="${p.id}">
         <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}</div>
         <div class="prospect-row-contact">${escHtml(contact)}${p.city ? ' · ' + escHtml(p.city) : ''}</div>
@@ -5515,7 +5545,7 @@ function renderProspectListView() {
       </div>
       ${renderProspectScorePanel(p)}
     </div>`;
-  }).join('') || '<div class="agenda-empty">No prospects yet — Import to add some.</div>';
+  }).join('') || (activeProspectOutcomeFilter ? '<div class="agenda-empty">No prospects with this status.</div>' : '<div class="agenda-empty">No prospects yet — Import to add some.</div>');
 
   el.innerHTML = `
     <div class="prospect-list-header">
@@ -5525,7 +5555,26 @@ function renderProspectListView() {
         <button class="del-task-btn" id="prospect-list-del-btn">🗑 Delete list</button>
       </div>
     </div>
+    ${filterBarHtml}
+    <div class="exp-bulk-bar prospect-bulk-bar${anySelected ? '' : ' hidden'}">
+      <label class="prospect-select-all-wrap"><input type="checkbox" class="prospect-select-all"${allFilteredSelected ? ' checked' : ''}> Select all</label>
+      <span class="exp-bulk-count">${selectedProspects.size} selected</span>
+      <button class="exp-bulk-delete" id="prospect-bulk-delete">Delete selected</button>
+      <button class="exp-bulk-clear" id="prospect-bulk-clear">Clear</button>
+    </div>
+    ${!anySelected && filtered.length ? `<div class="prospect-select-all-row"><label class="prospect-select-all-wrap"><input type="checkbox" class="prospect-select-all"${allFilteredSelected ? ' checked' : ''}> Select all</label></div>` : ''}
     <div id="prospect-rows">${rowsHtml}</div>`;
+
+  el.querySelectorAll('[data-outcome-filter]').forEach(pill =>
+    pill.addEventListener('click', () => {
+      const k = pill.dataset.outcomeFilter;
+      activeProspectOutcomeFilter = activeProspectOutcomeFilter === k ? null : k;
+      renderProspectListView();
+    }));
+  el.querySelector('[data-outcome-filter-clear]')?.addEventListener('click', () => {
+    activeProspectOutcomeFilter = null;
+    renderProspectListView();
+  });
 
   el.querySelectorAll('[data-outcome-id]').forEach(sel =>
     sel.addEventListener('change', () => updateProspectOutcome(sel.dataset.outcomeId, sel.value)));
@@ -5550,6 +5599,49 @@ function renderProspectListView() {
     }));
   document.getElementById('prospect-list-del-btn')?.addEventListener('click', deleteProspectListActive);
   document.getElementById('prospect-list-rename-btn')?.addEventListener('click', renameProspectListActive);
+
+  // Select-all — there may be two checkboxes (bulk bar + empty-state row); keep them in sync
+  el.querySelectorAll('.prospect-select-all').forEach(cb => cb.addEventListener('change', () => {
+    if (cb.checked) filtered.forEach(p => selectedProspects.add(p.id));
+    else filtered.forEach(p => selectedProspects.delete(p.id));
+    renderProspectListView();
+  }));
+
+  // Per-row checkboxes — click toggles, shift-click range-selects (mirrors the expenses list)
+  el.querySelectorAll('.prospect-row-check').forEach((cb, idx) => {
+    cb.addEventListener('click', e => e.stopPropagation());
+    cb.addEventListener('change', e => {
+      const id = cb.dataset.id;
+      if (e.shiftKey && lastClickedProspectId) {
+        const lastIdx = filtered.findIndex(x => x.id === lastClickedProspectId);
+        if (lastIdx !== -1) {
+          const lo = Math.min(idx, lastIdx), hi = Math.max(idx, lastIdx);
+          for (let i = lo; i <= hi; i++) selectedProspects.add(filtered[i].id);
+          lastClickedProspectId = id;
+          renderProspectListView();
+          return;
+        }
+      }
+      lastClickedProspectId = id;
+      if (cb.checked) selectedProspects.add(id); else selectedProspects.delete(id);
+      renderProspectListView();
+    });
+  });
+
+  document.getElementById('prospect-bulk-delete')?.addEventListener('click', async () => {
+    const ids = [...selectedProspects];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} prospect${ids.length !== 1 ? 's' : ''}? This can't be undone.`)) return;
+    currentProspectList.prospects = currentProspectList.prospects.filter(p => !selectedProspects.has(p.id));
+    selectedProspects.clear(); lastClickedProspectId = null;
+    renderProspectListView();
+    try { await Promise.all(ids.map(id => apiCall('DELETE', '/prospects/' + id))); }
+    catch (e) { toast('Some deletes failed'); }
+    loadProspectLists();
+  });
+  document.getElementById('prospect-bulk-clear')?.addEventListener('click', () => {
+    selectedProspects.clear(); lastClickedProspectId = null; renderProspectListView();
+  });
 }
 
 async function renameProspectListActive() {

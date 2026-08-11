@@ -1263,6 +1263,16 @@ header {
   .prospect-row-actions { width: 100%; justify-content: flex-end; }
 }
 
+/* Status filter + bulk-select (mirrors the call-log status filter and the
+   expenses list's bulk-select bar — same classes, new context). */
+.prospect-filter-bar { max-width: 640px; margin: 0 auto; padding: 8px 20px 0; }
+.prospect-bulk-bar, .prospect-select-all-row { max-width: 640px; margin: 0 auto; padding-left: 20px; padding-right: 20px; }
+.prospect-select-all-row { padding-top: 6px; padding-bottom: 2px; }
+.prospect-select-all-wrap { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #777; cursor: pointer; }
+.prospect-select-all-wrap input { accent-color: #5fc83b; cursor: pointer; }
+.prospect-row-check { accent-color: #5fc83b; cursor: pointer; flex-shrink: 0; width: 14px; height: 14px; margin: 0; }
+.prospect-row.selected { background: #0d1a0a; }
+
 /* ── Audits ─────────────────────────────────────────────────── */
 .audit-item { padding: 8px 12px; cursor: pointer; border-left: 2px solid transparent; }
 .audit-item:hover { background: #181818; }
