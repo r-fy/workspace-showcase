@@ -970,6 +970,7 @@ app.delete('/api/prospect-lists/:id', auth, (req, res) => {
   const list = db.prepare('SELECT id FROM prospect_lists WHERE id=? AND user_id=?').get(req.params.id, req.userId);
   if (!list) return res.status(404).json({ error: 'Not found' });
   db.transaction(() => {
+    db.prepare('UPDATE calls SET prospect_id=NULL WHERE prospect_id IN (SELECT id FROM prospects WHERE list_id=?) AND user_id=?').run(list.id, req.userId);
     db.prepare('DELETE FROM prospects WHERE list_id=? AND user_id=?').run(list.id, req.userId);
     db.prepare('DELETE FROM prospect_lists WHERE id=? AND user_id=?').run(list.id, req.userId);
   })();
@@ -1037,9 +1038,15 @@ app.put('/api/prospects/:id', auth, (req, res) => {
 });
 
 // Fix a bad import line — single-row hard delete (the list itself has its own
-// hard-delete above for nuking a whole bad batch).
+// hard-delete above for nuking a whole bad batch). calls.prospect_id is a
+// real FK (unlike prospect_outcome_events, which has none) — a dialed
+// prospect can't be deleted without unlinking its calls first, same
+// "old calls stay unlinked forever" precedent as deleting a lead.
 app.delete('/api/prospects/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM prospects WHERE id=? AND user_id=?').run(req.params.id, req.userId);
+  db.transaction(() => {
+    db.prepare('UPDATE calls SET prospect_id=NULL WHERE prospect_id=? AND user_id=?').run(req.params.id, req.userId);
+    db.prepare('DELETE FROM prospects WHERE id=? AND user_id=?').run(req.params.id, req.userId);
+  })();
   res.json({ ok: true });
 });
 
