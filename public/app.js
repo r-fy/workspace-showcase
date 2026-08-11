@@ -2550,8 +2550,8 @@ async function deleteCall(callId) {
 }
 
 // ── SMS (Texts, Dialer tab) ──────────────────────────────────────────────
-// Reuses #dial-number as the "to" target — same field the dial pad uses, no
-// separate composer state. A reply ↩ on an inbound row just fills that field.
+// Read-only log — replying happens from Raffi's personal cell (the Twilio
+// number can't send until it's A2P 10DLC-registered), so there's no composer.
 function smsDisplayName(s) {
   return s.lead_id ? (leads.find(l => l.id === s.lead_id)?.business_name || null) : null;
 }
@@ -2559,11 +2559,10 @@ function smsDisplayName(s) {
 function renderSmsLog() {
   const log = document.getElementById('sms-log');
   if (!log) return;
-  if (log.querySelector('.sms-body-input:focus')) return; // don't stomp an in-progress reply on the 2s poll
   const inCrm = dialerInCrm();
   const scoped = inCrm && currentLeadId ? smsMessages.filter(s => s.lead_id === currentLeadId) : smsMessages;
   if (!scoped.length) {
-    log.innerHTML = `<div class="agenda-empty">${inCrm ? 'No texts with this lead yet' : 'No texts yet — type a number above and send one'}</div>`;
+    log.innerHTML = `<div class="agenda-empty">${inCrm ? 'No texts with this lead yet' : 'No texts yet'}</div>`;
     return;
   }
   log.innerHTML = '<div class="agenda-section-label">Texts</div>' + scoped.map(s => {
@@ -2577,7 +2576,6 @@ function renderSmsLog() {
           ${chipName ? `<div class="call-item-name">${escHtml(chipName)}</div>` : ''}
           <div class="call-item-number"><span class="call-dir-in" title="${inbound ? 'Received' : 'Sent'}">${inbound ? '↙' : '↗'}</span> ${escHtml(fmtPhone(num))}</div>
         </div>
-        ${inbound ? `<button class="call-star-btn" data-reply-num="${escHtml(num)}" title="Reply">↩</button>` : ''}
       </div>
       <div class="call-item-meta">
         <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(s.created_at))}</span>
@@ -2586,27 +2584,6 @@ function renderSmsLog() {
       <div class="sms-body">${escHtml(s.body)}</div>
     </div>`;
   }).join('');
-  log.querySelectorAll('[data-reply-num]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const inp = document.getElementById('dial-number');
-      if (inp) inp.value = fmtPhone(btn.dataset.replyNum);
-      document.getElementById('sms-body-input')?.focus();
-    });
-  });
-}
-
-async function sendSms() {
-  const to = normalizeDialNumber(document.getElementById('dial-number')?.value);
-  const bodyEl = document.getElementById('sms-body-input');
-  const body = bodyEl?.value.trim();
-  if (!to) { toast('Enter a number first'); return; }
-  if (!body) return;
-  try {
-    const msg = await apiCall('POST', '/sms/send', { to, body, leadId: (dialerInCrm() && currentLeadId) ? currentLeadId : undefined });
-    smsMessages.unshift(msg);
-    bodyEl.value = '';
-    renderSmsLog();
-  } catch (e) { toast('Could not send — check connection'); }
 }
 
 // ── Push notifications setup ──
@@ -4852,10 +4829,6 @@ document.getElementById('dial-number').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); startCall(); }
 });
 document.getElementById('dial-number').addEventListener('change', e => savePhoneBackToLead(e.target.value));
-document.getElementById('sms-send-btn').addEventListener('click', sendSms);
-document.getElementById('sms-body-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSms(); }
-});
 // Standalone Dialer tab (v162)
 document.getElementById('new-call-btn').addEventListener('click', () => {
   switchTab('dialer');

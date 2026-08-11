@@ -1142,13 +1142,6 @@ header {
 }
 .call-notes-input:focus { outline: none; border-color: #2a5a20; }
 
-.sms-compose { display: flex; gap: 8px; align-items: flex-end; }
-.sms-body-input {
-  flex: 1; min-height: 40px; max-height: 120px; resize: vertical; font-family: inherit; font-size: 13px;
-  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px; color: #e0e0e0; padding: 9px 10px;
-}
-.sms-body-input:focus { outline: none; border-color: #3a3a3a; }
-.sms-compose .dial-call-btn { flex: none; width: 64px; height: 40px; }
 .sms-body { font-size: 13px; color: #ccc; white-space: pre-wrap; word-break: break-word; }
 
 @media (max-width: 640px) {
