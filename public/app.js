@@ -2413,7 +2413,7 @@ function renderCallLog() {
     return `<div class="call-item${c.starred ? ' starred' : ''}" data-id="${c.id}">
       <div class="call-item-header">
         <div class="call-item-id">
-          ${chipName ? `<div class="call-item-name${c.lead_id ? ' call-item-name-link' : ''}"${c.lead_id ? ` data-lead-id="${escHtml(c.lead_id)}"` : ''}>${escHtml(chipName)}</div>` : ''}
+          ${chipName ? `<div class="call-item-name${c.lead_id || c.prospect_id ? ' call-item-name-link' : ''}"${c.lead_id ? ` data-jump-type="lead" data-jump-id="${escHtml(c.lead_id)}"` : c.prospect_id ? ` data-jump-type="prospect" data-jump-id="${escHtml(c.prospect_id)}"` : ''}>${escHtml(chipName)}</div>` : ''}
           <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
         </div>
         <div class="call-item-actions">
@@ -2440,7 +2440,10 @@ function renderCallLog() {
     btn.addEventListener('click', () => toggleCallStar(btn.dataset.starId));
   });
   log.querySelectorAll('.call-item-name-link').forEach(el => {
-    el.addEventListener('click', () => jumpToLead(el.dataset.leadId));
+    el.addEventListener('click', () => {
+      if (el.dataset.jumpType === 'lead') jumpToLead(el.dataset.jumpId);
+      else jumpToProspect(el.dataset.jumpId);
+    });
   });
   log.querySelectorAll('.call-notes-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -5494,6 +5497,15 @@ async function scrapeNewProspects() {
   try { await apiCall('POST', '/prospect-lists/scrape', { query: query.trim() }); }
   catch (e) { toast('Could not start scrape'); return; }
   toast("Scrape started — check back in a few minutes, it'll show up in your list picker.");
+}
+
+async function jumpToProspect(id) {
+  const p = allProspects.find(x => x.id === id);
+  if (!p) { toast('Prospect no longer exists'); return; }
+  switchTab('dialer');
+  openProspectNotesIds.add(id); // so the score/GBP-link panel is already expanded once the list renders
+  await openProspectList(p.list_id);
+  document.querySelector(`.prospect-row[data-id="${id}"]`)?.scrollIntoView({ block: 'center' });
 }
 
 async function openProspectList(id) {
