@@ -1111,6 +1111,8 @@ header {
 .call-item-id { min-width: 0; }
 .call-item-number { font-size: 13px; color: #ccc; margin-top: 1px; }
 .call-item-name { font-size: 13px; color: #8ce870; font-weight: 600; }
+.call-item-name-link { cursor: pointer; }
+.call-item-name-link:hover { text-decoration: underline; }
 .call-item-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .call-item-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .call-status { font-size: 10px; padding: 1px 7px; border-radius: 8px; border: 1px solid #2a2a2a; }

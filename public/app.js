@@ -2413,7 +2413,7 @@ function renderCallLog() {
     return `<div class="call-item${c.starred ? ' starred' : ''}" data-id="${c.id}">
       <div class="call-item-header">
         <div class="call-item-id">
-          ${chipName ? `<div class="call-item-name">${escHtml(chipName)}</div>` : ''}
+          ${chipName ? `<div class="call-item-name${c.lead_id ? ' call-item-name-link' : ''}"${c.lead_id ? ` data-lead-id="${escHtml(c.lead_id)}"` : ''}>${escHtml(chipName)}</div>` : ''}
           <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
         </div>
         <div class="call-item-actions">
@@ -2438,6 +2438,9 @@ function renderCallLog() {
   }).join('');
   log.querySelectorAll('.call-star-btn').forEach(btn => {
     btn.addEventListener('click', () => toggleCallStar(btn.dataset.starId));
+  });
+  log.querySelectorAll('.call-item-name-link').forEach(el => {
+    el.addEventListener('click', () => jumpToLead(el.dataset.leadId));
   });
   log.querySelectorAll('.call-notes-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -4977,6 +4980,11 @@ function newLeadForm() {
   updateCrmHeader(); showCrmSub('overview');
   renderLeadEditor({ business_name: '', website: '', primary_email: '', city: '', niche: '', notes: '', status: 'active',
     contact_name: '', phone_number: '', address: '', source: '', disposition: '' }, true);
+}
+
+function jumpToLead(id) {
+  switchTab('crm');
+  openLead(id);
 }
 
 async function openLead(id, sub) {
