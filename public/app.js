@@ -2473,14 +2473,27 @@ function wireCallStatusFilter(log) {
   });
 }
 
+function paintCallStar(id, starred) {
+  const item = document.querySelector(`.call-item[data-id="${id}"]`);
+  const btn = document.querySelector(`.call-star-btn[data-star-id="${id}"]`);
+  item?.classList.toggle('starred', !!starred);
+  if (btn) {
+    btn.classList.toggle('starred', !!starred);
+    btn.textContent = starred ? '★' : '☆';
+    btn.title = starred ? 'Unstar' : 'Star';
+  }
+}
+
 async function toggleCallStar(id) {
   const c = calls.find(x => x.id === id);
   if (!c) return;
   const next = c.starred ? 0 : 1;
   c.starred = next; // optimistic
-  renderCallLog();
+  paintCallStar(id, next); // direct DOM patch, not a full renderCallLog() — that bails out
+  // early whenever a recording's <audio> is open (so playback isn't yanked mid-listen),
+  // which would silently swallow this update while a recording is loaded
   try { await apiCall('PUT', '/calls/' + id, { starred: !!next }); }
-  catch (e) { c.starred = next ? 0 : 1; toast('Could not save star'); renderCallLog(); }
+  catch (e) { c.starred = next ? 0 : 1; toast('Could not save star'); paintCallStar(id, c.starred); }
 }
 
 let callNotesSaveTimer = null;
