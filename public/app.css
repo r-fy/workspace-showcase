@@ -1123,6 +1123,9 @@ header {
 .call-audio-slot audio { width: 100%; height: 32px; margin-top: 6px; }
 .call-item.starred { background: #201c0e; }
 .call-item.starred:hover { background: #26200f; }
+.call-item.selected { background: #0d1a0a; }
+.call-item-left { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.call-item-check { accent-color: #5fc83b; cursor: pointer; flex-shrink: 0; width: 14px; height: 14px; margin: 3px 0 0; }
 .call-play-btn, .call-dl-btn, .call-del-btn, .call-star-btn, .call-notes-btn {
   width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
   border: 1px solid #2a2a2a; color: #555; font-size: 12px;

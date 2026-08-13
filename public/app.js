@@ -2347,6 +2347,8 @@ const CALL_STATUS_LABEL = {
 };
 
 const openCallNotesIds = new Set(); // call ids with the feedback-notes panel expanded — survives re-renders
+const selectedCalls = new Set(); // bulk-select state — same pattern as selectedProspects/selectedExpenses
+let lastClickedCallId = null;    // shift-click range anchor
 
 // Same name a call would show once its prospect/lead is looked up — lead_id
 // only gets stamped when a number matches an EXISTING lead at dial time
@@ -2393,6 +2395,12 @@ function renderCallLog() {
   // linked rows). Pre-CRM calls have no lead_id (never backfilled, §1.8).
   const inCrm = dialerInCrm();
   const scopedCalls = inCrm && currentLeadId ? calls.filter(c => c.lead_id === currentLeadId) : calls;
+  // Prune selection against the full scoped set (not just what's visible under the
+  // current status filter) so switching filters — e.g. Missed then Voicemail — can
+  // build up one combined selection to bulk-delete together, and a call deleted
+  // elsewhere (another device) drops out instead of leaving a stale ghost selection.
+  const scopedIds = new Set(scopedCalls.map(c => c.id));
+  [...selectedCalls].forEach(id => { if (!scopedIds.has(id)) selectedCalls.delete(id); });
   const filterBarHtml = renderCallStatusFilterBar(scopedCalls);
   const leadCalls = activeCallStatus ? scopedCalls.filter(c => callStatusInfo(c).label === activeCallStatus) : scopedCalls;
   if (!scopedCalls.length) {
@@ -2404,17 +2412,32 @@ function renderCallLog() {
     wireCallStatusFilter(log);
     return;
   }
-  log.innerHTML = '<div class="agenda-section-label">Call log</div>' + filterBarHtml + leadCalls.map(c => {
+  const anySelected = selectedCalls.size > 0;
+  const allVisibleSelected = leadCalls.every(c => selectedCalls.has(c.id));
+  // Always the same one row (never swapped for a second variant) so selecting/clearing
+  // can patch it in place — see paintCallSelection — instead of a full renderCallLog(),
+  // which the audio/notes-focus guard above would silently swallow mid-playback.
+  const bulkBarHtml = `
+    <div class="exp-bulk-bar prospect-bulk-bar" id="call-bulk-bar">
+      <label class="prospect-select-all-wrap"><input type="checkbox" class="call-select-all"${allVisibleSelected ? ' checked' : ''}> Select all</label>
+      <span class="exp-bulk-count${anySelected ? '' : ' hidden'}" id="call-bulk-count">${selectedCalls.size} selected</span>
+      <button class="exp-bulk-delete${anySelected ? '' : ' hidden'}" id="call-bulk-delete">Delete selected</button>
+      <button class="exp-bulk-clear${anySelected ? '' : ' hidden'}" id="call-bulk-clear">Clear</button>
+    </div>`;
+  log.innerHTML = '<div class="agenda-section-label">Call log</div>' + filterBarHtml + bulkBarHtml + leadCalls.map(c => {
     const st = callStatusInfo(c);
     const inbound = c.direction === 'inbound';
     const num = inbound ? c.from_number : c.to_number;
     const chipName = !inCrm ? callDisplayName(c) : null;
     const notesOpen = openCallNotesIds.has(c.id);
-    return `<div class="call-item${c.starred ? ' starred' : ''}" data-id="${c.id}">
+    return `<div class="call-item${c.starred ? ' starred' : ''}${selectedCalls.has(c.id) ? ' selected' : ''}" data-id="${c.id}">
       <div class="call-item-header">
-        <div class="call-item-id">
+        <div class="call-item-left">
+          <input type="checkbox" class="call-item-check" data-id="${c.id}"${selectedCalls.has(c.id) ? ' checked' : ''}>
+          <div class="call-item-id">
           ${chipName ? `<div class="call-item-name${c.lead_id || c.prospect_id ? ' call-item-name-link' : ''}"${c.lead_id ? ` data-jump-type="lead" data-jump-id="${escHtml(c.lead_id)}"` : c.prospect_id ? ` data-jump-type="prospect" data-jump-id="${escHtml(c.prospect_id)}"` : ''}>${escHtml(chipName)}</div>` : ''}
           <div class="call-item-number">${inbound ? '<span class="call-dir-in" title="Incoming">↙</span> ' : ''}${escHtml(fmtPhone(num))}</div>
+          </div>
         </div>
         <div class="call-item-actions">
           <button class="call-star-btn${c.starred ? ' starred' : ''}" data-star-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}">${c.starred ? '★' : '☆'}</button>
@@ -2464,6 +2487,45 @@ function renderCallLog() {
   log.querySelectorAll('.call-del-btn').forEach(btn => {
     btn.addEventListener('click', () => deleteCall(btn.dataset.id));
   });
+  log.querySelectorAll('.call-item-check').forEach((cb, idx) => {
+    cb.addEventListener('click', e => e.stopPropagation());
+    cb.addEventListener('change', e => {
+      const id = cb.dataset.id;
+      if (e.shiftKey && lastClickedCallId) {
+        const lastIdx = leadCalls.findIndex(x => x.id === lastClickedCallId);
+        if (lastIdx !== -1) {
+          const lo = Math.min(idx, lastIdx), hi = Math.max(idx, lastIdx);
+          for (let i = lo; i <= hi; i++) selectedCalls.add(leadCalls[i].id);
+          lastClickedCallId = id;
+          paintCallSelection(log, leadCalls);
+          return;
+        }
+      }
+      lastClickedCallId = id;
+      if (cb.checked) selectedCalls.add(id); else selectedCalls.delete(id);
+      paintCallSelection(log, leadCalls);
+    });
+  });
+  log.querySelectorAll('.call-select-all').forEach(cb => cb.addEventListener('change', () => {
+    if (cb.checked) leadCalls.forEach(c => selectedCalls.add(c.id));
+    else leadCalls.forEach(c => selectedCalls.delete(c.id));
+    paintCallSelection(log, leadCalls);
+  }));
+  document.getElementById('call-bulk-delete')?.addEventListener('click', async () => {
+    const ids = [...selectedCalls];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} call${ids.length !== 1 ? 's' : ''} and their recordings? This can't be undone.`)) return;
+    const sids = calls.filter(c => ids.includes(c.id) && c.recording_sid).map(c => c.recording_sid);
+    calls = calls.filter(c => !ids.includes(c.id));
+    selectedCalls.clear(); lastClickedCallId = null;
+    renderCallLog();
+    sids.forEach(sid => { const u = recUrlCache.get(sid); if (u) URL.revokeObjectURL(u); recUrlCache.delete(sid); });
+    try { await Promise.all(ids.map(id => apiCall('DELETE', '/calls/' + id))); }
+    catch (e) { toast('Some deletes failed'); }
+  });
+  document.getElementById('call-bulk-clear')?.addEventListener('click', () => {
+    selectedCalls.clear(); lastClickedCallId = null; paintCallSelection(log, leadCalls);
+  });
   wireCallStatusFilter(log);
 }
 
@@ -2477,6 +2539,25 @@ function wireCallStatusFilter(log) {
   log.querySelector('#call-status-clear')?.addEventListener('click', () => {
     activeCallStatus = null; renderCallLog();
   });
+}
+
+// Direct DOM patch for checkbox/select-all toggles — same reasoning as
+// paintCallStar: a full renderCallLog() bails out while a recording is open,
+// so bulk-selecting rows while listening to one would otherwise silently do nothing.
+function paintCallSelection(log, leadCalls) {
+  log.querySelectorAll('.call-item-check').forEach(cb => {
+    const on = selectedCalls.has(cb.dataset.id);
+    cb.checked = on;
+    cb.closest('.call-item')?.classList.toggle('selected', on);
+  });
+  const anySelected = selectedCalls.size > 0;
+  const allVisibleSelected = leadCalls.length > 0 && leadCalls.every(c => selectedCalls.has(c.id));
+  const selectAllCb = log.querySelector('.call-select-all');
+  if (selectAllCb) selectAllCb.checked = allVisibleSelected;
+  const countEl = document.getElementById('call-bulk-count');
+  if (countEl) { countEl.textContent = selectedCalls.size + ' selected'; countEl.classList.toggle('hidden', !anySelected); }
+  document.getElementById('call-bulk-delete')?.classList.toggle('hidden', !anySelected);
+  document.getElementById('call-bulk-clear')?.classList.toggle('hidden', !anySelected);
 }
 
 function paintCallStar(id, starred) {
