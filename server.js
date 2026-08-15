@@ -235,7 +235,7 @@ db.exec(`
 
 // Follow-ups tab: one row per warm lead, an 8-touch drip sequence stored as a
 // JSON blob (same blob-column pattern as audits.data) — touches is a fixed
-// array of {day, type, label, subject, body, status, due_at, sent_at}.
+// array of {day, type, label, body, status, due_at, sent_at}.
 db.exec(`
   CREATE TABLE IF NOT EXISTS followups (
     id TEXT PRIMARY KEY,
@@ -695,20 +695,16 @@ const FOLLOWUP_TOUCH_PLAN = [
 const FOLLOWUP_TYPE_LABEL = { 'value-add': 'Value-add', 'close-hard': 'Close hard', 'new-angle': 'New angle / check-in' };
 const FOLLOWUP_SKELETON = {
   'value-add': {
-    subject: "One more thing on [BUSINESS_NAME]'s ads",
     body: "Hey [FIRST_NAME],\n\n[VALUE_ADD_INSIGHT — a fresh finding, screenshot, or competitor update specific to them].\n\nNo pitch here, just flagging it because it's useful either way.",
   },
   'close-hard': {
-    subject: 'Quick close on [BUSINESS_NAME]',
     body: "Hey [FIRST_NAME],\n\nStill open to closing that gap we found? $500/mo plus 15% of ad spend, no long-term lock-in.\n\nIf timing's off, just say so and I'll check back later. If it's a flat no, tell me that too, no hard feelings.",
   },
   'new-angle': {
-    subject: 'Different angle on [BUSINESS_NAME]',
     body: "Hey [FIRST_NAME],\n\n[NEW_ANGLE — a different hook than what's already been sent, e.g. a seasonal angle, a new competitor, a site change you noticed].\n\nWorth a quick look?",
   },
 };
 const FOLLOWUP_FINAL_TOUCH = {
-  subject: 'Last check-in on [BUSINESS_NAME]',
   body: "Hey [FIRST_NAME],\n\nHaven't heard back so I'll leave it here. Door's open whenever it makes sense on your end, the findings don't expire.\n\nGood luck either way.",
 };
 function buildFollowupTouches(startAt) {
@@ -719,7 +715,6 @@ function buildFollowupTouches(startAt) {
       day: step.day,
       type: step.type,
       label: FOLLOWUP_TYPE_LABEL[step.type],
-      subject: skel.subject,
       body: skel.body,
       status: 'pending', // pending | sent | skipped
       due_at: startAt + step.day * 86400000,

@@ -6712,7 +6712,7 @@ async function deleteCurrentDailyTask() {
 }
 
 // ── Follow-ups (8-touch warm-lead drip sequences) ────────────────
-// Skeleton copy (type + subject/body per touch) mirrors server.js's
+// Skeleton copy (type + body per touch) mirrors server.js's
 // FOLLOWUP_TOUCH_PLAN — the server fills it in at creation, this file just
 // renders/edits/saves whatever comes back as followup.data.touches.
 let followups = [];
@@ -6779,7 +6779,6 @@ function renderFollowupEditor() {
             <div class="daily-task-question">Touch ${i + 1} · Day ${t.day} · ${escHtml(t.label)} · due ${fmtDate(t.due_at)}${t.status === 'sent' ? ' · sent ' + fmtDate(t.sent_at) : ''}</div>
             <button class="cancel-sel-btn followup-mark-btn" data-i="${i}">${t.status === 'sent' ? 'Mark unsent' : 'Mark sent'}</button>
           </div>
-          <input type="text" class="followup-subject" data-i="${i}" placeholder="Subject" value="${escHtml(t.subject)}">
           <textarea class="daily-task-answer followup-body" data-i="${i}" placeholder="Body…">${escHtml(t.body)}</textarea>
         </div>`).join('')}
       <div class="daily-task-form-actions">
@@ -6787,9 +6786,6 @@ function renderFollowupEditor() {
         <button class="save-btn" id="fu-save-btn">Save</button>
       </div>
     </div>`;
-  area.querySelectorAll('.followup-subject').forEach(inp => {
-    inp.addEventListener('input', () => { d.data.touches[+inp.dataset.i].subject = inp.value; });
-  });
   area.querySelectorAll('.followup-body').forEach(ta => {
     ta.addEventListener('input', () => { d.data.touches[+ta.dataset.i].body = ta.value; });
   });
