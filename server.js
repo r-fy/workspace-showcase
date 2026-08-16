@@ -161,9 +161,12 @@ try { db.exec(`ALTER TABLE expenses ADD COLUMN direction TEXT NOT NULL DEFAULT '
 // payments) — not real income, excluded from the surplus/deficit math.
 try { db.exec(`ALTER TABLE expenses ADD COLUMN pass_through INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
 
-// Auto-pairs an unflagged IHSS deposit with an unflagged same-amount Chase Debit
-// withdrawal (nearest date wins) and flags both pass_through. Idempotent — only
-// touches unflagged rows, safe to call on every boot and after every import.
+// IHSS deposits are never real income (regardless of whether the matching
+// outflow shows up in this ledger — it may leave via a joint/shared account
+// that never posts a matching withdrawal here), so every one gets flagged.
+// If an unflagged same-amount Chase Debit withdrawal DOES exist (nearest date
+// wins), flag that too — a bonus, not a requirement. Idempotent — only touches
+// unflagged rows, safe to call on every boot and after every import.
 function matchIhssPassThrough() {
   const deposits = db.prepare(`
     SELECT id, user_id, amount, date FROM expenses
@@ -175,10 +178,10 @@ function matchIhssPassThrough() {
   `);
   const flag = db.prepare('UPDATE expenses SET pass_through=1 WHERE id=?');
   for (const dep of deposits) {
+    flag.run(dep.id);
     const candidates = findWithdrawal.all(dep.user_id, dep.amount);
     if (!candidates.length) continue;
     candidates.sort((a, b) => Math.abs(new Date(a.date) - new Date(dep.date)) - Math.abs(new Date(b.date) - new Date(dep.date)));
-    flag.run(dep.id);
     flag.run(candidates[0].id);
   }
 }
