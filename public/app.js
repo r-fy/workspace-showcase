@@ -22,6 +22,7 @@ let lastClickedExpenseId = null;
 let expenseChartVisible = localStorage.getItem('expense-chart-visible') !== '0';
 let expenseFilterYear = localStorage.getItem('expense-filter-year') || 'all';
 let expenseFilterMonth = localStorage.getItem('expense-filter-month') || 'all';
+let expenseFilterSource = localStorage.getItem('expense-filter-source') || 'all';
 
 let reminders = [];
 let currentReminderId = null;
@@ -1091,7 +1092,10 @@ function expenseEntryCell(e, key) {
     case 'category': return `<span class="expense-entry-cat">${e.category ? escHtml(e.category) : ''}</span>`;
     case 'payee':    return `<span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>`;
     case 'note':     return `<span class="expense-entry-note">${escHtml(e.note || '')}</span>`;
-    case 'source':    return `<span class="expense-entry-source">${escHtml(e.source || '')}</span>`;
+    case 'source': {
+      const srcClass = e.source === 'Chase Debit' ? ' src-chase-debit' : e.source === 'Chase Credit' ? ' src-chase-credit' : '';
+      return `<span class="expense-entry-source${srcClass}">${escHtml(e.source || '')}</span>`;
+    }
     case 'frequency': return `<span class="expense-entry-frequency">${escHtml(e.frequency || '')}</span>`;
     case 'direction': {
       const isDeposit = e.direction === 'deposit';
@@ -1304,12 +1308,55 @@ function expenseTimeFilterHtml() {
     </div>`;
 }
 
+const EXPENSE_SOURCE_FILTERS = [
+  { key: 'all', label: 'All', color: '#5fc83b' },
+  { key: 'Chase Debit', label: 'Chase Debit', color: '#4a90e0' },
+  { key: 'Chase Credit', label: 'Chase Credit', color: '#ffffff' },
+];
+function expenseSourceFilterHtml() {
+  return `<div class="expense-source-filter">${EXPENSE_SOURCE_FILTERS.map(s =>
+    `<span class="tag-filter-pill${expenseFilterSource === s.key ? ' active' : ''}" data-source="${escHtml(s.key)}" style="--tag-c:${s.color}">${escHtml(s.label)}</span>`
+  ).join('')}</div>`;
+}
+
+// ── Spending-by-category breakdown ──────────────────────────────
+function computeCategoryBreakdown(list) {
+  const totals = {};
+  let grand = 0;
+  for (const e of list) {
+    if (e.direction === 'deposit') continue;
+    const cat = e.category || 'Uncategorized';
+    totals[cat] = (totals[cat] || 0) + Math.abs(e.amount);
+    grand += Math.abs(e.amount);
+  }
+  const rows = Object.entries(totals).map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
+  return { rows, grand };
+}
+
+function categoryBreakdownHtml(list) {
+  const { rows, grand } = computeCategoryBreakdown(list);
+  if (!rows.length) return '<div class="expense-chart-empty">No spending in this period.</div>';
+  const max = rows[0].total;
+  return `
+    <div class="exp-cat-chart">
+      ${rows.map(r => { const uncat = r.category === 'Uncategorized'; return `
+        <div class="exp-cat-row${uncat ? ' exp-cat-uncat' : ''}" data-cat="${escHtml(r.category)}" ${uncat ? '' : `title="Click to filter the list to ${escHtml(r.category)}"`}>
+          <span class="exp-cat-label">${escHtml(r.category)}</span>
+          <span class="exp-cat-track"><span class="exp-cat-fill" style="width:${max ? (r.total / max * 100) : 0}%"></span></span>
+          <span class="exp-cat-val">${escHtml(fmtAmount(r.total))}</span>
+          <span class="exp-cat-pct">${grand ? Math.round(r.total / grand * 100) : 0}%</span>
+        </div>`; }).join('')}
+    </div>`;
+}
+
 function renderExpensesList() {
   const area = document.getElementById('expenses-list-area');
   if (!area) return;
-  let filtered = activeExpenseCat ? expenses.filter(e => e.category === activeExpenseCat) : expenses;
-  if (expenseFilterYear !== 'all') filtered = filtered.filter(e => e.date?.slice(0, 4) === expenseFilterYear);
-  if (expenseFilterMonth !== 'all') filtered = filtered.filter(e => e.date?.slice(5, 7) === expenseFilterMonth);
+  let periodSourceFiltered = expenses;
+  if (expenseFilterSource !== 'all') periodSourceFiltered = periodSourceFiltered.filter(e => e.source === expenseFilterSource);
+  if (expenseFilterYear !== 'all') periodSourceFiltered = periodSourceFiltered.filter(e => e.date?.slice(0, 4) === expenseFilterYear);
+  if (expenseFilterMonth !== 'all') periodSourceFiltered = periodSourceFiltered.filter(e => e.date?.slice(5, 7) === expenseFilterMonth);
+  let filtered = activeExpenseCat ? periodSourceFiltered.filter(e => e.category === activeExpenseCat) : periodSourceFiltered;
 
   filtered = [...filtered].sort((a, b) => {
     for (const key of expenseColOrder) {
@@ -1352,8 +1399,9 @@ function renderExpensesList() {
           <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
         </span>
       </div>
+      ${expenseSourceFilterHtml()}
       ${expenseTimeFilterHtml()}
-      ${expenseChartVisible ? expenseChartHtml(filtered) : ''}
+      ${expenseChartVisible ? expenseChartHtml(filtered) + categoryBreakdownHtml(periodSourceFiltered) : ''}
       ${filtered.length ? headerRow : ''}
     </div>
     ${filtered.length ? `
@@ -1376,6 +1424,20 @@ function renderExpensesList() {
     expenseChartVisible = !expenseChartVisible;
     localStorage.setItem('expense-chart-visible', expenseChartVisible ? '1' : '0');
     renderExpensesList();
+  });
+
+  area.querySelectorAll('.expense-source-filter .tag-filter-pill').forEach(el => {
+    el.addEventListener('click', () => {
+      expenseFilterSource = el.dataset.source;
+      localStorage.setItem('expense-filter-source', expenseFilterSource);
+      renderExpensesList();
+    });
+  });
+  area.querySelectorAll('.exp-cat-row:not(.exp-cat-uncat)').forEach(el => {
+    el.addEventListener('click', () => {
+      activeExpenseCat = el.dataset.cat;
+      renderExpensesCatBar(); renderExpensesList();
+    });
   });
 
   const yearSel = area.querySelector('#expense-year-select');
