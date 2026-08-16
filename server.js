@@ -176,7 +176,12 @@ function matchIhssPassThrough() {
     SELECT id, date FROM expenses
     WHERE user_id=? AND direction='withdrawal' AND source='Chase Debit' AND pass_through=0 AND amount=?
   `);
-  const flag = db.prepare('UPDATE expenses SET pass_through=1 WHERE id=?');
+  const flag = db.prepare(`UPDATE expenses SET pass_through=1, category='Pass-Through' WHERE id=?`);
+  const ensureCat = db.prepare(`INSERT OR IGNORE INTO expense_categories (id, user_id, name, position)
+    VALUES (?, ?, 'Pass-Through', (SELECT COALESCE(MAX(position),-1)+1 FROM expense_categories WHERE user_id=?))`);
+  const passThroughUsers = db.prepare(`SELECT DISTINCT user_id FROM expenses WHERE pass_through=1`).all().map(r => r.user_id);
+  const usersNeedingCat = new Set([...deposits.map(d => d.user_id), ...passThroughUsers]);
+  for (const u of usersNeedingCat) ensureCat.run(uid(), u, u);
   for (const dep of deposits) {
     flag.run(dep.id);
     const candidates = findWithdrawal.all(dep.user_id, dep.amount);
@@ -186,6 +191,8 @@ function matchIhssPassThrough() {
   }
 }
 matchIhssPassThrough();
+// Backfill: rows flagged pass-through before this categorization existed.
+try { db.exec(`UPDATE expenses SET category='Pass-Through' WHERE pass_through=1 AND category=''`); } catch(e) {}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS reminders (
