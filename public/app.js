@@ -1195,7 +1195,6 @@ function expenseChartHtml(filtered) {
       </div>`).join('');
     return `
       <div class="expense-chart-wrap">
-        <div class="exp-chart-legend">${legend}</div>
         <div class="exp-chart-stats">${stats || '<span class="expense-chart-empty">All lines hidden.</span>'}</div>
       </div>`;
   }
@@ -1338,16 +1337,14 @@ function computeDebitCashFlow(list) {
 }
 
 function cashFlowHtml(list) {
-  const { moneyIn, moneyOut, net } = computeDebitCashFlow(list);
+  const { moneyIn, moneyOut } = computeDebitCashFlow(list);
   if (!moneyIn && !moneyOut) return '';
-  const surplus = net >= 0;
   return `
     <div class="exp-cashflow">
-      <div class="exp-cashflow-net ${surplus ? 'is-surplus' : 'is-deficit'}">${surplus ? '+' : '−'}${fmtAmount(Math.abs(net))}</div>
       <div class="exp-cashflow-sub">
         <span class="exp-cashflow-in">↑ ${fmtAmount(moneyIn)} in</span>
         <span class="exp-cashflow-out">↓ ${fmtAmount(moneyOut)} out</span>
-        <span class="exp-cashflow-label">Chase Debit only — checking account cash flow</span>
+        <span class="exp-cashflow-label">Chase Debit only — checking account cash flow (net shown above)</span>
       </div>
     </div>`;
 }
@@ -1418,6 +1415,9 @@ function renderExpensesList() {
     }).join('')}
   </div>`;
 
+  const { net: compactNet } = computeDebitCashFlow(periodSourceFiltered);
+  const compactNetHtml = compactNet ? `<span class="expense-list-net ${compactNet >= 0 ? 'is-surplus' : 'is-deficit'}">${compactNet >= 0 ? '+' : '−'}${escHtml(fmtAmount(Math.abs(compactNet)))}</span>` : '';
+
   area.innerHTML = `
     <div class="exp-sticky-header">
       <div class="exp-bulk-bar${anySelected ? '' : ' hidden'}">
@@ -1426,7 +1426,10 @@ function renderExpensesList() {
         <button class="exp-bulk-clear">Clear</button>
       </div>
       <div class="expense-list-header">
-        <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
+        <span class="expense-list-left">
+          <span class="expense-list-label">${activeExpenseCat ? escHtml(activeExpenseCat) : 'All expenses'}</span>
+          ${compactNetHtml}
+        </span>
         <span class="expense-list-header-right">
           <button class="expense-chart-toggle-btn" id="expense-chart-toggle-btn">${expenseChartVisible ? '📈 Hide chart' : '📈 Chart'}</button>
           <button class="expense-add-btn" id="expense-add-inline-btn">+ Add expense</button>
@@ -1434,9 +1437,9 @@ function renderExpensesList() {
       </div>
       ${expenseSourceFilterHtml()}
       ${expenseTimeFilterHtml()}
-      ${expenseChartVisible ? cashFlowHtml(periodSourceFiltered) + expenseChartHtml(filtered) + categoryBreakdownHtml(periodSourceFiltered) : ''}
-      ${filtered.length ? headerRow : ''}
     </div>
+    ${expenseChartVisible ? cashFlowHtml(periodSourceFiltered) + expenseChartHtml(filtered) + categoryBreakdownHtml(periodSourceFiltered) : ''}
+    ${filtered.length ? headerRow : ''}
     ${filtered.length ? `
       <div class="expense-entries">
         ${filtered.map(e => `
