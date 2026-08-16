@@ -23,6 +23,7 @@ let expenseChartVisible = localStorage.getItem('expense-chart-visible') !== '0';
 let expenseFilterYear = localStorage.getItem('expense-filter-year') || 'all';
 let expenseFilterMonth = localStorage.getItem('expense-filter-month') || 'all';
 let expenseFilterSource = localStorage.getItem('expense-filter-source') || 'all';
+let expenseSearchQuery = localStorage.getItem('expense-search') || '';
 
 let reminders = [];
 let currentReminderId = null;
@@ -1323,6 +1324,13 @@ function expenseSourceFilterHtml() {
   ).join('')}</div>`;
 }
 
+function expensePayeeSearchHtml() {
+  return `<div class="expense-payee-search">
+    <input type="text" id="expense-payee-search-input" placeholder="Search payee… (e.g. Anthropic, OpenAI, Perplexity)" value="${escHtml(expenseSearchQuery)}" autocomplete="off">
+    ${expenseSearchQuery ? '<button id="expense-payee-search-clear" title="Clear search">✕</button>' : ''}
+  </div>`;
+}
+
 // ── Cash flow (surplus/deficit) ─────────────────────────────────
 // Chase Debit only — that's the account holding real cash. Credit purchases
 // aren't a cash event until paid off, which already shows as a Debit outflow.
@@ -1386,6 +1394,10 @@ function renderExpensesList() {
   if (expenseFilterSource !== 'all') periodSourceFiltered = periodSourceFiltered.filter(e => e.source === expenseFilterSource);
   if (expenseFilterYear !== 'all') periodSourceFiltered = periodSourceFiltered.filter(e => e.date?.slice(0, 4) === expenseFilterYear);
   if (expenseFilterMonth !== 'all') periodSourceFiltered = periodSourceFiltered.filter(e => e.date?.slice(5, 7) === expenseFilterMonth);
+  if (expenseSearchQuery.trim()) {
+    const q = expenseSearchQuery.trim().toLowerCase();
+    periodSourceFiltered = periodSourceFiltered.filter(e => (e.payee || '').toLowerCase().includes(q));
+  }
   let filtered = activeExpenseCat ? periodSourceFiltered.filter(e => e.category === activeExpenseCat) : periodSourceFiltered;
 
   filtered = [...filtered].sort((a, b) => {
@@ -1436,6 +1448,7 @@ function renderExpensesList() {
         </span>
       </div>
       ${expenseSourceFilterHtml()}
+      ${expensePayeeSearchHtml()}
       ${expenseTimeFilterHtml()}
     </div>
     ${expenseChartVisible ? cashFlowHtml(periodSourceFiltered) + expenseChartHtml(filtered) + categoryBreakdownHtml(periodSourceFiltered) : ''}
@@ -1474,6 +1487,21 @@ function renderExpensesList() {
       activeExpenseCat = el.dataset.cat;
       renderExpensesCatBar(); renderExpensesList();
     });
+  });
+
+  const payeeSearchInput = area.querySelector('#expense-payee-search-input');
+  if (payeeSearchInput) payeeSearchInput.addEventListener('input', () => {
+    expenseSearchQuery = payeeSearchInput.value;
+    localStorage.setItem('expense-search', expenseSearchQuery);
+    renderExpensesList();
+    const newInput = document.getElementById('expense-payee-search-input');
+    if (newInput) { newInput.focus(); newInput.setSelectionRange(newInput.value.length, newInput.value.length); }
+  });
+  const payeeSearchClear = area.querySelector('#expense-payee-search-clear');
+  if (payeeSearchClear) payeeSearchClear.addEventListener('click', () => {
+    expenseSearchQuery = '';
+    localStorage.setItem('expense-search', '');
+    renderExpensesList();
   });
 
   const yearSel = area.querySelector('#expense-year-select');
