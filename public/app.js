@@ -1308,7 +1308,7 @@ function expenseTimeFilterHtml() {
         <option value="all" ${expenseFilterMonth === 'all' ? 'selected' : ''}>All months</option>
         ${monthOpts}
       </select>
-      ${hasFilter ? '<button id="expense-time-clear-btn" class="expense-time-clear-btn">Clear</button>' : ''}
+      ${hasFilter ? '<button id="expense-time-clear-btn" class="expense-time-clear-btn" title="Reset the Year/Month filter back to All — does not delete anything">Clear period filter</button>' : ''}
     </div>`;
 }
 
