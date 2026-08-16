@@ -633,6 +633,9 @@ header {
 }
 .expense-chart-toggle-btn:hover { background: #202020; border-color: #3a3a3a; }
 
+/* Source filter (All / Chase Debit / Chase Credit) */
+.expense-source-filter { display: flex; gap: 6px; padding: 8px 20px 0; }
+
 /* Time-period filter (Year / Month) */
 .expense-time-filter {
   display: flex; align-items: center; gap: 8px; padding: 8px 20px;
@@ -688,10 +691,25 @@ header {
 .exp-chart-tooltip-key { width: 10px; height: 2px; border-radius: 1px; flex-shrink: 0; }
 .exp-chart-tooltip-val { color: #e0e0e0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .exp-chart-tooltip-name { color: #999; }
+
+/* Spending-by-category breakdown bars */
+.exp-cat-chart { padding: 10px 20px 18px; display: flex; flex-direction: column; gap: 7px; border-top: 1px solid #1a1a1a; margin-top: 8px; }
+.exp-cat-row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.exp-cat-row.exp-cat-uncat { cursor: default; }
+.exp-cat-row:hover:not(.exp-cat-uncat) .exp-cat-track { background: #232323; }
+.exp-cat-label { width: 140px; flex-shrink: 0; color: #ccc; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exp-cat-track { flex: 1; height: 8px; background: #1e1e1e; border-radius: 4px; overflow: hidden; }
+.exp-cat-fill { display: block; height: 100%; background: #5fc83b; border-radius: 4px; }
+.exp-cat-val { width: 78px; flex-shrink: 0; text-align: right; color: #e0e0e0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.exp-cat-pct { width: 36px; flex-shrink: 0; text-align: right; color: #666; font-size: 11px; font-variant-numeric: tabular-nums; }
+
 @media (max-width: 640px) {
   .expense-list-header { flex-wrap: wrap; gap: 8px; }
   .expense-time-filter { flex-wrap: wrap; }
+  .expense-source-filter { flex-wrap: wrap; }
   .exp-chart-svg { height: 180px; }
+  .exp-cat-label { width: 90px; }
+  .exp-cat-pct { display: none; }
 }
 /* shared grid — template driven by --exp-grid CSS var set by JS */
 .expense-header-row, .expense-entry {
@@ -735,6 +753,8 @@ header {
 .expense-entry-payee { font-size: 13px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-note { font-size: 12px; color: #4a4a4a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-source { font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expense-entry-source.src-chase-debit { color: #4a90e0; }
+.expense-entry-source.src-chase-credit { color: #fff; }
 .expense-entry-frequency { font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expense-entry-direction { font-size: 11px; white-space: nowrap; }
 .expense-entry-direction.is-withdrawal { color: #999; }
