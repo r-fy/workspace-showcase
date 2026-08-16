@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=165">
+<link rel="stylesheet" href="/app.css?v=166">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -634,6 +634,10 @@
         <label>Note</label>
         <input type="text" id="exp-note" placeholder="Optional memo">
       </div>
+      <div class="expense-field-row">
+        <label>Pass-through</label>
+        <label class="expense-checkbox-label"><input type="checkbox" id="exp-pass-through"> Excluded from surplus/deficit (e.g. IHSS)</label>
+      </div>
     </div>
     <div class="expense-modal-footer">
       <button class="del-task-btn" id="expense-modal-delete">Delete</button>
@@ -800,6 +804,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=195"></script>
+<script src="/app.js?v=196"></script>
 </body>
 </html>

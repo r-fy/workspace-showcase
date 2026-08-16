@@ -692,6 +692,19 @@ header {
 .exp-chart-tooltip-val { color: #e0e0e0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .exp-chart-tooltip-name { color: #999; }
 
+/* Cash flow (surplus/deficit) headline */
+.exp-cashflow { padding: 14px 20px 4px; }
+.exp-cashflow-net { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.exp-cashflow-net.is-surplus { color: #8ce870; }
+.exp-cashflow-net.is-deficit { color: #f87171; }
+.exp-cashflow-sub { display: flex; align-items: center; gap: 14px; margin-top: 4px; font-size: 12px; flex-wrap: wrap; }
+.exp-cashflow-in { color: #8ce870; }
+.exp-cashflow-out { color: #999; }
+.exp-cashflow-label { color: #555; }
+
+/* Pass-through badge on a transaction row */
+.exp-pass-through-badge { color: #b8862e; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; margin-left: 6px; }
+
 /* Spending-by-category breakdown bars */
 .exp-cat-chart { padding: 10px 20px 18px; display: flex; flex-direction: column; gap: 7px; border-top: 1px solid #1a1a1a; margin-top: 8px; }
 .exp-cat-row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
@@ -862,6 +875,8 @@ header {
 .expense-field-row textarea { line-height: 1.4; }
 .expense-field-row input:focus, .expense-field-row textarea:focus { border-color: #3a3a3a; }
 .expense-field-row input::placeholder, .expense-field-row textarea::placeholder { color: #444; }
+.expense-checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #999; cursor: pointer; width: auto; text-align: left; }
+.expense-checkbox-label input[type="checkbox"] { width: auto; cursor: pointer; }
 .expense-modal-footer {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-top: 1px solid #1e1e1e;

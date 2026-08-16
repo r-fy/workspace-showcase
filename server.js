@@ -157,6 +157,32 @@ try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_cat_name ON expense
 try { db.exec(`ALTER TABLE expenses ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 try { db.exec(`ALTER TABLE expenses ADD COLUMN frequency TEXT NOT NULL DEFAULT ''`); } catch(e) {}
 try { db.exec(`ALTER TABLE expenses ADD COLUMN direction TEXT NOT NULL DEFAULT 'withdrawal'`); } catch(e) {}
+// Pass-through: money that arrives and leaves again to the penny (IHSS caregiver
+// payments) — not real income, excluded from the surplus/deficit math.
+try { db.exec(`ALTER TABLE expenses ADD COLUMN pass_through INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
+
+// Auto-pairs an unflagged IHSS deposit with an unflagged same-amount Chase Debit
+// withdrawal (nearest date wins) and flags both pass_through. Idempotent — only
+// touches unflagged rows, safe to call on every boot and after every import.
+function matchIhssPassThrough() {
+  const deposits = db.prepare(`
+    SELECT id, user_id, amount, date FROM expenses
+    WHERE direction='deposit' AND source='Chase Debit' AND pass_through=0 AND payee LIKE '%ihss%'
+  `).all();
+  const findWithdrawal = db.prepare(`
+    SELECT id, date FROM expenses
+    WHERE user_id=? AND direction='withdrawal' AND source='Chase Debit' AND pass_through=0 AND amount=?
+  `);
+  const flag = db.prepare('UPDATE expenses SET pass_through=1 WHERE id=?');
+  for (const dep of deposits) {
+    const candidates = findWithdrawal.all(dep.user_id, dep.amount);
+    if (!candidates.length) continue;
+    candidates.sort((a, b) => Math.abs(new Date(a.date) - new Date(dep.date)) - Math.abs(new Date(b.date) - new Date(dep.date)));
+    flag.run(dep.id);
+    flag.run(candidates[0].id);
+  }
+}
+matchIhssPassThrough();
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS reminders (
@@ -1720,20 +1746,20 @@ app.get('/api/expenses', auth, (req, res) => {
 });
 
 app.post('/api/expenses', auth, (req, res) => {
-  const { amount, date, category = '', payee = '', note = '', source = '', frequency = '', direction = 'withdrawal' } = req.body;
+  const { amount, date, category = '', payee = '', note = '', source = '', frequency = '', direction = 'withdrawal', pass_through = 0 } = req.body;
   if (!amount || !date) return res.status(400).json({ error: 'amount and date required' });
   const id = uid(), t = now();
-  db.prepare('INSERT INTO expenses (id, user_id, amount, date, category, payee, note, source, frequency, direction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, req.userId, parseFloat(amount), date, category, payee, note, source, frequency, direction, t);
+  db.prepare('INSERT INTO expenses (id, user_id, amount, date, category, payee, note, source, frequency, direction, pass_through, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.userId, parseFloat(amount), date, category, payee, note, source, frequency, direction, pass_through ? 1 : 0, t);
   res.json(db.prepare('SELECT * FROM expenses WHERE id=?').get(id));
 });
 
 app.put('/api/expenses/:id', auth, (req, res) => {
   const exp = db.prepare('SELECT * FROM expenses WHERE id=? AND user_id=?').get(req.params.id, req.userId);
   if (!exp) return res.status(404).json({ error: 'Not found' });
-  const { amount = exp.amount, date = exp.date, category = exp.category, payee = exp.payee, note = exp.note, source = exp.source, frequency = exp.frequency, direction = exp.direction } = req.body;
-  db.prepare('UPDATE expenses SET amount=?, date=?, category=?, payee=?, note=?, source=?, frequency=?, direction=? WHERE id=? AND user_id=?')
-    .run(parseFloat(amount), date, category, payee, note, source, frequency, direction, req.params.id, req.userId);
+  const { amount = exp.amount, date = exp.date, category = exp.category, payee = exp.payee, note = exp.note, source = exp.source, frequency = exp.frequency, direction = exp.direction, pass_through = exp.pass_through } = req.body;
+  db.prepare('UPDATE expenses SET amount=?, date=?, category=?, payee=?, note=?, source=?, frequency=?, direction=?, pass_through=? WHERE id=? AND user_id=?')
+    .run(parseFloat(amount), date, category, payee, note, source, frequency, direction, pass_through ? 1 : 0, req.params.id, req.userId);
   res.json(db.prepare('SELECT * FROM expenses WHERE id=?').get(req.params.id));
 });
 
@@ -1765,8 +1791,8 @@ app.delete('/api/expense-categories/:name', auth, (req, res) => {
 app.get('/api/expenses/export.csv', auth, (req, res) => {
   const rows = db.prepare('SELECT * FROM expenses WHERE user_id=? ORDER BY date DESC, created_at DESC').all(req.userId);
   const csvField = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-  const lines = ['date,amount,category,payee,source,frequency,direction,note'];
-  for (const r of rows) lines.push([r.date, r.amount, r.category, r.payee, r.source, r.frequency, r.direction, r.note].map(csvField).join(','));
+  const lines = ['date,amount,category,payee,source,frequency,direction,pass_through,note'];
+  for (const r of rows) lines.push([r.date, r.amount, r.category, r.payee, r.source, r.frequency, r.direction, r.pass_through, r.note].map(csvField).join(','));
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.set('Content-Disposition', 'attachment; filename="expenses.csv"');
   res.send(lines.join('\n'));
@@ -1778,10 +1804,10 @@ app.post('/api/expenses/import', auth, (req, res) => {
   const lines = csv.split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) return res.json({ imported: 0 });
   const header = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
-  const [dateIdx, amountIdx, categoryIdx, payeeIdx, sourceIdx, frequencyIdx, directionIdx, noteIdx] =
-    ['date','amount','category','payee','source','frequency','direction','note'].map(k => header.indexOf(k));
+  const [dateIdx, amountIdx, categoryIdx, payeeIdx, sourceIdx, frequencyIdx, directionIdx, passThroughIdx, noteIdx] =
+    ['date','amount','category','payee','source','frequency','direction','pass_through','note'].map(k => header.indexOf(k));
   if (dateIdx < 0 || amountIdx < 0) return res.status(400).json({ error: 'CSV must have date and amount columns' });
-  const ins = db.prepare('INSERT INTO expenses (id, user_id, amount, date, category, payee, note, source, frequency, direction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const ins = db.prepare('INSERT INTO expenses (id, user_id, amount, date, category, payee, note, source, frequency, direction, pass_through, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const t = now(); let imported = 0;
   db.transaction(() => {
     for (let i = 1; i < lines.length; i++) {
@@ -1795,10 +1821,12 @@ app.post('/api/expenses/import', auth, (req, res) => {
         sourceIdx     >= 0 ? (f[sourceIdx]?.trim()     || '') : '',
         frequencyIdx  >= 0 ? (f[frequencyIdx]?.trim()  || '') : '',
         directionIdx  >= 0 ? (f[directionIdx]?.trim()  || 'withdrawal') : 'withdrawal',
+        passThroughIdx >= 0 ? (f[passThroughIdx]?.trim() === '1' ? 1 : 0) : 0,
         t);
       imported++;
     }
   })();
+  matchIhssPassThrough();
   res.json({ imported });
 });
 
