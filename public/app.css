@@ -653,10 +653,10 @@ header {
 .expense-time-select:disabled { color: #7d7e83; cursor: not-allowed; }
 .expense-time-select:focus { outline: none; border-color: #5fc83b; }
 .expense-time-clear-btn {
-  background: none; border: none; color: #8ce870; font-size: 12px; cursor: pointer;
-  padding: 2px 4px;
+  background: none; border: none; color: #8f9095; font-size: 12px; cursor: pointer;
+  padding: 2px 4px; margin-left: auto;
 }
-.expense-time-clear-btn:hover { text-decoration: underline; }
+.expense-time-clear-btn:hover { text-decoration: underline; color: #a3a4a8; }
 
 /* Spending-over-time chart */
 .expense-chart-empty {
