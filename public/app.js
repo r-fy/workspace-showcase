@@ -1020,10 +1020,12 @@ async function loadExpenses() {
 
 function renderExpensesCatBar() {
   const bar = document.getElementById('expense-cat-bar');
+  const label = document.getElementById('expense-cat-bar-label');
   if (!bar) return;
   const cats = [...new Set(expenses.map(e => e.category).filter(Boolean))].sort();
-  if (!cats.length) { bar.innerHTML = ''; bar.style.display = 'none'; return; }
+  if (!cats.length) { bar.innerHTML = ''; bar.style.display = 'none'; if (label) label.style.display = 'none'; return; }
   bar.style.display = '';
+  if (label) label.style.display = '';
   bar.innerHTML =
     `<span class="tag-filter-pill${!activeExpenseCat ? ' active' : ''}" data-cat="" style="--tag-c:#5fc83b">All</span>` +
     cats.map(c =>

@@ -798,6 +798,8 @@ header {
   display: flex; align-items: center; padding: 8px 12px 4px; flex-shrink: 0;
 }
 .expense-cats-header span { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #7d7e83; }
+.expense-cats-hint { font-size: 10.5px; color: #7d7e83; padding: 0 12px 8px; line-height: 1.4; }
+.expense-cat-bar-label { font-size: 10.5px; color: #7d7e83; padding: 8px 10px 0; line-height: 1.4; }
 #expense-cats-list { flex: 1; overflow-y: auto; padding-bottom: 4px; }
 .expense-cat-item { display: flex; align-items: center; padding: 5px 12px; gap: 6px; }
 .expense-cat-name { flex: 1; font-size: 13px; color: #a3a4a8; }
