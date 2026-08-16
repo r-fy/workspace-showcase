@@ -1110,8 +1110,8 @@ function expenseEntryCell(e, key) {
 // Money In (Debit) is the only income line — Credit "deposits" are refunds,
 // not income, and pass-through rows (IHSS) are never real spend or income.
 const EXPENSE_CHART_SOURCES = [
-  { key: 'Chase Debit',      color: '#4caf32', match: e => e.source === 'Chase Debit'  && e.direction !== 'deposit' },
-  { key: 'Chase Credit',     color: '#4a90e0', match: e => e.source === 'Chase Credit' && e.direction !== 'deposit' },
+  { key: 'Chase Debit',      color: '#4a90e0', match: e => e.source === 'Chase Debit'  && e.direction !== 'deposit' },
+  { key: 'Chase Credit',     color: '#ffffff', match: e => e.source === 'Chase Credit' && e.direction !== 'deposit' },
   { key: 'Money In (Debit)', color: '#b8862e', match: e => e.source === 'Chase Debit'  && e.direction === 'deposit' },
 ];
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
