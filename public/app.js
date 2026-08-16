@@ -1090,7 +1090,7 @@ function expenseEntryCell(e, key) {
   switch(key) {
     case 'date':     return `<span class="expense-entry-date">${escHtml(isoToMdy(e.date))}</span>`;
     case 'category': return `<span class="expense-entry-cat">${e.category ? escHtml(e.category) : ''}</span>`;
-    case 'payee':    return `<span class="expense-entry-payee">${escHtml(e.payee || '—')}</span>`;
+    case 'payee':    return `<span class="expense-entry-payee">${escHtml(e.payee || '—')}${e.pass_through ? ' <span class=\"exp-pass-through-badge\" title=\"Pass-through — excluded from surplus/deficit\">↔ pass-through</span>' : ''}</span>`;
     case 'note':     return `<span class="expense-entry-note">${escHtml(e.note || '')}</span>`;
     case 'source': {
       const srcClass = e.source === 'Chase Debit' ? ' src-chase-debit' : e.source === 'Chase Credit' ? ' src-chase-credit' : '';
@@ -1107,9 +1107,12 @@ function expenseEntryCell(e, key) {
 }
 
 // ── Spending-over-time chart ────────────────────────────────────
+// Money In (Debit) is the only income line — Credit "deposits" are refunds,
+// not income, and pass-through rows (IHSS) are never real spend or income.
 const EXPENSE_CHART_SOURCES = [
-  { key: 'Chase Debit',  color: '#4caf32' },
-  { key: 'Chase Credit', color: '#4a90e0' },
+  { key: 'Chase Debit',      color: '#4caf32', match: e => e.source === 'Chase Debit'  && e.direction !== 'deposit' },
+  { key: 'Chase Credit',     color: '#4a90e0', match: e => e.source === 'Chase Credit' && e.direction !== 'deposit' },
+  { key: 'Money In (Debit)', color: '#b8862e', match: e => e.source === 'Chase Debit'  && e.direction === 'deposit' },
 ];
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 // "Jul '24", never "Jul 24" — the latter reads as a day-of-month, not a year.
@@ -1145,8 +1148,10 @@ function fmtCompact(v) {
 function computeExpenseChartData(filtered) {
   const bySource = {};
   for (const e of filtered) {
-    if (!e.date || e.direction === 'deposit' || !EXPENSE_CHART_SOURCES.some(s => s.key === e.source)) continue;
-    (bySource[e.source] ??= {})[e.date.slice(0, 7)] = (bySource[e.source]?.[e.date.slice(0, 7)] || 0) + e.amount;
+    if (!e.date || e.pass_through) continue;
+    const s = EXPENSE_CHART_SOURCES.find(s => s.match(e));
+    if (!s) continue;
+    (bySource[s.key] ??= {})[e.date.slice(0, 7)] = (bySource[s.key]?.[e.date.slice(0, 7)] || 0) + e.amount;
   }
   const allSeries = EXPENSE_CHART_SOURCES.filter(s => bySource[s.key]);
   if (!allSeries.length) return null;
@@ -1319,12 +1324,40 @@ function expenseSourceFilterHtml() {
   ).join('')}</div>`;
 }
 
+// ── Cash flow (surplus/deficit) ─────────────────────────────────
+// Chase Debit only — that's the account holding real cash. Credit purchases
+// aren't a cash event until paid off, which already shows as a Debit outflow.
+function computeDebitCashFlow(list) {
+  let moneyIn = 0, moneyOut = 0;
+  for (const e of list) {
+    if (e.source !== 'Chase Debit' || e.pass_through) continue;
+    if (e.direction === 'deposit') moneyIn += e.amount;
+    else moneyOut += e.amount;
+  }
+  return { moneyIn, moneyOut, net: moneyIn - moneyOut };
+}
+
+function cashFlowHtml(list) {
+  const { moneyIn, moneyOut, net } = computeDebitCashFlow(list);
+  if (!moneyIn && !moneyOut) return '';
+  const surplus = net >= 0;
+  return `
+    <div class="exp-cashflow">
+      <div class="exp-cashflow-net ${surplus ? 'is-surplus' : 'is-deficit'}">${surplus ? '+' : '−'}${fmtAmount(Math.abs(net))}</div>
+      <div class="exp-cashflow-sub">
+        <span class="exp-cashflow-in">↑ ${fmtAmount(moneyIn)} in</span>
+        <span class="exp-cashflow-out">↓ ${fmtAmount(moneyOut)} out</span>
+        <span class="exp-cashflow-label">Chase Debit only — checking account cash flow</span>
+      </div>
+    </div>`;
+}
+
 // ── Spending-by-category breakdown ──────────────────────────────
 function computeCategoryBreakdown(list) {
   const totals = {};
   let grand = 0;
   for (const e of list) {
-    if (e.direction === 'deposit') continue;
+    if (e.direction === 'deposit' || e.pass_through) continue;
     const cat = e.category || 'Uncategorized';
     totals[cat] = (totals[cat] || 0) + Math.abs(e.amount);
     grand += Math.abs(e.amount);
@@ -1401,7 +1434,7 @@ function renderExpensesList() {
       </div>
       ${expenseSourceFilterHtml()}
       ${expenseTimeFilterHtml()}
-      ${expenseChartVisible ? expenseChartHtml(filtered) + categoryBreakdownHtml(periodSourceFiltered) : ''}
+      ${expenseChartVisible ? cashFlowHtml(periodSourceFiltered) + expenseChartHtml(filtered) + categoryBreakdownHtml(periodSourceFiltered) : ''}
       ${filtered.length ? headerRow : ''}
     </div>
     ${filtered.length ? `
@@ -1689,6 +1722,7 @@ function openExpenseModal(expense = null) {
   document.getElementById('exp-source').value = expense?.source || '';
   document.getElementById('exp-frequency').value = expense?.frequency || '';
   document.getElementById('exp-note').value = expense?.note || '';
+  document.getElementById('exp-pass-through').checked = !!expense?.pass_through;
   const datalist = document.getElementById('exp-cat-list');
   if (datalist) datalist.innerHTML = [...expenseCategories].sort((a, b) => a.name.localeCompare(b.name)).map(c => `<option value="${escHtml(c.name)}">`).join('');
   document.getElementById('expense-modal').classList.remove('hidden');
@@ -1709,6 +1743,7 @@ async function saveExpense() {
   const source = document.getElementById('exp-source').value.trim();
   const frequency = document.getElementById('exp-frequency').value.trim();
   const note = document.getElementById('exp-note').value.trim();
+  const pass_through = document.getElementById('exp-pass-through').checked ? 1 : 0;
   if (!date || !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(date)) { toast('Date must be MM/DD/YYYY'); return; }
   const isoDate = mdyToIso(date);
   if (isNaN(amount) || amount < 0) { toast('Valid amount required'); return; }
@@ -1719,7 +1754,7 @@ async function saveExpense() {
       expenseCategories.push(cat);
     } catch(e) {}
   }
-  const body = { amount, date: isoDate, category, payee, source, frequency, direction, note };
+  const body = { amount, date: isoDate, category, payee, source, frequency, direction, pass_through, note };
   try {
     if (isEdit) {
       const updated = await apiCall('PUT', '/expenses/' + currentExpenseId, body);
