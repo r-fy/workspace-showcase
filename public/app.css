@@ -640,6 +640,19 @@ header {
 /* Source filter (All / Chase Debit / Chase Credit) */
 .expense-source-filter { display: flex; gap: 6px; padding: 8px 20px 0; }
 
+/* Payee search */
+.expense-payee-search { display: flex; align-items: center; gap: 8px; padding: 8px 20px 0; }
+.expense-payee-search input {
+  flex: 1; max-width: 340px; background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 4px;
+  color: #e0e0e0; font-size: 12px; padding: 5px 9px; font-family: inherit;
+}
+.expense-payee-search input::placeholder { color: #7d7e83; }
+.expense-payee-search input:focus { outline: none; border-color: #5fc83b; }
+.expense-payee-search button {
+  background: none; border: none; color: #8f9095; font-size: 13px; cursor: pointer; padding: 2px 4px;
+}
+.expense-payee-search button:hover { color: #a3a4a8; }
+
 /* Time-period filter (Year / Month) */
 .expense-time-filter {
   display: flex; align-items: center; gap: 8px; padding: 8px 20px;
@@ -724,6 +737,7 @@ header {
   .expense-list-header { flex-wrap: wrap; gap: 8px; }
   .expense-time-filter { flex-wrap: wrap; }
   .expense-source-filter { flex-wrap: wrap; }
+  .expense-payee-search input { max-width: none; }
   .exp-chart-svg { height: 180px; }
   .exp-cat-label { width: 90px; }
   .exp-cat-pct { display: none; }
