@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=170">
+<link rel="stylesheet" href="/app.css?v=171">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -143,9 +143,11 @@
         <div class="boards-list" id="boards-list"></div>
       </div>
       <div id="expenses-panel" class="panel-section hidden">
+        <div class="expense-cat-bar-label" id="expense-cat-bar-label" style="display:none">Filter by category — only categories currently in use show here</div>
         <div id="expense-cat-bar" class="tags-bar" style="display:none"></div>
         <div class="expense-cats-section">
-          <div class="expense-cats-header"><span>Categories</span></div>
+          <div class="expense-cats-header"><span>Manage categories</span></div>
+          <div class="expense-cats-hint">Every category you've ever created, used or not — rename/delete here</div>
           <div id="expense-cats-list"></div>
         </div>
         <div class="expense-actions">
@@ -804,6 +806,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=66"></script>
 <script src="/dialer.bundle.js?v=1"></script>
-<script src="/app.js?v=200"></script>
+<script src="/app.js?v=201"></script>
 </body>
 </html>
