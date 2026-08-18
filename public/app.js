@@ -6800,7 +6800,12 @@ function renderDailyTaskForm() {
   document.getElementById('dt-category').addEventListener('change', e => { d.category = e.target.value; });
   document.getElementById('dt-date').addEventListener('change', e => { d.task_date = e.target.value; });
   document.getElementById('dt-source-url').addEventListener('change', e => { d.source_url = e.target.value.trim(); renderDailyTaskForm(); });
-  document.getElementById('dt-context')?.addEventListener('input', e => { d.context = e.target.value; });
+  const dtContextEl = document.getElementById('dt-context');
+  if (dtContextEl) {
+    const growContext = () => { dtContextEl.style.height = 'auto'; dtContextEl.style.height = dtContextEl.scrollHeight + 'px'; };
+    dtContextEl.addEventListener('input', e => { d.context = e.target.value; growContext(); });
+    growContext();
+  }
   document.getElementById('dt-copy-btn').addEventListener('click', () => {
     navigator.clipboard.writeText(formatQABlock(d.source_url, d.questions)).then(() => toast('Copied'));
   });
