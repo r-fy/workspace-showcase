@@ -1744,7 +1744,7 @@ function openExpenseModal(expense = null) {
   currentExpenseId = expense?.id || null;
   document.getElementById('expense-modal-label').textContent = expense ? 'Edit Expense' : 'New Expense';
   document.getElementById('expense-modal-delete').style.display = expense ? '' : 'none';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dpToIso(new Date());
   const dateVal = expense?.date || today;
   document.getElementById('exp-date').value = isoToMdy(dateVal);
   dpInit(dateVal);
@@ -5561,7 +5561,7 @@ function renderCrmFollowupSub(preferId) {
       <button class="audit-add-btn" id="crm-new-fu-btn">+ New sequence</button>
     </span>` +
     list.map(f => crmHistoryRowHtml('followup', f)).join('');
-  document.getElementById('crm-fu-start').valueAsDate = new Date();
+  document.getElementById('crm-fu-start').value = dpToIso(new Date());
   bar.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => openFollowup(el.dataset.open)));
   document.getElementById('crm-new-fu-btn').addEventListener('click', newFollowupForLead);
   const openId = preferId || list[0]?.id;
@@ -6737,7 +6737,7 @@ function newDailyTaskPaste() {
       <textarea id="dt-paste-raw" class="daily-task-paste-box" placeholder="Paste the prompt here — **bolded questions**, or a plain QUESTION: line…"></textarea>
       <button class="save-btn" id="dt-parse-btn">Parse into a form</button>
     </div>`;
-  document.getElementById('dt-paste-date').valueAsDate = new Date();
+  document.getElementById('dt-paste-date').value = dpToIso(new Date());
   document.getElementById('dt-parse-btn').addEventListener('click', () => {
     const raw = document.getElementById('dt-paste-raw').value;
     const { sourceUrl, context, pairs } = parseQABlock(raw);
