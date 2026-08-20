@@ -106,25 +106,46 @@ db.exec(`
 `);
 
 
+// ── Migration helpers ──────────────────────────────────────────
+// These used to be `try { db.exec(...) } catch(e) {}`, which swallowed real
+// failures (locked database, malformed schema, permissions) alongside the
+// harmless "duplicate column name" you get from re-running an additive ALTER.
+// The server then booted looking healthy and broke later, with the cause gone.
+// Now only the duplicate-column case is ignored; anything else refuses the boot
+// and names the statement that failed.
+function addColumn(sql) {
+  try { db.exec(sql); }
+  catch (e) {
+    if (/duplicate column name/i.test(e.message)) return; // already applied — expected on every boot after the first
+    throw new Error(`Migration failed: ${sql.trim()}\n  ${e.message}`);
+  }
+}
+// For statements that are already idempotent on their own (CREATE ... IF NOT
+// EXISTS, no-op-on-rerun UPDATEs). Nothing is ignored — they should never throw.
+function migrate(sql) {
+  try { db.exec(sql); }
+  catch (e) { throw new Error(`Migration failed: ${sql.trim()}\n  ${e.message}`); }
+}
+
 // ── Safe migrations (add-only) ─────────────────────────────────
-try { db.exec(`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE notes ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
+addColumn(`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE notes ADD COLUMN deleted_at INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE tasks ADD COLUMN deleted_at INTEGER DEFAULT NULL`);
 // Archive: a separate hidden-but-recoverable state from Trash (deleted_at).
-try { db.exec(`ALTER TABLE notes ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE boards ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
+addColumn(`ALTER TABLE notes ADD COLUMN archived_at INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE tasks ADD COLUMN archived_at INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE boards ADD COLUMN archived_at INTEGER DEFAULT NULL`);
 // Multi-user: scope all data by user_id (existing rows default to 'owner')
-try { db.exec(`ALTER TABLE notes   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
-try { db.exec(`ALTER TABLE boards  ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
-try { db.exec(`ALTER TABLE columns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
+addColumn(`ALTER TABLE notes   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
+addColumn(`ALTER TABLE boards  ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
+addColumn(`ALTER TABLE columns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
+addColumn(`ALTER TABLE tasks   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
 // Claude mark: flags a task as greenlit for Claude Code to work on (read via direct DB query)
-try { db.exec(`ALTER TABLE tasks ADD COLUMN claude_marked INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+addColumn(`ALTER TABLE tasks ADD COLUMN claude_marked INTEGER NOT NULL DEFAULT 0`);
+addColumn(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''`);
 // Top 3 tray: a fixed per-board column (kind='top3') for pinning up to 3 urgent tasks.
-try { db.exec(`ALTER TABLE columns ADD COLUMN kind TEXT DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE notes ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
+addColumn(`ALTER TABLE columns ADD COLUMN kind TEXT DEFAULT NULL`);
+addColumn(`ALTER TABLE notes ADD COLUMN position INTEGER NOT NULL DEFAULT 0`);
 // Initialize note positions (newest first) when all are at the default 0
 {
   const stats = db.prepare('SELECT COUNT(*) AS total, MAX(position) AS maxPos FROM notes').get();
@@ -153,13 +174,13 @@ db.exec(`
     position INTEGER NOT NULL DEFAULT 0
   );
 `);
-try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_cat_name ON expense_categories(user_id, name)`); } catch(e) {}
-try { db.exec(`ALTER TABLE expenses ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE expenses ADD COLUMN frequency TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE expenses ADD COLUMN direction TEXT NOT NULL DEFAULT 'withdrawal'`); } catch(e) {}
+migrate(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_cat_name ON expense_categories(user_id, name)`);
+addColumn(`ALTER TABLE expenses ADD COLUMN source TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE expenses ADD COLUMN frequency TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE expenses ADD COLUMN direction TEXT NOT NULL DEFAULT 'withdrawal'`);
 // Pass-through: money that arrives and leaves again to the penny (IHSS caregiver
 // payments) — not real income, excluded from the surplus/deficit math.
-try { db.exec(`ALTER TABLE expenses ADD COLUMN pass_through INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
+addColumn(`ALTER TABLE expenses ADD COLUMN pass_through INTEGER NOT NULL DEFAULT 0`);
 
 // IHSS deposits are never real income (regardless of whether the matching
 // outflow shows up in this ledger — it may leave via a joint/shared account
@@ -192,7 +213,7 @@ function matchIhssPassThrough() {
 }
 matchIhssPassThrough();
 // Backfill: rows flagged pass-through before this categorization existed.
-try { db.exec(`UPDATE expenses SET category='Pass-Through' WHERE pass_through=1 AND category=''`); } catch(e) {}
+migrate(`UPDATE expenses SET category='Pass-Through' WHERE pass_through=1 AND category=''`);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS reminders (
@@ -224,9 +245,9 @@ db.exec(`
 // Lead-time alerts: fire once at next_fire_at - lead_minutes, plus the normal
 // at-time alert. lead_fired_for remembers WHICH occurrence the lead was sent
 // for — it re-arms automatically when next_fire_at advances.
-try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_minutes INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_fired_for INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE reminders ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
+addColumn(`ALTER TABLE reminders ADD COLUMN lead_minutes INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE reminders ADD COLUMN lead_fired_for INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE reminders ADD COLUMN archived_at INTEGER DEFAULT NULL`);
 
 // Calls tab: one row per outbound call, written by the Twilio webhooks below.
 // Recordings stay on Twilio's storage — recording_sid is the pointer, audio is
@@ -248,8 +269,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id, started_at);
 `);
-try { db.exec(`ALTER TABLE calls ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
-try { db.exec(`ALTER TABLE calls ADD COLUMN notes TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+addColumn(`ALTER TABLE calls ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`);
+addColumn(`ALTER TABLE calls ADD COLUMN notes TEXT NOT NULL DEFAULT ''`);
 
 // Audits tab: one JSON blob per audit (identity, current_situation, findings
 // with sources, heatmaps, gsc, narrative — same shape as AUTOMATED_AUDITS'
@@ -304,7 +325,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_daily_tasks_user ON daily_tasks(user_id, task_date);
 `);
-try { db.exec(`ALTER TABLE daily_tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+addColumn(`ALTER TABLE daily_tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''`);
 
 // To Do tab: Eisenhower matrix, one blank grid per calendar day (filled out
 // the night before for the next day). data is a JSON blob ({do, schedule,
@@ -395,12 +416,12 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_domain ON leads(user_id, website_domain)
     WHERE website_domain IS NOT NULL AND website_domain != '' AND deleted_at IS NULL;
 `);
-try { db.exec(`ALTER TABLE audits ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE followups ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`); } catch(e) {}
+addColumn(`ALTER TABLE audits ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+addColumn(`ALTER TABLE followups ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+addColumn(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`);
 
 // rfy-crm: lead contact/dial fields + disposition, and calls→lead link.
 // disposition is a single current tag-system value (e.g. "warm") — colors come
@@ -408,16 +429,16 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_em
 // Calls made before this shipped stay unlinked forever (no reliable backfill
 // signal) — lead_id only ever set going forward, passed by the client at dial
 // time. See RFY-CRM-PLAN.md in the outreach project.
-try { db.exec(`ALTER TABLE leads ADD COLUMN contact_name TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN phone_number TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN address TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN disposition TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE calls ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`); } catch(e) {}
+addColumn(`ALTER TABLE leads ADD COLUMN contact_name TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN phone_number TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN address TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN source TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN disposition TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE calls ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`);
 // Inbound calling (v161): callbacks to the Twilio number ring the browser,
 // no-answer goes to voicemail. Pre-v161 rows are all outbound by definition.
-try { db.exec(`ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'`); } catch(e) {}
+addColumn(`ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'`);
 
 // Prospect lists (Dialer tab): a lightweight tier below CRM leads for a raw
 // dial (or cold-email) list — bulk import, simple per-row outcome — before a
@@ -465,8 +486,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_prospect_outcome_events_user ON prospect_outcome_events(user_id, created_at);
 `);
-try { db.exec(`ALTER TABLE calls ADD COLUMN prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_prospect ON calls(prospect_id, started_at)`); } catch(e) {}
+addColumn(`ALTER TABLE calls ADD COLUMN prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_calls_prospect ON calls(prospect_id, started_at)`);
 
 // SMS (Texts, lives in the Dialer tab): one row per message, same
 // lead/prospect-linking + webhook-signature-auth pattern as calls, no
