@@ -119,9 +119,28 @@ async function apiCall(method, path, body) {
 }
 
 // ── Sync ──────────────────────────────────────────────────────
+// /api/sync is polled every 2s and almost always has nothing new in it, so the
+// server fingerprints the payload and we hand the last fingerprint back. An
+// unchanged one comes back as a few bytes instead of the whole database.
+let lastSyncEtag = null;
+async function fetchSync(useEtag) {
+  const headers = { 'Authorization': authHeader };
+  if (useEtag && lastSyncEtag) headers['If-None-Match'] = lastSyncEtag;
+  // no-store keeps the browser's own HTTP cache out of this — the fingerprint
+  // is ours to compare, not something a cache layer should answer for us.
+  const res = await fetch(API + '/sync', { headers, cache: 'no-store' });
+  if (res.status === 401) { showLogin(); throw new Error('Unauthorized'); }
+  if (!res.ok) throw new Error(await res.text());
+  const etag = res.headers.get('ETag');
+  const data = await res.json();
+  if (data && data.unchanged) return null;   // nothing new since the last poll
+  lastSyncEtag = etag;
+  return data;
+}
+
 async function fullSync() {
   try {
-    const data = await apiFetch('GET', '/sync');
+    const data = await fetchSync(false);
     await Promise.all([
       idbClear('notes').then(() => idbPutAll('notes', data.notes)),
       idbClear('boards').then(() => idbPutAll('boards', data.boards)),
@@ -196,7 +215,8 @@ async function pollSync() {
   if (!authHeader || !navigator.onLine) return;
   if (modalTaskId) return;
   try {
-    const data = await apiFetch('GET', '/sync');
+    const data = await fetchSync(true);
+    if (!data) return;              // fingerprint matched — nothing changed
     const hash = hashData(data);
     if (hash === lastSyncHash) return;
     lastSyncHash = hash;

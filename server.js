@@ -1520,6 +1520,14 @@ app.get('/api/prospect-stats', auth, (req, res) => {
   res.json(computeProspectStatsForDate(req.userId, date));
 });
 
+// The app polls this every 2 seconds per open tab, and the vast majority of
+// those windows contain no changes at all. So the payload is fingerprinted:
+// the client sends back the last fingerprint it saw as If-None-Match, and an
+// unchanged fingerprint gets a tiny { unchanged: true } instead of the whole
+// database. The response shape when data HAS changed is byte-identical to
+// before. (Cheap tier by design — see F4/F4b in CODEX-FINDINGS-REGISTER.md.
+// The queries still run; what this removes is the transfer and the client-side
+// rewrite, which is where the cost actually was.)
 app.get('/api/sync', auth, (req, res) => {
   const notes = db.prepare('SELECT * FROM notes WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? ORDER BY position ASC').all(req.userId);
   const boards = db.prepare('SELECT * FROM boards WHERE archived_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
@@ -1534,7 +1542,13 @@ app.get('/api/sync', auth, (req, res) => {
     .map(l => ({ ...l, ...prospectListRollup(l) }));
   const prospects = db.prepare('SELECT * FROM prospects WHERE user_id=? ORDER BY created_at ASC').all(req.userId);
   const prospect_stats_today = computeProspectStatsForDate(req.userId, laDateStr(now()));
-  res.json({ notes, boards, columns, tasks, reminders, calls, sms, prospect_lists, prospects, prospect_stats_today });
+  const body = JSON.stringify({ notes, boards, columns, tasks, reminders, calls, sms, prospect_lists, prospects, prospect_stats_today });
+  const etag = '"' + crypto.createHash('sha1').update(body).digest('hex') + '"';
+  res.set('ETag', etag);
+  // Cloudflare rewrites a strong ETag to weak (W/"...") when it compresses the
+  // response, so the value coming back can differ from the one we sent.
+  if (String(req.headers['if-none-match'] || '').replace(/^W\//, '') === etag) return res.json({ unchanged: true });
+  res.type('application/json').send(body);
 });
 
 // ── Boards ────────────────────────────────────────────────────
