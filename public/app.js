@@ -180,19 +180,20 @@ async function apiCall(method, path, body) {
 // /api/sync is polled every 2s and almost always has nothing new in it, so the
 // server fingerprints the payload and we hand the last fingerprint back. An
 // unchanged one comes back as a few bytes instead of the whole database.
-let lastSyncEtag = null;
-async function fetchSync(useEtag) {
+// X-Sync-Version, not ETag: ETag means something to Express, Cloudflare and the
+// browser cache alike, and Express answers a matching If-None-Match with an
+// empty 304 before our JSON is ever sent. A private header nobody else reads.
+let lastSyncVersion = null;
+async function fetchSync(useVersion) {
   const headers = { 'Authorization': authHeader };
-  if (useEtag && lastSyncEtag) headers['If-None-Match'] = lastSyncEtag;
-  // no-store keeps the browser's own HTTP cache out of this — the fingerprint
-  // is ours to compare, not something a cache layer should answer for us.
+  if (useVersion && lastSyncVersion) headers['X-Sync-Version'] = lastSyncVersion;
   const res = await fetch(API + '/sync', { headers, cache: 'no-store' });
   if (res.status === 401) { showLogin(); throw new Error('Unauthorized'); }
   if (!res.ok) throw new Error(await res.text());
-  const etag = res.headers.get('ETag');
+  const version = res.headers.get('X-Sync-Version');
   const data = await res.json();
   if (data && data.unchanged) return null;   // nothing new since the last poll
-  lastSyncEtag = etag;
+  lastSyncVersion = version;
   return data;
 }
 
@@ -359,7 +360,7 @@ async function logout() {
   const had = authHeader;
   if (had) { try { await apiFetch('POST', '/auth/logout'); } catch(e) {} }
   authHeader = null;
-  lastSyncEtag = null;
+  lastSyncVersion = null;
   showLogin();
 }
 function showLogin() {

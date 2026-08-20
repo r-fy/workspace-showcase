@@ -1669,11 +1669,15 @@ app.get('/api/sync', auth, (req, res) => {
   const prospects = db.prepare('SELECT * FROM prospects WHERE user_id=? ORDER BY created_at ASC').all(req.userId);
   const prospect_stats_today = computeProspectStatsForDate(req.userId, laDateStr(now()));
   const body = JSON.stringify({ notes, boards, columns, tasks, reminders, calls, sms, prospect_lists, prospects, prospect_stats_today });
-  const etag = '"' + crypto.createHash('sha1').update(body).digest('hex') + '"';
-  res.set('ETag', etag);
-  // Cloudflare rewrites a strong ETag to weak (W/"...") when it compresses the
-  // response, so the value coming back can differ from the one we sent.
-  if (String(req.headers['if-none-match'] || '').replace(/^W\//, '') === etag) return res.json({ unchanged: true });
+  const version = crypto.createHash('sha1').update(body).digest('hex');
+  // Deliberately NOT ETag/If-None-Match. Those are standard HTTP cache
+  // semantics, and every layer in the path acts on them: Express turns a
+  // matching If-None-Match into a bodyless 304 before our JSON ever goes out,
+  // and Cloudflare rewrites strong ETags to weak. A private header keeps this
+  // fingerprint ours alone, with no cache layer interpreting it.
+  res.set('X-Sync-Version', version);
+  res.set('Cache-Control', 'no-store');
+  if (req.headers['x-sync-version'] === version) return res.json({ unchanged: true });
   res.type('application/json').send(body);
 });
 

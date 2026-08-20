@@ -5,6 +5,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 const { spawn } = require('child_process');
 
 const PIN = '9999';
@@ -23,12 +24,29 @@ async function login() {
   token = (await res.json()).token;
 }
 
-async function getSync(etag) {
+// Raw http, NOT fetch(). This matters: node's fetch quietly turns a bodyless
+// 304 back into a 200 with a body, which hid a real bug here once — Express was
+// answering a matching If-None-Match with an empty 304 that browsers would have
+// choked on, and the fetch-based version of this check passed anyway.
+function rawGet(headers) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/api/sync', headers }, res => {
+      let body = '';
+      res.on('data', d => { body += d; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, raw: body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+async function getSync(version) {
   const headers = { Authorization: authHeader() };
-  if (etag) headers['If-None-Match'] = etag;
-  const res = await fetch(BASE + '/api/sync', { headers });
-  assert.strictEqual(res.status, 200, 'sync should answer 200');
-  return { etag: res.headers.get('etag'), body: await res.json() };
+  if (version) headers['X-Sync-Version'] = version;
+  const res = await rawGet(headers);
+  assert.notStrictEqual(res.status, 304, 'sync must never answer 304 — a bodyless response breaks the poll');
+  assert.strictEqual(res.status, 200, 'sync should answer 200, got ' + res.status);
+  assert.ok(res.raw.length, 'sync must always send a body');
+  return { etag: res.headers['x-sync-version'], body: JSON.parse(res.raw) };
 }
 
 (async () => {
@@ -49,7 +67,7 @@ async function getSync(etag) {
 
     // 1 — a first poll returns the full payload plus a fingerprint
     const first = await getSync(null);
-    assert.ok(first.etag, 'sync must return an ETag');
+    assert.ok(first.etag, 'sync must return an X-Sync-Version header');
     const KEYS = ['notes','boards','columns','tasks','reminders','calls','sms','prospect_lists','prospects','prospect_stats_today'];
     for (const k of KEYS) assert.ok(k in first.body, `full payload should still carry ${k}`);
     assert.ok(!('unchanged' in first.body), 'a first poll is never "unchanged"');
@@ -75,9 +93,14 @@ async function getSync(etag) {
     const fourth = await getSync(third.etag);
     assert.deepStrictEqual(fourth.body, { unchanged: true }, 'the new fingerprint should hold until the next write');
 
-    // 5 — a weak ETag (what Cloudflare sends back when it compresses) still matches
-    const weak = await getSync('W/' + third.etag);
-    assert.deepStrictEqual(weak.body, { unchanged: true }, 'a W/-prefixed fingerprint must still count as unchanged');
+    // 5 — sending the fingerprint as If-None-Match must NOT be honoured, because
+    // that is the header Express hijacks into a 304
+    const asEtag = await rawGet({ Authorization: authHeader(), 'If-None-Match': '"' + third.etag + '"' });
+    assert.notStrictEqual(asEtag.status, 304, 'the fingerprint must not double as an HTTP cache validator');
+
+    // 6 — an unrecognised fingerprint gets the full payload, not "unchanged"
+    const stale = await getSync('0000000000000000000000000000000000000000');
+    assert.ok(!stale.body.unchanged, 'an unknown fingerprint must return real data');
 
     console.log('sync fingerprint: all checks passed');
   } finally {
