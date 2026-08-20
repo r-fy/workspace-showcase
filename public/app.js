@@ -103,12 +103,29 @@ function idbPutAll(store, items) {
 function newOpId() {
   return (crypto.randomUUID ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(36).slice(2));
 }
-async function enqueueOp(op) {
+// Waits for the write to actually land on disk. An op that only made it into
+// the in-memory array is lost on reload, and the caller would have told the user
+// "saved, will sync later" — so a failure here has to be a failure the caller sees.
+function enqueueOp(op) {
   if (!op.opId) op.opId = newOpId();
-  outbox.push(op);
-  const req = idb.transaction('outbox','readwrite').objectStore('outbox').add(op);
-  req.onsuccess = () => { op.oid = req.result; };
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction('outbox', 'readwrite');
+    const req = tx.objectStore('outbox').add(op);
+    req.onsuccess = () => { op.oid = req.result; };
+    tx.oncomplete = () => { outbox.push(op); resolve(op); };
+    tx.onerror = tx.onabort = () => reject(tx.error || new Error('could not queue offline change'));
+  });
 }
+// A catch block around apiCall must NOT queue the write itself when we're
+// offline — apiCall already did, and queuing it again creates the row twice on
+// reconnect (two notes, two tasks). The catch also fires for ordinary server
+// errors while online, and THAT case does still need queuing, hence the check.
+async function queueForSync(op) {
+  if (!navigator.onLine) return;
+  try { await enqueueOp(op); }
+  catch (e) { toast('Saved on this device only — could not queue it to sync'); }
+}
+
 // Order is the point here. The old version emptied the queue, retried each op,
 // and pushed failures onto the END — so an edit could land after the delete
 // that was queued before it and bring deleted content back. Now a retriable
@@ -128,7 +145,6 @@ async function flushOutbox() {
     outbox.shift();
     if (op.oid !== undefined) { try { await idbDelete('outbox', op.oid); } catch(e) {} }
   }
-  await idbClear('outbox');   // belt and braces: anything left without an oid
   await fullSync();
 }
 
@@ -148,7 +164,15 @@ async function apiFetch(method, path, body, opId) {
   return res.json();
 }
 async function apiCall(method, path, body) {
-  if (!navigator.onLine) { if (method !== 'GET') enqueueOp({ method, path, body }); throw new Error('offline'); }
+  if (!navigator.onLine) {
+    if (method !== 'GET') {
+      // If the change can't even be written to the offline queue, say so — the
+      // caller's "will sync when reconnected" message would otherwise be a lie.
+      try { await enqueueOp({ method, path, body }); }
+      catch (e) { throw new Error('could not save this change for later — storage is full or unavailable'); }
+    }
+    throw new Error('offline');
+  }
   return apiFetch(method, path, body);
 }
 
@@ -187,7 +211,6 @@ async function fullSync() {
     calls = data.calls || [];
     smsMessages = data.sms || [];
     applyProspectSyncData(data);
-    lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
     if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog(); renderSmsLog(); }
@@ -203,17 +226,13 @@ async function fullSync() {
 
 // ── Live polling ──────────────────────────────────────────────
 let pollTimer = null;
-let lastSyncHash = '';
-
-function hashData(data) {
-  const ts = (data.tasks||[]).map(t=>t.id+':'+t.updated_at+':'+t.column_id).sort().join('|');
-  const ns = (data.notes||[]).map(n=>n.id+':'+n.updated_at).sort().join('|');
-  const rs = (data.reminders||[]).map(r=>r.id+':'+r.updated_at+':'+(r.next_fire_at||0)+':'+(r.snoozed_until||0)).sort().join('|');
-  const cs = (data.calls||[]).map(c=>c.id+':'+c.status+':'+(c.recording_sid||'')+':'+c.starred+':'+c.notes).sort().join('|');
-  const ss = (data.sms||[]).map(s=>s.id+':'+s.status).sort().join('|');
-  const ps = (data.prospects||[]).map(p=>p.id+':'+p.updated_at+':'+p.outcome+':'+(p.promoted_lead_id||'')).sort().join('|');
-  return ts + '$$' + ns + '$$' + rs + '$$' + cs + '$$' + ss + '$$' + ps;
-}
+// There used to be a second, hand-written change check here (hashData) covering
+// only some of the synced tables. Now that the server fingerprints the whole
+// payload, that check could only ever be wrong in one direction: it looked at
+// notes/tasks/reminders/calls/sms/prospects but NOT boards, columns, prospect
+// lists or the daily stats — so a board rename or a column reorder from another
+// device arrived, got compared, and was thrown away. The server fingerprint is
+// exact, so it is now the only gate.
 
 // Prospect lists ride /api/sync (like reminders/calls) so an outside change —
 // e.g. the future n8n scrape workflow inserting rows, or another device
@@ -251,9 +270,6 @@ async function pollSync() {
   try {
     const data = await fetchSync(true);
     if (!data) return;              // fingerprint matched — nothing changed
-    const hash = hashData(data);
-    if (hash === lastSyncHash) return;
-    lastSyncHash = hash;
     await Promise.all([
       idbClear('notes').then(() => idbPutAll('notes', data.notes)),
       idbClear('boards').then(() => idbPutAll('boards', data.boards)),
@@ -2458,7 +2474,7 @@ function endCallUi(callRef) {
   document.getElementById('dial-hangup-btn')?.classList.add('hidden');
   setDialerStatus('Ready', 'dialer-status-ready');
   // The recording takes a few seconds to process server-side; the 2s sync
-  // poll picks it up (hashData covers recording_sid), no refresh needed here.
+  // poll picks it up (the payload fingerprint changes), no refresh needed here.
   loadUsagePanel(); // balance just moved
   // rfy-crm §1.6/1.7: a lead-scoped call that actually connected surfaces the
   // disposition picker, then auto-advances to the next lead in list order.
@@ -3806,7 +3822,7 @@ async function newNote() {
     const id = 'local_'+Date.now(), t = Date.now();
     const note = { id, title, content: '', tags: '', created_at: t, updated_at: t };
     notes.unshift({ id, title, updated_at: t }); notesFullCache[id] = note; await idbPut('notes', note);
-    await enqueueOp({ method:'POST', path:'/notes', body:{ title, content:'' } });
+    await queueForSync({ method:'POST', path:'/notes', body:{ title, content:'' } });
     renderNotesList(); openNote(id);
   }
 }
@@ -4554,7 +4570,7 @@ async function persistTaskModal() {
       const id = 'local_'+Date.now(), t = Date.now();
       const task = { id, column_id: newTaskColId, title, description, claude_marked, tags, position: col.tasks.length, created_at: t, updated_at: t };
       col.tasks.push(task); await idbPut('tasks', task);
-      await enqueueOp({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description, claude_marked, tags } });
+      await queueForSync({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description, claude_marked, tags } });
     }
     renderKanban();
   } else {
