@@ -106,25 +106,46 @@ db.exec(`
 `);
 
 
+// ── Migration helpers ──────────────────────────────────────────
+// These used to be `try { db.exec(...) } catch(e) {}`, which swallowed real
+// failures (locked database, malformed schema, permissions) alongside the
+// harmless "duplicate column name" you get from re-running an additive ALTER.
+// The server then booted looking healthy and broke later, with the cause gone.
+// Now only the duplicate-column case is ignored; anything else refuses the boot
+// and names the statement that failed.
+function addColumn(sql) {
+  try { db.exec(sql); }
+  catch (e) {
+    if (/duplicate column name/i.test(e.message)) return; // already applied — expected on every boot after the first
+    throw new Error(`Migration failed: ${sql.trim()}\n  ${e.message}`);
+  }
+}
+// For statements that are already idempotent on their own (CREATE ... IF NOT
+// EXISTS, no-op-on-rerun UPDATEs). Nothing is ignored — they should never throw.
+function migrate(sql) {
+  try { db.exec(sql); }
+  catch (e) { throw new Error(`Migration failed: ${sql.trim()}\n  ${e.message}`); }
+}
+
 // ── Safe migrations (add-only) ─────────────────────────────────
-try { db.exec(`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE notes ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN deleted_at INTEGER DEFAULT NULL`); } catch(e) {}
+addColumn(`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE notes ADD COLUMN deleted_at INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE tasks ADD COLUMN deleted_at INTEGER DEFAULT NULL`);
 // Archive: a separate hidden-but-recoverable state from Trash (deleted_at).
-try { db.exec(`ALTER TABLE notes ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE boards ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
+addColumn(`ALTER TABLE notes ADD COLUMN archived_at INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE tasks ADD COLUMN archived_at INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE boards ADD COLUMN archived_at INTEGER DEFAULT NULL`);
 // Multi-user: scope all data by user_id (existing rows default to 'owner')
-try { db.exec(`ALTER TABLE notes   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
-try { db.exec(`ALTER TABLE boards  ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
-try { db.exec(`ALTER TABLE columns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`); } catch(e) {}
+addColumn(`ALTER TABLE notes   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
+addColumn(`ALTER TABLE boards  ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
+addColumn(`ALTER TABLE columns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
+addColumn(`ALTER TABLE tasks   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
 // Claude mark: flags a task as greenlit for Claude Code to work on (read via direct DB query)
-try { db.exec(`ALTER TABLE tasks ADD COLUMN claude_marked INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
-try { db.exec(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+addColumn(`ALTER TABLE tasks ADD COLUMN claude_marked INTEGER NOT NULL DEFAULT 0`);
+addColumn(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''`);
 // Top 3 tray: a fixed per-board column (kind='top3') for pinning up to 3 urgent tasks.
-try { db.exec(`ALTER TABLE columns ADD COLUMN kind TEXT DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE notes ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
+addColumn(`ALTER TABLE columns ADD COLUMN kind TEXT DEFAULT NULL`);
+addColumn(`ALTER TABLE notes ADD COLUMN position INTEGER NOT NULL DEFAULT 0`);
 // Initialize note positions (newest first) when all are at the default 0
 {
   const stats = db.prepare('SELECT COUNT(*) AS total, MAX(position) AS maxPos FROM notes').get();
@@ -153,13 +174,13 @@ db.exec(`
     position INTEGER NOT NULL DEFAULT 0
   );
 `);
-try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_cat_name ON expense_categories(user_id, name)`); } catch(e) {}
-try { db.exec(`ALTER TABLE expenses ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE expenses ADD COLUMN frequency TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE expenses ADD COLUMN direction TEXT NOT NULL DEFAULT 'withdrawal'`); } catch(e) {}
+migrate(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_cat_name ON expense_categories(user_id, name)`);
+addColumn(`ALTER TABLE expenses ADD COLUMN source TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE expenses ADD COLUMN frequency TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE expenses ADD COLUMN direction TEXT NOT NULL DEFAULT 'withdrawal'`);
 // Pass-through: money that arrives and leaves again to the penny (IHSS caregiver
 // payments) — not real income, excluded from the surplus/deficit math.
-try { db.exec(`ALTER TABLE expenses ADD COLUMN pass_through INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
+addColumn(`ALTER TABLE expenses ADD COLUMN pass_through INTEGER NOT NULL DEFAULT 0`);
 
 // IHSS deposits are never real income (regardless of whether the matching
 // outflow shows up in this ledger — it may leave via a joint/shared account
@@ -192,7 +213,7 @@ function matchIhssPassThrough() {
 }
 matchIhssPassThrough();
 // Backfill: rows flagged pass-through before this categorization existed.
-try { db.exec(`UPDATE expenses SET category='Pass-Through' WHERE pass_through=1 AND category=''`); } catch(e) {}
+migrate(`UPDATE expenses SET category='Pass-Through' WHERE pass_through=1 AND category=''`);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS reminders (
@@ -224,9 +245,9 @@ db.exec(`
 // Lead-time alerts: fire once at next_fire_at - lead_minutes, plus the normal
 // at-time alert. lead_fired_for remembers WHICH occurrence the lead was sent
 // for — it re-arms automatically when next_fire_at advances.
-try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_minutes INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE reminders ADD COLUMN lead_fired_for INTEGER DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE reminders ADD COLUMN archived_at INTEGER DEFAULT NULL`); } catch(e) {}
+addColumn(`ALTER TABLE reminders ADD COLUMN lead_minutes INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE reminders ADD COLUMN lead_fired_for INTEGER DEFAULT NULL`);
+addColumn(`ALTER TABLE reminders ADD COLUMN archived_at INTEGER DEFAULT NULL`);
 
 // Calls tab: one row per outbound call, written by the Twilio webhooks below.
 // Recordings stay on Twilio's storage — recording_sid is the pointer, audio is
@@ -248,8 +269,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id, started_at);
 `);
-try { db.exec(`ALTER TABLE calls ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
-try { db.exec(`ALTER TABLE calls ADD COLUMN notes TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+addColumn(`ALTER TABLE calls ADD COLUMN starred INTEGER NOT NULL DEFAULT 0`);
+addColumn(`ALTER TABLE calls ADD COLUMN notes TEXT NOT NULL DEFAULT ''`);
 
 // Audits tab: one JSON blob per audit (identity, current_situation, findings
 // with sources, heatmaps, gsc, narrative — same shape as AUTOMATED_AUDITS'
@@ -304,7 +325,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_daily_tasks_user ON daily_tasks(user_id, task_date);
 `);
-try { db.exec(`ALTER TABLE daily_tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''`); } catch(e) {}
+addColumn(`ALTER TABLE daily_tasks ADD COLUMN context TEXT NOT NULL DEFAULT ''`);
 
 // To Do tab: Eisenhower matrix, one blank grid per calendar day (filled out
 // the night before for the next day). data is a JSON blob ({do, schedule,
@@ -395,12 +416,12 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_domain ON leads(user_id, website_domain)
     WHERE website_domain IS NOT NULL AND website_domain != '' AND deleted_at IS NULL;
 `);
-try { db.exec(`ALTER TABLE audits ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE followups ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`); } catch(e) {}
+addColumn(`ALTER TABLE audits ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+addColumn(`ALTER TABLE followups ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+addColumn(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`);
 
 // rfy-crm: lead contact/dial fields + disposition, and calls→lead link.
 // disposition is a single current tag-system value (e.g. "warm") — colors come
@@ -408,16 +429,16 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_em
 // Calls made before this shipped stay unlinked forever (no reliable backfill
 // signal) — lead_id only ever set going forward, passed by the client at dial
 // time. See RFY-CRM-PLAN.md in the outreach project.
-try { db.exec(`ALTER TABLE leads ADD COLUMN contact_name TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN phone_number TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN address TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN source TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE leads ADD COLUMN disposition TEXT NOT NULL DEFAULT ''`); } catch(e) {}
-try { db.exec(`ALTER TABLE calls ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`); } catch(e) {}
+addColumn(`ALTER TABLE leads ADD COLUMN contact_name TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN phone_number TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN address TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN source TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE leads ADD COLUMN disposition TEXT NOT NULL DEFAULT ''`);
+addColumn(`ALTER TABLE calls ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)`);
 // Inbound calling (v161): callbacks to the Twilio number ring the browser,
 // no-answer goes to voicemail. Pre-v161 rows are all outbound by definition.
-try { db.exec(`ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'`); } catch(e) {}
+addColumn(`ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'`);
 
 // Prospect lists (Dialer tab): a lightweight tier below CRM leads for a raw
 // dial (or cold-email) list — bulk import, simple per-row outcome — before a
@@ -465,8 +486,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_prospect_outcome_events_user ON prospect_outcome_events(user_id, created_at);
 `);
-try { db.exec(`ALTER TABLE calls ADD COLUMN prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL`); } catch(e) {}
-try { db.exec(`CREATE INDEX IF NOT EXISTS idx_calls_prospect ON calls(prospect_id, started_at)`); } catch(e) {}
+addColumn(`ALTER TABLE calls ADD COLUMN prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL`);
+migrate(`CREATE INDEX IF NOT EXISTS idx_calls_prospect ON calls(prospect_id, started_at)`);
 
 // SMS (Texts, lives in the Dialer tab): one row per message, same
 // lead/prospect-linking + webhook-signature-auth pattern as calls, no
@@ -493,11 +514,38 @@ app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-e
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Auth ─────────────────────────────────────────────────────
-// Rate limit: after 10 failed PIN attempts an IP is locked out for 5 minutes,
-// so a 4-digit PIN can't just be brute-forced by a script.
-// ponytail: in-memory per-IP counter — resets on restart, plenty for a family app.
-const FAILS = new Map(); // ip -> { count, until }
+// The PIN is a login factor and nothing else. It buys a random session token at
+// POST /api/auth/login; that token is what the browser stores and what every
+// other route accepts. So a stolen browser credential is revocable and expires,
+// and the PIN itself never sits in sessionStorage, a cookie, or IndexedDB.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  -- Failed-login state lives here rather than in memory so a restart doesn't
+  -- hand an attacker a clean slate.
+  CREATE TABLE IF NOT EXISTS login_attempts (
+    identity TEXT PRIMARY KEY,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    last_fail_at INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0
+  );
+`);
+// Long-lived on purpose: this is a personal app you stay logged into. Revocation
+// is the lock button, not a short clock.
+const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const SESSION_TOUCH_MS = 60 * 60 * 1000; // only refresh last_used_at once an hour — the app polls every 2s
+// After 10 failed PIN guesses an identity is locked out for 5 minutes.
 const MAX_FAILS = 10, LOCK_MS = 5 * 60 * 1000;
+// Each failed guess also sleeps before answering: 1s, 2s, 4s… capped at 30s. A
+// hard global freeze was deliberately rejected — it would hand any stranger a
+// way to lock the owner out of his own app.
+const MAX_LOGIN_DELAY_MS = 30 * 1000;
+const FAIL_DECAY_MS = 15 * 60 * 1000; // a quiet spell resets the counter
 // Cloudflare's published edge ranges — https://www.cloudflare.com/ips-v4 and /ips-v6
 // (fetched 2026-07-24). Only used to decide whether CF-Connecting-IP is trustworthy;
 // refresh if Cloudflare ever publishes new ranges (they change rarely).
@@ -546,36 +594,63 @@ function clientIp(req) {
   }
   return peer || req.socket.remoteAddress || '?';
 }
-function lockedOut(ip) {
-  const f = FAILS.get(ip);
-  return !!(f && f.until > Date.now());
-}
-function recordFail(ip) {
-  if (FAILS.size > 1000) for (const [k, v] of FAILS) { if (v.until < Date.now()) FAILS.delete(k); }
-  const f = FAILS.get(ip) || { count: 0, until: 0 };
-  f.count++;
-  if (f.count >= MAX_FAILS) { f.until = Date.now() + LOCK_MS; f.count = 0; }
-  FAILS.set(ip, f);
-}
+// ── Failed-login throttle (persisted) ─────────────────────────
+const getAttempts = db.prepare('SELECT * FROM login_attempts WHERE identity=?');
+const putAttempts = db.prepare(`INSERT INTO login_attempts (identity, fail_count, last_fail_at, locked_until)
+  VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET fail_count=excluded.fail_count,
+  last_fail_at=excluded.last_fail_at, locked_until=excluded.locked_until`);
 
-// "Basic base64(user:pin)" -> userId, or null. The username part is ignored; the PIN identifies the user.
-function userFromBasic(value) {
-  if (!value || !value.startsWith('Basic ')) return null;
-  const decoded = Buffer.from(value.slice(6), 'base64').toString('utf8');
-  const pass = decoded.slice(decoded.indexOf(':') + 1);
-  return USERS[pass] || null;
+function lockedOut(identity) {
+  const row = getAttempts.get(identity);
+  return !!(row && row.locked_until > Date.now());
 }
+// Returns the new consecutive-failure count, which sets how long we stall before answering.
+function recordFail(identity) {
+  const t = Date.now();
+  const row = getAttempts.get(identity);
+  // A quiet spell wipes the slate: this counts a run of guesses, not a lifetime total.
+  const prior = (row && t - row.last_fail_at < FAIL_DECAY_MS) ? row.fail_count : 0;
+  const count = prior + 1;
+  putAttempts.run(identity, count, t, count >= MAX_FAILS ? t + LOCK_MS : 0);
+  if (Math.random() < 0.05) { // occasional sweep, no separate timer needed
+    db.prepare('DELETE FROM login_attempts WHERE locked_until < ? AND last_fail_at < ?').run(t, t - FAIL_DECAY_MS);
+  }
+  return count;
+}
+function clearFails(identity) { db.prepare('DELETE FROM login_attempts WHERE identity=?').run(identity); }
+function loginDelayMs(count) { return Math.min(2 ** (count - 1) * 1000, MAX_LOGIN_DELAY_MS); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ── Sessions ──────────────────────────────────────────────────
+// Only the hash is stored, so a stolen database still doesn't hand over live tokens.
+function hashToken(token) { return crypto.createHash('sha256').update(token).digest('hex'); }
+function issueSession(userId) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const t = now();
+  db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, last_used_at, expires_at) VALUES (?,?,?,?,?)')
+    .run(hashToken(token), userId, t, t, t + SESSION_TTL_MS);
+  return token;
+}
+function revokeSession(token) { db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token)); }
+// "Bearer <token>" -> userId, or null. The PIN is NOT accepted here — only at /api/auth/login.
+function userFromSession(value) {
+  if (!value || !value.startsWith('Bearer ')) return null;
+  const row = db.prepare('SELECT user_id, last_used_at, expires_at FROM sessions WHERE token_hash=?')
+    .get(hashToken(value.slice(7).trim()));
+  if (!row) return null;
+  const t = now();
+  if (row.expires_at <= t) return null;
+  if (t - row.last_used_at > SESSION_TOUCH_MS) {
+    db.prepare('UPDATE sessions SET last_used_at=?, expires_at=? WHERE token_hash=?')
+      .run(t, t + SESSION_TTL_MS, hashToken(value.slice(7).trim()));
+  }
+  return row.user_id;
+}
+db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now()); // sweep on boot
 
 function checkAuth(req, res, next, credential) {
-  const ip = clientIp(req);
-  if (lockedOut(ip)) return res.status(429).json({ error: 'Too many failed attempts — try again in a few minutes' });
-  const userId = userFromBasic(credential);
-  if (!userId) {
-    if (credential) recordFail(ip); // only count actual wrong guesses, not missing headers
-    res.set('WWW-Authenticate', 'Basic realm="Workspace"');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  FAILS.delete(ip);
+  const userId = userFromSession(credential);
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   req.userId = userId;
   next();
 }
@@ -662,8 +737,80 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ── Idempotent replays ───────────────────────────────────────
+// Offline writes sit in a queue in the browser and get replayed when the
+// connection comes back. A write that reached SQLite and then lost its reply on
+// the way back used to be replayed and done twice — a duplicate note, task,
+// reminder, expense or import. Each queued write now carries an id that survives
+// retries; the id is recorded here alongside the reply, and a repeat of the same
+// id gets the original reply back instead of running again.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS processed_ops (
+    user_id TEXT NOT NULL,
+    op_key TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    response TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, op_key)
+  );
+`);
+const PROCESSED_OPS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a replay days later is not a lost reply
+db.prepare('DELETE FROM processed_ops WHERE created_at < ?').run(now() - PROCESSED_OPS_TTL_MS);
+
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET') return next();                       // nothing to duplicate
+  const key = String(req.headers['idempotency-key'] || '').slice(0, 200);
+  if (!key) return next();
+  const userId = userFromSession(req.headers.authorization || '');
+  if (!userId) return next();                                     // let the route answer 401 as usual
+  const prior = db.prepare('SELECT status, response FROM processed_ops WHERE user_id=? AND op_key=?').get(userId, key);
+  if (prior) return res.status(prior.status).type('application/json').send(prior.response);
+  // Recorded on the way out, as soon as the handler answers — the mutation has
+  // already committed by then (better-sqlite3 is synchronous), so the only gap
+  // is a process death between the two, which is orders of magnitude narrower
+  // than the network round trip this closes.
+  const sendJson = res.json.bind(res);
+  res.json = body => {
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      try {
+        db.prepare('INSERT OR REPLACE INTO processed_ops (user_id, op_key, status, response, created_at) VALUES (?,?,?,?,?)')
+          .run(userId, key, res.statusCode, JSON.stringify(body), now());
+      } catch (e) { console.warn('could not record idempotency key:', e.message); }
+    }
+    if (Math.random() < 0.02) { // occasional age sweep, no separate timer
+      try { db.prepare('DELETE FROM processed_ops WHERE created_at < ?').run(now() - PROCESSED_OPS_TTL_MS); } catch (e) {}
+    }
+    return sendJson(body);
+  };
+  next();
+});
+
 // ── Auth check ──────────────────────────────────────────────
 app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
+
+// The ONLY place a PIN is accepted. Hands back a session token; everything else
+// on the API wants "Authorization: Bearer <token>".
+app.post('/api/auth/login', async (req, res) => {
+  const identity = clientIp(req);
+  if (lockedOut(identity)) return res.status(429).json({ error: 'Too many failed attempts — try again in a few minutes' });
+  const pin = String((req.body && req.body.pin) || '');
+  const userId = pin ? USERS[pin] : null;
+  if (!userId) {
+    // Count the miss first, then stall: concurrent guesses all see the higher count.
+    const count = recordFail(identity);
+    await sleep(loginDelayMs(count));
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  clearFails(identity);
+  res.json({ token: issueSession(userId) });
+});
+
+// Locking the app revokes the token server-side, so the copy sitting in the
+// browser's storage stops working the moment you lock.
+app.post('/api/auth/logout', auth, (req, res) => {
+  revokeSession(String(req.headers.authorization || '').slice(7).trim());
+  res.json({ ok: true });
+});
 
 // rfy-crm: audits/follow-ups are always created from inside a lead now, so a
 // live lead_id is REQUIRED on create (§4 of RFY-CRM-PLAN.md). On update it's
@@ -1499,6 +1646,14 @@ app.get('/api/prospect-stats', auth, (req, res) => {
   res.json(computeProspectStatsForDate(req.userId, date));
 });
 
+// The app polls this every 2 seconds per open tab, and the vast majority of
+// those windows contain no changes at all. So the payload is fingerprinted:
+// the client sends back the last fingerprint it saw as If-None-Match, and an
+// unchanged fingerprint gets a tiny { unchanged: true } instead of the whole
+// database. The response shape when data HAS changed is byte-identical to
+// before. (Cheap tier by design — see F4/F4b in CODEX-FINDINGS-REGISTER.md.
+// The queries still run; what this removes is the transfer and the client-side
+// rewrite, which is where the cost actually was.)
 app.get('/api/sync', auth, (req, res) => {
   const notes = db.prepare('SELECT * FROM notes WHERE deleted_at IS NULL AND archived_at IS NULL AND user_id=? ORDER BY position ASC').all(req.userId);
   const boards = db.prepare('SELECT * FROM boards WHERE archived_at IS NULL AND user_id=? ORDER BY position').all(req.userId);
@@ -1513,7 +1668,13 @@ app.get('/api/sync', auth, (req, res) => {
     .map(l => ({ ...l, ...prospectListRollup(l) }));
   const prospects = db.prepare('SELECT * FROM prospects WHERE user_id=? ORDER BY created_at ASC').all(req.userId);
   const prospect_stats_today = computeProspectStatsForDate(req.userId, laDateStr(now()));
-  res.json({ notes, boards, columns, tasks, reminders, calls, sms, prospect_lists, prospects, prospect_stats_today });
+  const body = JSON.stringify({ notes, boards, columns, tasks, reminders, calls, sms, prospect_lists, prospects, prospect_stats_today });
+  const etag = '"' + crypto.createHash('sha1').update(body).digest('hex') + '"';
+  res.set('ETag', etag);
+  // Cloudflare rewrites a strong ETag to weak (W/"...") when it compresses the
+  // response, so the value coming back can differ from the one we sent.
+  if (String(req.headers['if-none-match'] || '').replace(/^W\//, '') === etag) return res.json({ unchanged: true });
+  res.type('application/json').send(body);
 });
 
 // ── Boards ────────────────────────────────────────────────────

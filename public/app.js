@@ -96,32 +96,109 @@ function idbPutAll(store, items) {
     items.forEach(i => os.put(i)); tx.oncomplete = res; tx.onerror = () => rej(tx.error);
   });
 }
-async function enqueueOp(op) { outbox.push(op); idb.transaction('outbox','readwrite').objectStore('outbox').add(op); }
+// Every queued write carries an id that never changes, even across retries.
+// The server remembers ids it has already carried out, so a write that reached
+// the database but whose reply got lost on the way back is recognised on the
+// replay instead of being done twice.
+function newOpId() {
+  return (crypto.randomUUID ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+}
+// Waits for the write to actually land on disk. An op that only made it into
+// the in-memory array is lost on reload, and the caller would have told the user
+// "saved, will sync later" — so a failure here has to be a failure the caller sees.
+function enqueueOp(op) {
+  if (!op.opId) op.opId = newOpId();
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction('outbox', 'readwrite');
+    const req = tx.objectStore('outbox').add(op);
+    req.onsuccess = () => { op.oid = req.result; };
+    tx.oncomplete = () => { outbox.push(op); resolve(op); };
+    tx.onerror = tx.onabort = () => reject(tx.error || new Error('could not queue offline change'));
+  });
+}
+// A catch block around apiCall must NOT queue the write itself when we're
+// offline — apiCall already did, and queuing it again creates the row twice on
+// reconnect (two notes, two tasks). The catch also fires for ordinary server
+// errors while online, and THAT case does still need queuing, hence the check.
+async function queueForSync(op) {
+  if (!navigator.onLine) return;
+  try { await enqueueOp(op); }
+  catch (e) { toast('Saved on this device only — could not queue it to sync'); }
+}
+
+// Order is the point here. The old version emptied the queue, retried each op,
+// and pushed failures onto the END — so an edit could land after the delete
+// that was queued before it and bring deleted content back. Now a retriable
+// failure stops the flush with the queue intact and in order.
 async function flushOutbox() {
   if (!navigator.onLine || outbox.length === 0) return;
-  const ops = [...outbox]; outbox = []; await idbClear('outbox');
-  for (const op of ops) { try { await apiFetch(op.method, op.path, op.body); } catch(e) { enqueueOp(op); } }
+  while (outbox.length) {
+    const op = outbox[0];
+    try {
+      await apiFetch(op.method, op.path, op.body, op.opId);
+    } catch (e) {
+      if (e && e.retriable) return;        // offline / server hiccup / logged out — try again later, keep the order
+      // The server refused this specific write (bad request, gone, etc).
+      // Retrying it forever would wedge everything queued behind it.
+      console.warn('dropping a queued change the server refused:', op.method, op.path, e && e.message);
+    }
+    outbox.shift();
+    if (op.oid !== undefined) { try { await idbDelete('outbox', op.oid); } catch(e) {} }
+  }
   await fullSync();
 }
 
 // ── API ───────────────────────────────────────────────────────
-async function apiFetch(method, path, body) {
+// Errors carry a `retriable` flag so flushOutbox can tell "try again later"
+// (offline, server hiccup, logged out) from "the server refused this write".
+async function apiFetch(method, path, body, opId) {
   const opts = { method, headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' } };
+  if (opId) opts.headers['Idempotency-Key'] = opId;
   if (body !== undefined) opts.body = JSON.stringify(body);
-  const res = await fetch(API + path, opts);
-  if (res.status === 401) { showLogin(); throw new Error('Unauthorized'); }
+  let res;
+  try { res = await fetch(API + path, opts); }
+  catch (e) { e.retriable = true; throw e; }
+  if (res.status === 401) { showLogin(); const e = new Error('Unauthorized'); e.retriable = true; throw e; }
+  if (res.status === 429 || res.status >= 500) { const e = new Error(await res.text()); e.retriable = true; throw e; }
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 async function apiCall(method, path, body) {
-  if (!navigator.onLine) { if (method !== 'GET') enqueueOp({ method, path, body }); throw new Error('offline'); }
+  if (!navigator.onLine) {
+    if (method !== 'GET') {
+      // If the change can't even be written to the offline queue, say so — the
+      // caller's "will sync when reconnected" message would otherwise be a lie.
+      try { await enqueueOp({ method, path, body }); }
+      catch (e) { throw new Error('could not save this change for later — storage is full or unavailable'); }
+    }
+    throw new Error('offline');
+  }
   return apiFetch(method, path, body);
 }
 
 // ── Sync ──────────────────────────────────────────────────────
+// /api/sync is polled every 2s and almost always has nothing new in it, so the
+// server fingerprints the payload and we hand the last fingerprint back. An
+// unchanged one comes back as a few bytes instead of the whole database.
+let lastSyncEtag = null;
+async function fetchSync(useEtag) {
+  const headers = { 'Authorization': authHeader };
+  if (useEtag && lastSyncEtag) headers['If-None-Match'] = lastSyncEtag;
+  // no-store keeps the browser's own HTTP cache out of this — the fingerprint
+  // is ours to compare, not something a cache layer should answer for us.
+  const res = await fetch(API + '/sync', { headers, cache: 'no-store' });
+  if (res.status === 401) { showLogin(); throw new Error('Unauthorized'); }
+  if (!res.ok) throw new Error(await res.text());
+  const etag = res.headers.get('ETag');
+  const data = await res.json();
+  if (data && data.unchanged) return null;   // nothing new since the last poll
+  lastSyncEtag = etag;
+  return data;
+}
+
 async function fullSync() {
   try {
-    const data = await apiFetch('GET', '/sync');
+    const data = await fetchSync(false);
     await Promise.all([
       idbClear('notes').then(() => idbPutAll('notes', data.notes)),
       idbClear('boards').then(() => idbPutAll('boards', data.boards)),
@@ -134,10 +211,9 @@ async function fullSync() {
     calls = data.calls || [];
     smsMessages = data.sms || [];
     applyProspectSyncData(data);
-    lastSyncHash = hashData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog(); renderSmsLog(); }
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog({ fromPoll: true }); renderSmsLog(); }
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
     notes = await idbGetAll('notes'); boards = await idbGetAll('boards');
@@ -150,17 +226,13 @@ async function fullSync() {
 
 // ── Live polling ──────────────────────────────────────────────
 let pollTimer = null;
-let lastSyncHash = '';
-
-function hashData(data) {
-  const ts = (data.tasks||[]).map(t=>t.id+':'+t.updated_at+':'+t.column_id).sort().join('|');
-  const ns = (data.notes||[]).map(n=>n.id+':'+n.updated_at).sort().join('|');
-  const rs = (data.reminders||[]).map(r=>r.id+':'+r.updated_at+':'+(r.next_fire_at||0)+':'+(r.snoozed_until||0)).sort().join('|');
-  const cs = (data.calls||[]).map(c=>c.id+':'+c.status+':'+(c.recording_sid||'')+':'+c.starred+':'+c.notes).sort().join('|');
-  const ss = (data.sms||[]).map(s=>s.id+':'+s.status).sort().join('|');
-  const ps = (data.prospects||[]).map(p=>p.id+':'+p.updated_at+':'+p.outcome+':'+(p.promoted_lead_id||'')).sort().join('|');
-  return ts + '$$' + ns + '$$' + rs + '$$' + cs + '$$' + ss + '$$' + ps;
-}
+// There used to be a second, hand-written change check here (hashData) covering
+// only some of the synced tables. Now that the server fingerprints the whole
+// payload, that check could only ever be wrong in one direction: it looked at
+// notes/tasks/reminders/calls/sms/prospects but NOT boards, columns, prospect
+// lists or the daily stats — so a board rename or a column reorder from another
+// device arrived, got compared, and was thrown away. The server fingerprint is
+// exact, so it is now the only gate.
 
 // Prospect lists ride /api/sync (like reminders/calls) so an outside change —
 // e.g. the future n8n scrape workflow inserting rows, or another device
@@ -196,10 +268,8 @@ async function pollSync() {
   if (!authHeader || !navigator.onLine) return;
   if (modalTaskId) return;
   try {
-    const data = await apiFetch('GET', '/sync');
-    const hash = hashData(data);
-    if (hash === lastSyncHash) return;
-    lastSyncHash = hash;
+    const data = await fetchSync(true);
+    if (!data) return;              // fingerprint matched — nothing changed
     await Promise.all([
       idbClear('notes').then(() => idbPutAll('notes', data.notes)),
       idbClear('boards').then(() => idbPutAll('boards', data.boards)),
@@ -214,7 +284,7 @@ async function pollSync() {
     applyProspectSyncData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog(); renderSmsLog(); }
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog({ fromPoll: true }); renderSmsLog(); }
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
       const remote = data.notes.find(n => n.id === currentNoteId);
@@ -248,6 +318,10 @@ function toast(msg) {
 }
 
 // ── Auth ───────────────────────────────────────────────────────
+// The PIN buys a session token at /api/auth/login and is then forgotten. What
+// gets stored in sessionStorage, the /uploads cookie and the service worker's
+// IndexedDB is that token — revocable (the lock button kills it server-side)
+// and expiring, unlike the PIN it replaced.
 // <img> tags can't send the Authorization header, so /uploads images are
 // authenticated via this cookie carrying the same credential (server checks both).
 function setUploadsCookie() {
@@ -279,6 +353,15 @@ async function clearSwAuth() {
   dbi.transaction('kv', 'readwrite').objectStore('kv').delete('authHeader');
   dbi.close();
 }
+// Locking revokes the token on the server, so the copy left in browser storage
+// is dead rather than merely hidden.
+async function logout() {
+  const had = authHeader;
+  if (had) { try { await apiFetch('POST', '/auth/logout'); } catch(e) {} }
+  authHeader = null;
+  lastSyncEtag = null;
+  showLogin();
+}
 function showLogin() {
   document.getElementById('login-overlay').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
@@ -288,9 +371,14 @@ function showLogin() {
   pinBuffer = ''; updatePinDots();
 }
 async function tryLogin(pin) {
-  authHeader = 'Basic ' + btoa('workspace:' + pin);
   try {
-    await apiFetch('GET', '/auth/check');
+    const res = await fetch(API + '/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }),
+    });
+    if (res.status === 429) throw new Error('Too many attempts');
+    if (!res.ok) throw new Error('Unauthorized');
+    const { token } = await res.json();
+    authHeader = 'Bearer ' + token;
     sessionStorage.setItem('ws_auth', authHeader);
     setUploadsCookie();
     mirrorAuthForSw();
@@ -2386,7 +2474,7 @@ function endCallUi(callRef) {
   document.getElementById('dial-hangup-btn')?.classList.add('hidden');
   setDialerStatus('Ready', 'dialer-status-ready');
   // The recording takes a few seconds to process server-side; the 2s sync
-  // poll picks it up (hashData covers recording_sid), no refresh needed here.
+  // poll picks it up (the payload fingerprint changes), no refresh needed here.
   loadUsagePanel(); // balance just moved
   // rfy-crm §1.6/1.7: a lead-scoped call that actually connected surfaces the
   // disposition picker, then auto-advances to the next lead in list order.
@@ -2512,14 +2600,16 @@ function renderCallStatusFilterBar(scopedCalls) {
   return `<div class="tags-bar" id="call-status-filter-bar">${pills}${activeCallStatus ? `<span class="tag-filter-clear" id="call-status-clear">✕</span>` : ''}</div>`;
 }
 
-function renderCallLog() {
+// `fromPoll` marks the automatic 2s-sync redraw. That one has to hold back
+// while a recording is playing or a feedback note is being typed, or an
+// innerHTML rebuild kills the audio and eats the half-typed note. A redraw the
+// user actually asked for — deleting a call, tapping a status filter — always
+// goes through; the old guard applied to both and silently swallowed those
+// clicks whenever a recording happened to be open.
+function renderCallLog(opts) {
   const log = document.getElementById('call-log');
   if (!log) return;
-  // The 2s sync poll re-renders on ANY data change (notes, reminders, …) —
-  // an innerHTML rebuild would silently kill a recording mid-playback, or
-  // wipe an in-progress feedback note. Hold the re-render while either is
-  // active; it catches up once they're closed/blurred.
-  if (log.querySelector('audio') || log.querySelector('.call-notes-input:focus')) return;
+  if (opts && opts.fromPoll && (log.querySelector('audio') || log.querySelector('.call-notes-input:focus'))) return;
   // Context-sensitive: inside a lead's Calls sub-tab show only that lead's
   // calls; in the standalone Dialer tab show everything (with a name chip on
   // linked rows). Pre-CRM calls have no lead_id (never backfilled, §1.8).
@@ -2671,9 +2761,9 @@ function wireCallStatusFilter(log) {
   });
 }
 
-// Direct DOM patch for checkbox/select-all toggles — same reasoning as
-// paintCallStar: a full renderCallLog() bails out while a recording is open,
-// so bulk-selecting rows while listening to one would otherwise silently do nothing.
+// Direct DOM patch for checkbox/select-all toggles, same reasoning as
+// paintCallStar: ticking a box while listening to a recording shouldn't yank
+// the audio, and a full rebuild would.
 function paintCallSelection(log, leadCalls) {
   log.querySelectorAll('.call-item-check').forEach(cb => {
     const on = selectedCalls.has(cb.dataset.id);
@@ -2706,9 +2796,8 @@ async function toggleCallStar(id) {
   if (!c) return;
   const next = c.starred ? 0 : 1;
   c.starred = next; // optimistic
-  paintCallStar(id, next); // direct DOM patch, not a full renderCallLog() — that bails out
-  // early whenever a recording's <audio> is open (so playback isn't yanked mid-listen),
-  // which would silently swallow this update while a recording is loaded
+  paintCallStar(id, next); // direct DOM patch, not a full renderCallLog(): a
+  // rebuild would yank a recording that's mid-playback
   try { await apiCall('PUT', '/calls/' + id, { starred: !!next }); }
   catch (e) { c.starred = next ? 0 : 1; toast('Could not save star'); paintCallStar(id, c.starred); }
 }
@@ -2768,10 +2857,6 @@ async function deleteCall(callId) {
     await apiCall('DELETE', '/calls/' + callId);
     if (sid) {
       const u = recUrlCache.get(sid); if (u) URL.revokeObjectURL(u); recUrlCache.delete(sid);
-      // If this exact recording is the one currently playing, clear its slot
-      // first — otherwise renderCallLog's "don't kill a playing recording"
-      // guard would block the re-render and leave the deleted row on screen.
-      document.getElementById('call-audio-' + sid)?.replaceChildren();
     }
     calls = calls.filter(c => c.id !== callId);
     renderCallLog();
@@ -3734,7 +3819,7 @@ async function newNote() {
     const id = 'local_'+Date.now(), t = Date.now();
     const note = { id, title, content: '', tags: '', created_at: t, updated_at: t };
     notes.unshift({ id, title, updated_at: t }); notesFullCache[id] = note; await idbPut('notes', note);
-    await enqueueOp({ method:'POST', path:'/notes', body:{ title, content:'' } });
+    await queueForSync({ method:'POST', path:'/notes', body:{ title, content:'' } });
     renderNotesList(); openNote(id);
   }
 }
@@ -4482,7 +4567,7 @@ async function persistTaskModal() {
       const id = 'local_'+Date.now(), t = Date.now();
       const task = { id, column_id: newTaskColId, title, description, claude_marked, tags, position: col.tasks.length, created_at: t, updated_at: t };
       col.tasks.push(task); await idbPut('tasks', task);
-      await enqueueOp({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description, claude_marked, tags } });
+      await queueForSync({ method:'POST', path:'/tasks', body:{ column_id: newTaskColId, title, description, claude_marked, tags } });
     }
     renderKanban();
   } else {
@@ -4615,7 +4700,7 @@ document.getElementById('pin-ok').addEventListener('click', pinSubmit);
 document.getElementById('add-board-btn').addEventListener('click', promptNewBoard);
 document.getElementById('trash-btn').addEventListener('click', () => switchTab('trash'));
 document.getElementById('archive-btn').addEventListener('click', () => switchTab('archive'));
-document.getElementById('lock-btn').addEventListener('click', showLogin);
+document.getElementById('lock-btn').addEventListener('click', logout);
 document.addEventListener('keydown', e => {
   if (!document.getElementById('login-overlay').classList.contains('hidden')) {
     if (e.key >= '0' && e.key <= '9') pinDigit(e.key);
