@@ -737,6 +737,54 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ── Idempotent replays ───────────────────────────────────────
+// Offline writes sit in a queue in the browser and get replayed when the
+// connection comes back. A write that reached SQLite and then lost its reply on
+// the way back used to be replayed and done twice — a duplicate note, task,
+// reminder, expense or import. Each queued write now carries an id that survives
+// retries; the id is recorded here alongside the reply, and a repeat of the same
+// id gets the original reply back instead of running again.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS processed_ops (
+    user_id TEXT NOT NULL,
+    op_key TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    response TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, op_key)
+  );
+`);
+const PROCESSED_OPS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a replay days later is not a lost reply
+db.prepare('DELETE FROM processed_ops WHERE created_at < ?').run(now() - PROCESSED_OPS_TTL_MS);
+
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET') return next();                       // nothing to duplicate
+  const key = String(req.headers['idempotency-key'] || '').slice(0, 200);
+  if (!key) return next();
+  const userId = userFromSession(req.headers.authorization || '');
+  if (!userId) return next();                                     // let the route answer 401 as usual
+  const prior = db.prepare('SELECT status, response FROM processed_ops WHERE user_id=? AND op_key=?').get(userId, key);
+  if (prior) return res.status(prior.status).type('application/json').send(prior.response);
+  // Recorded on the way out, as soon as the handler answers — the mutation has
+  // already committed by then (better-sqlite3 is synchronous), so the only gap
+  // is a process death between the two, which is orders of magnitude narrower
+  // than the network round trip this closes.
+  const sendJson = res.json.bind(res);
+  res.json = body => {
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      try {
+        db.prepare('INSERT OR REPLACE INTO processed_ops (user_id, op_key, status, response, created_at) VALUES (?,?,?,?,?)')
+          .run(userId, key, res.statusCode, JSON.stringify(body), now());
+      } catch (e) { console.warn('could not record idempotency key:', e.message); }
+    }
+    if (Math.random() < 0.02) { // occasional age sweep, no separate timer
+      try { db.prepare('DELETE FROM processed_ops WHERE created_at < ?').run(now() - PROCESSED_OPS_TTL_MS); } catch (e) {}
+    }
+    return sendJson(body);
+  };
+  next();
+});
+
 // ── Auth check ──────────────────────────────────────────────
 app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
 

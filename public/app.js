@@ -96,20 +96,54 @@ function idbPutAll(store, items) {
     items.forEach(i => os.put(i)); tx.oncomplete = res; tx.onerror = () => rej(tx.error);
   });
 }
-async function enqueueOp(op) { outbox.push(op); idb.transaction('outbox','readwrite').objectStore('outbox').add(op); }
+// Every queued write carries an id that never changes, even across retries.
+// The server remembers ids it has already carried out, so a write that reached
+// the database but whose reply got lost on the way back is recognised on the
+// replay instead of being done twice.
+function newOpId() {
+  return (crypto.randomUUID ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+}
+async function enqueueOp(op) {
+  if (!op.opId) op.opId = newOpId();
+  outbox.push(op);
+  const req = idb.transaction('outbox','readwrite').objectStore('outbox').add(op);
+  req.onsuccess = () => { op.oid = req.result; };
+}
+// Order is the point here. The old version emptied the queue, retried each op,
+// and pushed failures onto the END — so an edit could land after the delete
+// that was queued before it and bring deleted content back. Now a retriable
+// failure stops the flush with the queue intact and in order.
 async function flushOutbox() {
   if (!navigator.onLine || outbox.length === 0) return;
-  const ops = [...outbox]; outbox = []; await idbClear('outbox');
-  for (const op of ops) { try { await apiFetch(op.method, op.path, op.body); } catch(e) { enqueueOp(op); } }
+  while (outbox.length) {
+    const op = outbox[0];
+    try {
+      await apiFetch(op.method, op.path, op.body, op.opId);
+    } catch (e) {
+      if (e && e.retriable) return;        // offline / server hiccup / logged out — try again later, keep the order
+      // The server refused this specific write (bad request, gone, etc).
+      // Retrying it forever would wedge everything queued behind it.
+      console.warn('dropping a queued change the server refused:', op.method, op.path, e && e.message);
+    }
+    outbox.shift();
+    if (op.oid !== undefined) { try { await idbDelete('outbox', op.oid); } catch(e) {} }
+  }
+  await idbClear('outbox');   // belt and braces: anything left without an oid
   await fullSync();
 }
 
 // ── API ───────────────────────────────────────────────────────
-async function apiFetch(method, path, body) {
+// Errors carry a `retriable` flag so flushOutbox can tell "try again later"
+// (offline, server hiccup, logged out) from "the server refused this write".
+async function apiFetch(method, path, body, opId) {
   const opts = { method, headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' } };
+  if (opId) opts.headers['Idempotency-Key'] = opId;
   if (body !== undefined) opts.body = JSON.stringify(body);
-  const res = await fetch(API + path, opts);
-  if (res.status === 401) { showLogin(); throw new Error('Unauthorized'); }
+  let res;
+  try { res = await fetch(API + path, opts); }
+  catch (e) { e.retriable = true; throw e; }
+  if (res.status === 401) { showLogin(); const e = new Error('Unauthorized'); e.retriable = true; throw e; }
+  if (res.status === 429 || res.status >= 500) { const e = new Error(await res.text()); e.retriable = true; throw e; }
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
