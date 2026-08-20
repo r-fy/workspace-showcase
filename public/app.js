@@ -213,7 +213,7 @@ async function fullSync() {
     applyProspectSyncData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog(); renderSmsLog(); }
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog({ fromPoll: true }); renderSmsLog(); }
     if (currentBoardId) await loadBoard(currentBoardId);
   } catch(e) {
     notes = await idbGetAll('notes'); boards = await idbGetAll('boards');
@@ -284,7 +284,7 @@ async function pollSync() {
     applyProspectSyncData(data);
     renderNotesList(); renderTagsBar(); renderBoardsBar();
     if (currentTab === 'calendar') renderCalendarActive();
-    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog(); renderSmsLog(); }
+    if ((currentTab === 'crm' && crmSubTab === 'calls') || currentTab === 'dialer') { renderCallLog({ fromPoll: true }); renderSmsLog(); }
     // Push updated content into open note editor if not actively focused
     if (currentNoteId && noteEditor) {
       const remote = data.notes.find(n => n.id === currentNoteId);
@@ -2600,14 +2600,16 @@ function renderCallStatusFilterBar(scopedCalls) {
   return `<div class="tags-bar" id="call-status-filter-bar">${pills}${activeCallStatus ? `<span class="tag-filter-clear" id="call-status-clear">✕</span>` : ''}</div>`;
 }
 
-function renderCallLog() {
+// `fromPoll` marks the automatic 2s-sync redraw. That one has to hold back
+// while a recording is playing or a feedback note is being typed, or an
+// innerHTML rebuild kills the audio and eats the half-typed note. A redraw the
+// user actually asked for — deleting a call, tapping a status filter — always
+// goes through; the old guard applied to both and silently swallowed those
+// clicks whenever a recording happened to be open.
+function renderCallLog(opts) {
   const log = document.getElementById('call-log');
   if (!log) return;
-  // The 2s sync poll re-renders on ANY data change (notes, reminders, …) —
-  // an innerHTML rebuild would silently kill a recording mid-playback, or
-  // wipe an in-progress feedback note. Hold the re-render while either is
-  // active; it catches up once they're closed/blurred.
-  if (log.querySelector('audio') || log.querySelector('.call-notes-input:focus')) return;
+  if (opts && opts.fromPoll && (log.querySelector('audio') || log.querySelector('.call-notes-input:focus'))) return;
   // Context-sensitive: inside a lead's Calls sub-tab show only that lead's
   // calls; in the standalone Dialer tab show everything (with a name chip on
   // linked rows). Pre-CRM calls have no lead_id (never backfilled, §1.8).
@@ -2759,9 +2761,9 @@ function wireCallStatusFilter(log) {
   });
 }
 
-// Direct DOM patch for checkbox/select-all toggles — same reasoning as
-// paintCallStar: a full renderCallLog() bails out while a recording is open,
-// so bulk-selecting rows while listening to one would otherwise silently do nothing.
+// Direct DOM patch for checkbox/select-all toggles, same reasoning as
+// paintCallStar: ticking a box while listening to a recording shouldn't yank
+// the audio, and a full rebuild would.
 function paintCallSelection(log, leadCalls) {
   log.querySelectorAll('.call-item-check').forEach(cb => {
     const on = selectedCalls.has(cb.dataset.id);
@@ -2794,9 +2796,8 @@ async function toggleCallStar(id) {
   if (!c) return;
   const next = c.starred ? 0 : 1;
   c.starred = next; // optimistic
-  paintCallStar(id, next); // direct DOM patch, not a full renderCallLog() — that bails out
-  // early whenever a recording's <audio> is open (so playback isn't yanked mid-listen),
-  // which would silently swallow this update while a recording is loaded
+  paintCallStar(id, next); // direct DOM patch, not a full renderCallLog(): a
+  // rebuild would yank a recording that's mid-playback
   try { await apiCall('PUT', '/calls/' + id, { starred: !!next }); }
   catch (e) { c.starred = next ? 0 : 1; toast('Could not save star'); paintCallStar(id, c.starred); }
 }
@@ -2856,10 +2857,6 @@ async function deleteCall(callId) {
     await apiCall('DELETE', '/calls/' + callId);
     if (sid) {
       const u = recUrlCache.get(sid); if (u) URL.revokeObjectURL(u); recUrlCache.delete(sid);
-      // If this exact recording is the one currently playing, clear its slot
-      // first — otherwise renderCallLog's "don't kill a playing recording"
-      // guard would block the re-render and leave the deleted row on screen.
-      document.getElementById('call-audio-' + sid)?.replaceChildren();
     }
     calls = calls.filter(c => c.id !== callId);
     renderCallLog();
