@@ -268,6 +268,10 @@ function toast(msg) {
 }
 
 // ── Auth ───────────────────────────────────────────────────────
+// The PIN buys a session token at /api/auth/login and is then forgotten. What
+// gets stored in sessionStorage, the /uploads cookie and the service worker's
+// IndexedDB is that token — revocable (the lock button kills it server-side)
+// and expiring, unlike the PIN it replaced.
 // <img> tags can't send the Authorization header, so /uploads images are
 // authenticated via this cookie carrying the same credential (server checks both).
 function setUploadsCookie() {
@@ -299,6 +303,15 @@ async function clearSwAuth() {
   dbi.transaction('kv', 'readwrite').objectStore('kv').delete('authHeader');
   dbi.close();
 }
+// Locking revokes the token on the server, so the copy left in browser storage
+// is dead rather than merely hidden.
+async function logout() {
+  const had = authHeader;
+  if (had) { try { await apiFetch('POST', '/auth/logout'); } catch(e) {} }
+  authHeader = null;
+  lastSyncEtag = null;
+  showLogin();
+}
 function showLogin() {
   document.getElementById('login-overlay').classList.remove('hidden');
   document.getElementById('app').classList.add('hidden');
@@ -308,9 +321,14 @@ function showLogin() {
   pinBuffer = ''; updatePinDots();
 }
 async function tryLogin(pin) {
-  authHeader = 'Basic ' + btoa('workspace:' + pin);
   try {
-    await apiFetch('GET', '/auth/check');
+    const res = await fetch(API + '/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }),
+    });
+    if (res.status === 429) throw new Error('Too many attempts');
+    if (!res.ok) throw new Error('Unauthorized');
+    const { token } = await res.json();
+    authHeader = 'Bearer ' + token;
     sessionStorage.setItem('ws_auth', authHeader);
     setUploadsCookie();
     mirrorAuthForSw();
@@ -4635,7 +4653,7 @@ document.getElementById('pin-ok').addEventListener('click', pinSubmit);
 document.getElementById('add-board-btn').addEventListener('click', promptNewBoard);
 document.getElementById('trash-btn').addEventListener('click', () => switchTab('trash'));
 document.getElementById('archive-btn').addEventListener('click', () => switchTab('archive'));
-document.getElementById('lock-btn').addEventListener('click', showLogin);
+document.getElementById('lock-btn').addEventListener('click', logout);
 document.addEventListener('keydown', e => {
   if (!document.getElementById('login-overlay').classList.contains('hidden')) {
     if (e.key >= '0' && e.key <= '9') pinDigit(e.key);

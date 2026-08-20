@@ -7,28 +7,48 @@ const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio
 const { z } = require('zod');
 
 const BASE = (process.env.WORKSPACE_URL || 'https://workspace.rfisolns.org').replace(/\/+$/, '');
-const AUTH_USER = process.env.WORKSPACE_AUTH_USER || 'owner';
 const PIN = process.env.WORKSPACE_PIN;
 if (!PIN) {
   console.error('FATAL: WORKSPACE_PIN env var not set. Add it to this MCP server\'s launch config.');
   process.exit(1);
 }
-const AUTH_HEADER = 'Basic ' + Buffer.from(`${AUTH_USER}:${PIN}`).toString('base64');
-
 // Cloudflare in front of workspace.rfisolns.org 403s the default Node/curl
 // User-Agent as a bot fingerprint — looks exactly like a bad PIN but isn't.
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-async function api(method, path, body) {
-  const res = await fetch(BASE + path, {
+// The PIN only works at /api/auth/login now; every other route wants the session
+// token that hands back. Fetched on first use, kept for the life of the process,
+// and re-fetched once if the server ever rejects it (expired, or revoked because
+// the app's lock button was pressed).
+let sessionToken = null;
+async function login() {
+  const res = await fetch(BASE + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
+    body: JSON.stringify({ pin: PIN }),
+  });
+  if (!res.ok) throw new Error(`login failed: HTTP ${res.status}${res.status === 401 ? ' (wrong WORKSPACE_PIN?)' : ''}`);
+  sessionToken = (await res.json()).token;
+  if (!sessionToken) throw new Error('login returned no token');
+  return sessionToken;
+}
+
+async function rawApi(method, path, body) {
+  return fetch(BASE + path, {
     method,
     headers: {
-      Authorization: AUTH_HEADER,
+      Authorization: 'Bearer ' + sessionToken,
       'User-Agent': USER_AGENT,
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+}
+
+async function api(method, path, body) {
+  if (!sessionToken) await login();
+  let res = await rawApi(method, path, body);
+  if (res.status === 401) { await login(); res = await rawApi(method, path, body); }
   const text = await res.text();
   let data = null;
   if (text) { try { data = JSON.parse(text); } catch { data = text; } }

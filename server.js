@@ -514,11 +514,38 @@ app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-e
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Auth ─────────────────────────────────────────────────────
-// Rate limit: after 10 failed PIN attempts an IP is locked out for 5 minutes,
-// so a 4-digit PIN can't just be brute-forced by a script.
-// ponytail: in-memory per-IP counter — resets on restart, plenty for a family app.
-const FAILS = new Map(); // ip -> { count, until }
+// The PIN is a login factor and nothing else. It buys a random session token at
+// POST /api/auth/login; that token is what the browser stores and what every
+// other route accepts. So a stolen browser credential is revocable and expires,
+// and the PIN itself never sits in sessionStorage, a cookie, or IndexedDB.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  -- Failed-login state lives here rather than in memory so a restart doesn't
+  -- hand an attacker a clean slate.
+  CREATE TABLE IF NOT EXISTS login_attempts (
+    identity TEXT PRIMARY KEY,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    last_fail_at INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0
+  );
+`);
+// Long-lived on purpose: this is a personal app you stay logged into. Revocation
+// is the lock button, not a short clock.
+const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const SESSION_TOUCH_MS = 60 * 60 * 1000; // only refresh last_used_at once an hour — the app polls every 2s
+// After 10 failed PIN guesses an identity is locked out for 5 minutes.
 const MAX_FAILS = 10, LOCK_MS = 5 * 60 * 1000;
+// Each failed guess also sleeps before answering: 1s, 2s, 4s… capped at 30s. A
+// hard global freeze was deliberately rejected — it would hand any stranger a
+// way to lock the owner out of his own app.
+const MAX_LOGIN_DELAY_MS = 30 * 1000;
+const FAIL_DECAY_MS = 15 * 60 * 1000; // a quiet spell resets the counter
 // Cloudflare's published edge ranges — https://www.cloudflare.com/ips-v4 and /ips-v6
 // (fetched 2026-07-24). Only used to decide whether CF-Connecting-IP is trustworthy;
 // refresh if Cloudflare ever publishes new ranges (they change rarely).
@@ -567,36 +594,63 @@ function clientIp(req) {
   }
   return peer || req.socket.remoteAddress || '?';
 }
-function lockedOut(ip) {
-  const f = FAILS.get(ip);
-  return !!(f && f.until > Date.now());
-}
-function recordFail(ip) {
-  if (FAILS.size > 1000) for (const [k, v] of FAILS) { if (v.until < Date.now()) FAILS.delete(k); }
-  const f = FAILS.get(ip) || { count: 0, until: 0 };
-  f.count++;
-  if (f.count >= MAX_FAILS) { f.until = Date.now() + LOCK_MS; f.count = 0; }
-  FAILS.set(ip, f);
-}
+// ── Failed-login throttle (persisted) ─────────────────────────
+const getAttempts = db.prepare('SELECT * FROM login_attempts WHERE identity=?');
+const putAttempts = db.prepare(`INSERT INTO login_attempts (identity, fail_count, last_fail_at, locked_until)
+  VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET fail_count=excluded.fail_count,
+  last_fail_at=excluded.last_fail_at, locked_until=excluded.locked_until`);
 
-// "Basic base64(user:pin)" -> userId, or null. The username part is ignored; the PIN identifies the user.
-function userFromBasic(value) {
-  if (!value || !value.startsWith('Basic ')) return null;
-  const decoded = Buffer.from(value.slice(6), 'base64').toString('utf8');
-  const pass = decoded.slice(decoded.indexOf(':') + 1);
-  return USERS[pass] || null;
+function lockedOut(identity) {
+  const row = getAttempts.get(identity);
+  return !!(row && row.locked_until > Date.now());
 }
+// Returns the new consecutive-failure count, which sets how long we stall before answering.
+function recordFail(identity) {
+  const t = Date.now();
+  const row = getAttempts.get(identity);
+  // A quiet spell wipes the slate: this counts a run of guesses, not a lifetime total.
+  const prior = (row && t - row.last_fail_at < FAIL_DECAY_MS) ? row.fail_count : 0;
+  const count = prior + 1;
+  putAttempts.run(identity, count, t, count >= MAX_FAILS ? t + LOCK_MS : 0);
+  if (Math.random() < 0.05) { // occasional sweep, no separate timer needed
+    db.prepare('DELETE FROM login_attempts WHERE locked_until < ? AND last_fail_at < ?').run(t, t - FAIL_DECAY_MS);
+  }
+  return count;
+}
+function clearFails(identity) { db.prepare('DELETE FROM login_attempts WHERE identity=?').run(identity); }
+function loginDelayMs(count) { return Math.min(2 ** (count - 1) * 1000, MAX_LOGIN_DELAY_MS); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ── Sessions ──────────────────────────────────────────────────
+// Only the hash is stored, so a stolen database still doesn't hand over live tokens.
+function hashToken(token) { return crypto.createHash('sha256').update(token).digest('hex'); }
+function issueSession(userId) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const t = now();
+  db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, last_used_at, expires_at) VALUES (?,?,?,?,?)')
+    .run(hashToken(token), userId, t, t, t + SESSION_TTL_MS);
+  return token;
+}
+function revokeSession(token) { db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token)); }
+// "Bearer <token>" -> userId, or null. The PIN is NOT accepted here — only at /api/auth/login.
+function userFromSession(value) {
+  if (!value || !value.startsWith('Bearer ')) return null;
+  const row = db.prepare('SELECT user_id, last_used_at, expires_at FROM sessions WHERE token_hash=?')
+    .get(hashToken(value.slice(7).trim()));
+  if (!row) return null;
+  const t = now();
+  if (row.expires_at <= t) return null;
+  if (t - row.last_used_at > SESSION_TOUCH_MS) {
+    db.prepare('UPDATE sessions SET last_used_at=?, expires_at=? WHERE token_hash=?')
+      .run(t, t + SESSION_TTL_MS, hashToken(value.slice(7).trim()));
+  }
+  return row.user_id;
+}
+db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now()); // sweep on boot
 
 function checkAuth(req, res, next, credential) {
-  const ip = clientIp(req);
-  if (lockedOut(ip)) return res.status(429).json({ error: 'Too many failed attempts — try again in a few minutes' });
-  const userId = userFromBasic(credential);
-  if (!userId) {
-    if (credential) recordFail(ip); // only count actual wrong guesses, not missing headers
-    res.set('WWW-Authenticate', 'Basic realm="Workspace"');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  FAILS.delete(ip);
+  const userId = userFromSession(credential);
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   req.userId = userId;
   next();
 }
@@ -685,6 +739,30 @@ app.use('/api', (req, res, next) => {
 
 // ── Auth check ──────────────────────────────────────────────
 app.get('/api/auth/check', auth, (req, res) => res.json({ ok: true }));
+
+// The ONLY place a PIN is accepted. Hands back a session token; everything else
+// on the API wants "Authorization: Bearer <token>".
+app.post('/api/auth/login', async (req, res) => {
+  const identity = clientIp(req);
+  if (lockedOut(identity)) return res.status(429).json({ error: 'Too many failed attempts — try again in a few minutes' });
+  const pin = String((req.body && req.body.pin) || '');
+  const userId = pin ? USERS[pin] : null;
+  if (!userId) {
+    // Count the miss first, then stall: concurrent guesses all see the higher count.
+    const count = recordFail(identity);
+    await sleep(loginDelayMs(count));
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  clearFails(identity);
+  res.json({ token: issueSession(userId) });
+});
+
+// Locking the app revokes the token server-side, so the copy sitting in the
+// browser's storage stops working the moment you lock.
+app.post('/api/auth/logout', auth, (req, res) => {
+  revokeSession(String(req.headers.authorization || '').slice(7).trim());
+  res.json({ ok: true });
+});
 
 // rfy-crm: audits/follow-ups are always created from inside a lead now, so a
 // live lead_id is REQUIRED on create (§4 of RFY-CRM-PLAN.md). On update it's

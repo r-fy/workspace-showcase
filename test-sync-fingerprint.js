@@ -13,14 +13,14 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-sync-'));
 
 let token = null;
-const authHeader = () => token ? 'Bearer ' + token : 'Basic ' + Buffer.from('owner:' + PIN).toString('base64');
+const authHeader = () => 'Bearer ' + token;
 
 async function login() {
-  // Post-Fix-1 the PIN is only good at /api/auth/login; before it, Basic works everywhere.
   const res = await fetch(BASE + '/api/auth/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: PIN }),
   });
-  if (res.ok) token = (await res.json()).token;
+  assert.ok(res.ok, 'login should succeed before the sync checks can run');
+  token = (await res.json()).token;
 }
 
 async function getSync(etag) {
