@@ -1419,7 +1419,7 @@ function expenseSourceFilterHtml() {
 
 function expensePayeeSearchHtml() {
   return `<div class="expense-payee-search">
-    <input type="text" id="expense-payee-search-input" placeholder="Search payee… (e.g. Anthropic, OpenAI, Perplexity)" value="${escHtml(expenseSearchQuery)}" autocomplete="off">
+    <input type="text" id="expense-payee-search-input" placeholder="Search payee… (e.g. Anthropic, OpenAI, Twilio)" value="${escHtml(expenseSearchQuery)}" autocomplete="off">
     ${expenseSearchQuery ? '<button id="expense-payee-search-clear" title="Clear search">✕</button>' : ''}
   </div>`;
 }

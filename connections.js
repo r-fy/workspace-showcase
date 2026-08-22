@@ -63,25 +63,12 @@ const CHECKS = [
     },
   },
   {
-    id: 'openai', name: 'OpenAI', group: 'balance', used_by: 'gpt-image-2, Codex', alert_at: null,
+    id: 'openai', name: 'OpenAI', group: 'balance', used_by: 'gpt-image-2, Codex, pplx research', alert_at: null,
     env: ['OPENAI_API_KEY'],
     async run(env) {
       const r = await get('https://api.openai.com/v1/models', { headers: { Authorization: 'Bearer ' + env.OPENAI_API_KEY } });
       if (r.status === 401) return { status: 'down', detail: 'key rejected' };
       if (!r.ok) return { status: 'down', detail: `HTTP ${r.status}` };
-      return { status: 'up', detail: 'key valid, no balance API' };
-    },
-  },
-  {
-    id: 'perplexity', name: 'Perplexity', group: 'balance', used_by: 'pplx research, MCP', alert_at: null,
-    env: ['PERPLEXITY_API_KEY'],
-    async run(env) {
-      // An empty body is rejected before any billing happens: 400 means the key
-      // was accepted, 401 means it was not. Costs nothing either way.
-      const r = await get('https://api.perplexity.ai/chat/completions',
-        { method: 'POST', headers: { Authorization: 'Bearer ' + env.PERPLEXITY_API_KEY, 'Content-Type': 'application/json' }, body: '{}' });
-      if (r.status === 401 || r.status === 403) return { status: 'down', detail: 'key rejected' };
-      if (r.status >= 500) return { status: 'down', detail: `HTTP ${r.status}` };
       return { status: 'up', detail: 'key valid, no balance API' };
     },
   },

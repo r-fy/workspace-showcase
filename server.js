@@ -2671,6 +2671,10 @@ async function refreshConnections() {
     const up = db.prepare(`INSERT INTO connections (id, source, data, checked_at, alerted_at) VALUES (?, 'server', ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET data=excluded.data, checked_at=excluded.checked_at, alerted_at=excluded.alerted_at`);
     for (const r of rows) up.run(r.id, JSON.stringify(r), t, alertConnection(r, sel.get(r.id)));
+    // A check removed from connections.js (Perplexity, 2026-08-22) must leave the board too.
+    const keep = new Set(rows.map(r => r.id));
+    for (const r of db.prepare("SELECT id FROM connections WHERE source='server'").all())
+      if (!keep.has(r.id)) db.prepare('DELETE FROM connections WHERE id=?').run(r.id);
   } finally { connectionsRunning = false; }
 }
 
