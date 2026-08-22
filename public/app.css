@@ -1747,3 +1747,33 @@ header {
   .todo-quad { min-height: 200px; }
   .todo-protocol-popover { right: auto; left: 0; }
 }
+
+
+/* ── Connections tab ── */
+#connections-area{max-width:1100px}
+.cx-top{display:flex;align-items:flex-end;gap:12px;margin-bottom:18px}
+.cx-top>div{flex:1}
+.cx-h1{font-size:18px;font-weight:600;margin:0 0 4px}
+.cx-h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a8b90;margin:24px 0 8px;font-weight:500}
+.cx-m{color:#8a8b90;font-size:12px}
+.cx-btn{border:1px solid #5fc83b;color:#8ce870;background:none;padding:6px 12px;font:inherit;font-size:12px;cursor:pointer}
+.cx-btn:disabled{opacity:.5;cursor:default}
+.cx-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:8px}
+.cx-tile{background:#151515;border:1px solid #2a2a2a;padding:12px 14px}
+.cx-tile .n{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
+.cx-tile .l{font-size:11px;color:#8a8b90;letter-spacing:.06em;text-transform:uppercase}
+.cx-tile.cx-up .n{color:#5fc83b}.cx-tile.cx-low .n{color:#e0b341}.cx-tile.cx-down .n{color:#e05a4a}.cx-tile.cx-unset .n{color:#6b6c72}
+.cx-tbl{overflow-x:auto;border:1px solid #2a2a2a;background:#151515}
+.cx-tbl table{width:100%;border-collapse:collapse;min-width:700px}
+.cx-tbl th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8a8b90;text-align:left;padding:9px 12px;border-bottom:1px solid #2a2a2a;font-weight:500}
+.cx-tbl td{padding:9px 12px;border-bottom:1px solid #2a2a2a;vertical-align:middle;font-variant-numeric:tabular-nums;font-size:13px}
+.cx-tbl tr:last-child td{border-bottom:0}
+.cx-tbl tr:hover td{background:#1a1a1a}
+.cx-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:2px 8px;border:1px solid;border-radius:2px}
+.cx-pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.cx-pill.cx-up{color:#5fc83b;border-color:#2f5a23}.cx-pill.cx-low{color:#e0b341;border-color:#5e4c1c}
+.cx-pill.cx-down{color:#e05a4a;border-color:#5e2a24}.cx-pill.cx-unset,.cx-pill.cx-idle{color:#6b6c72;border-color:#3a3a3a}
+.cx-bar{height:6px;background:#222;width:120px;position:relative;display:inline-block;vertical-align:middle;margin-right:8px}
+.cx-bar i{position:absolute;left:0;top:0;bottom:0;background:#5fc83b}
+.cx-bar-low i{background:#e0b341}
+.cx-foot{margin-top:24px;color:#8a8b90;font-size:12px;border-top:1px solid #2a2a2a;padding-top:12px}

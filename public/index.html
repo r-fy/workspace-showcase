@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=26b6c7e7">
+<link rel="stylesheet" href="/app.css?v=31f6c190">
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -121,6 +121,12 @@
           <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="tourist">Tourist</button>
+        </div>
+        <div class="nav-row" draggable="true" data-tab="connections">
+          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
+          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
+          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
+          <button class="nav-menu-item" data-tab="connections">Connections</button>
         </div>
         <div class="nav-row" draggable="true" data-tab="cold-email">
           <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
@@ -401,6 +407,10 @@
     <!-- Cold Email view (Instantly daily reporting) -->
     <div class="view hidden" id="cold-email-view" style="flex-direction:column;overflow-y:auto;">
       <div id="cold-email-area" style="padding:20px;"></div>
+    </div>
+
+    <div class="view hidden" id="connections-view" style="flex-direction:column;overflow-y:auto;">
+      <div id="connections-area" style="padding:20px;"></div>
     </div>
 
     <!-- Tourist view (unit converter, migrated from tourist.rfisolns.org) -->
@@ -806,6 +816,6 @@
 <div id="toast"></div>
 <script src="/editor.bundle.js?v=e1f217e4"></script>
 <script src="/dialer.bundle.js?v=076e2204"></script>
-<script src="/app.js?v=92f77d1a"></script>
+<script src="/app.js?v=cdabe0f2"></script>
 </body>
 </html>

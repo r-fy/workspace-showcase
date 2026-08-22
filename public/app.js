@@ -449,7 +449,7 @@ const NAV_TAB_LABELS = {
   todo: 'To Do',
   notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
   crm: 'CRM', dialer: 'Dialer', 'daily-tasks': 'TRW Daily Tasks',
-  tourist: 'Tourist', 'cold-email': 'Cold Email', archive: 'Archive',
+  tourist: 'Tourist', 'cold-email': 'Cold Email', archive: 'Archive', connections: 'Connections',
 };
 // Tab renames across versions: the old Leads/Audits/Follow-ups tabs collapsed
 // into CRM (v160); the old Calls tab is the standalone Dialer again (v162).
@@ -571,6 +571,7 @@ function switchTab(tab) {
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
   document.getElementById('cold-email-view')?.classList.toggle('hidden', tab !== 'cold-email');
+  document.getElementById('connections-view')?.classList.toggle('hidden', tab !== 'connections');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
   document.getElementById('expenses-panel')?.classList.toggle('hidden', tab !== 'expenses');
@@ -589,6 +590,7 @@ function switchTab(tab) {
   if (tab === 'dialer') loadDialerTab();
   if (tab === 'daily-tasks') loadDailyTasks();
   if (tab === 'cold-email') loadColdEmail();
+  if (tab === 'connections') loadConnections();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
 
@@ -7714,3 +7716,82 @@ async function deleteCurrentFollowup() {
     } catch(e) { showLogin(); }
   }
 })();
+
+
+// ── Connections: health + balance board for every API / MCP we depend on ──
+// Server checks hourly (connections.js); the Mac posts Claude Code's MCP list
+// hourly (scripts/connections-client.js). "Check now" forces a server pass.
+let connectionsData = null;
+async function loadConnections() {
+  try { connectionsData = await apiCall('GET', '/connections'); }
+  catch (e) { toast('Could not load connections'); return; }
+  renderConnections();
+}
+async function checkConnectionsNow(btn) {
+  btn.disabled = true; btn.textContent = 'Checking…';
+  try { await apiCall('POST', '/connections/check'); await loadConnections(); toast('Connections checked'); }
+  catch (e) { toast('Check failed'); }
+  btn.disabled = false; btn.textContent = 'Check now';
+}
+function cxAgo(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.round(m / 60);
+  return h < 48 ? h + 'h ago' : Math.round(h / 24) + 'd ago';
+}
+function cxPill(status) {
+  const label = { up: 'Up', low: 'Low', down: 'Down', unset: 'No key', idle: 'Idle' }[status] || status;
+  return `<span class="cx-pill cx-${status}">${label}</span>`;
+}
+function cxBalance(r) {
+  if (r.balance === null || r.balance === undefined) return '<span class="cx-m">' + escHtml(r.detail || '') + '</span>';
+  const cap = Math.max(r.alert_at ? r.alert_at * 5 : 50, r.balance, 1);
+  const pct = Math.min(100, Math.round(r.balance / cap * 100));
+  const cls = r.status === 'low' ? ' cx-bar-low' : '';
+  return `<span class="cx-bar${cls}"><i style="width:${pct}%"></i></span>$${r.balance.toFixed(2)}`;
+}
+function renderConnections() {
+  const area = document.getElementById('connections-area');
+  if (!area) return;
+  const d = connectionsData || { rows: [], now: Date.now() };
+  const rows = d.rows;
+  const n = s => rows.filter(r => r.status === s).length;
+  const last = rows.length ? Math.max(...rows.map(r => r.checked_at)) : null;
+  const groups = [
+    ['balance', 'Paid APIs with a balance', ['Service', 'Status', 'Balance', 'Used by', 'Alert at']],
+    ['plan', 'Services on a plan', ['Service', 'Status', 'Detail', 'Used by', '']],
+    ['mcp', 'MCP servers (Claude Code)', ['Server', 'Status', 'Detail', 'Kind', 'Checked']],
+  ];
+  const row = (g, r) => {
+    const cells = g === 'balance'
+      ? [cxBalance(r), escHtml(r.used_by), r.alert_at !== null ? '$' + r.alert_at : '<span class="cx-m">none</span>']
+      : g === 'plan'
+      ? [escHtml(r.detail), escHtml(r.used_by), '']
+      : [escHtml(r.detail), escHtml(r.kind || ''), `<span class="cx-m">${cxAgo(d.now - r.checked_at)}</span>`];
+    return `<tr><td>${escHtml(r.name)}</td><td>${cxPill(r.status)}</td>${cells.map(c => '<td>' + c + '</td>').join('')}</tr>`;
+  };
+  area.innerHTML = `
+    <div class="cx-top">
+      <div><h2 class="cx-h1">Connections</h2>
+      <div class="cx-m">Every API and MCP this Mac and the Workspace server talk to. Checked hourly.
+      ${last ? 'Last check ' + cxAgo(d.now - last) + '.' : 'No check yet.'}</div></div>
+      <button class="cx-btn" id="cx-check-btn">Check now</button>
+    </div>
+    <div class="cx-tiles">
+      <div class="cx-tile cx-up"><div class="n">${n('up')}</div><div class="l">Up</div></div>
+      <div class="cx-tile cx-low"><div class="n">${n('low')}</div><div class="l">Low balance</div></div>
+      <div class="cx-tile cx-down"><div class="n">${n('down')}</div><div class="l">Down</div></div>
+      <div class="cx-tile cx-unset"><div class="n">${n('unset')}</div><div class="l">No key</div></div>
+    </div>
+    ${groups.map(([g, title, cols]) => {
+      const list = rows.filter(r => r.group === g);
+      return `<h3 class="cx-h2">${title}</h3><div class="cx-tbl"><table>
+        <tr>${cols.map(c => '<th>' + c + '</th>').join('')}</tr>
+        ${list.length ? list.map(r => row(g, r)).join('') : '<tr><td colspan="5" class="cx-m">Nothing reported yet.</td></tr>'}
+      </table></div>`;
+    }).join('')}
+    <div class="cx-foot">Low balance or Down creates a Workspace reminder once per day per service.
+    Claude Code prints the same warning at session start.</div>`;
+  document.getElementById('cx-check-btn').addEventListener('click', e => checkConnectionsNow(e.currentTarget));
+}

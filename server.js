@@ -2631,6 +2631,85 @@ async function checkReminders() {
 setInterval(() => checkReminders().catch(err => console.warn('scheduler tick failed:', err.message)), 15000);
 checkReminders().catch(err => console.warn('scheduler startup check failed:', err.message));
 
+
+// ── Connections: hourly health + balance check of every paid API / MCP we lean on.
+// Server-side checks live in connections.js. Claude Code's MCP list can only be
+// read on the Mac, so scripts/connections-client.js posts it here hourly.
+const { runChecks } = require('./connections');
+migrate(`CREATE TABLE IF NOT EXISTS connections (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL DEFAULT 'server',
+  data TEXT NOT NULL,
+  checked_at INTEGER NOT NULL,
+  alerted_at INTEGER DEFAULT NULL
+)`);
+const OWNER_ID = Object.values(USERS)[0] || 'owner';
+let connectionsRunning = false;
+
+// One reminder per service per 24h while it stays low/down, so a dead key
+// pings once a day instead of once an hour.
+function alertConnection(row, prev) {
+  if (!['low', 'down'].includes(row.status)) return null;
+  const t = now();
+  if (prev?.alerted_at && t - prev.alerted_at < 24 * 3600 * 1000) return prev.alerted_at;
+  const title = row.status === 'low'
+    ? `${row.name} balance low: $${row.balance}`
+    : `${row.name} is down: ${row.detail}`;
+  db.prepare(`INSERT INTO reminders (id, user_id, title, description, first_fire_at, next_fire_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(uid(), OWNER_ID, title, 'From the Connections tab. Used by: ' + row.used_by, t, t, t, t);
+  return t;
+}
+
+async function refreshConnections() {
+  if (connectionsRunning) return;
+  connectionsRunning = true;
+  try {
+    const rows = await runChecks(process.env);
+    const t = now();
+    const sel = db.prepare('SELECT alerted_at FROM connections WHERE id=?');
+    const up = db.prepare(`INSERT INTO connections (id, source, data, checked_at, alerted_at) VALUES (?, 'server', ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET data=excluded.data, checked_at=excluded.checked_at, alerted_at=excluded.alerted_at`);
+    for (const r of rows) up.run(r.id, JSON.stringify(r), t, alertConnection(r, sel.get(r.id)));
+  } finally { connectionsRunning = false; }
+}
+
+app.get('/api/connections', auth, (_req, res) => {
+  const rows = db.prepare('SELECT * FROM connections ORDER BY source, id').all()
+    .map(r => ({ ...JSON.parse(r.data), source: r.source, checked_at: r.checked_at }));
+  res.json({ rows, now: now() });
+});
+
+app.post('/api/connections/check', auth, async (_req, res) => {
+  try { await refreshConnections(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Mac-side MCP report: [{id,name,status,detail}] from `claude mcp list`.
+app.post('/api/connections/mcp', auth, (req, res) => {
+  const list = Array.isArray(req.body?.servers) ? req.body.servers : null;
+  if (!list) return res.status(400).json({ error: 'servers[] required' });
+  const t = now();
+  const up = db.prepare(`INSERT INTO connections (id, source, data, checked_at, alerted_at) VALUES (?, 'mcp', ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET data=excluded.data, checked_at=excluded.checked_at, alerted_at=excluded.alerted_at`);
+  const sel = db.prepare('SELECT alerted_at FROM connections WHERE id=?');
+  const keep = new Set();
+  for (const s of list.slice(0, 100)) {
+    const name = String(s.name || '').slice(0, 80); if (!name) continue;
+    const id = 'mcp:' + name; keep.add(id);
+    const row = { id, name, group: 'mcp', status: s.status === 'up' ? 'up' : 'down', balance: null,
+      detail: String(s.detail || '').slice(0, 200), used_by: 'Claude Code', alert_at: null, kind: String(s.kind || '').slice(0, 20) };
+    up.run(id, JSON.stringify(row), t, alertConnection(row, sel.get(id)));
+  }
+  // Servers removed from Claude Code disappear from the board.
+  for (const r of db.prepare("SELECT id FROM connections WHERE source='mcp'").all())
+    if (!keep.has(r.id)) db.prepare('DELETE FROM connections WHERE id=?').run(r.id);
+  res.json({ ok: true, count: keep.size });
+});
+
+setInterval(() => refreshConnections().catch(err => console.warn('connections tick failed:', err.message)), 60 * 60 * 1000);
+refreshConnections().catch(err => console.warn('connections startup check failed:', err.message));
+
 // ── SPA fallback
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
