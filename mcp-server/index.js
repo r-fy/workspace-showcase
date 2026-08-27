@@ -278,6 +278,28 @@ Fields for create/update: business_name, website?, primary_email?, city?, niche?
   }
 );
 
+// ── workspace_lead_connections ───────────────────────────────────
+defineTool(
+  'workspace_lead_connections',
+  `Per-lead live data sources (Connections tab: GBP, Search Console, GA4, Bing, WordPress, DataForSEO) — on-demand pulls, not a background poller.
+action: "list" (id=lead id — every source with its config state, cached status/data/detail, last checked_at) |
+"config" (id=lead id, source: one of gbp|gsc|ga4|bing|wordpress|dataforseo, fields: object of key->value for that source's credential/config fields — see "list" output for each source's field keys; blank/omitted keys leave the stored value unchanged) |
+"pull" (id=lead id, source — runs that source's fetch fresh, caches it, returns { status: 'up'|'down', data, detail }; 400s if not fully configured yet).`,
+  {
+    action: z.enum(['list', 'config', 'pull']),
+    id: z.string().describe('lead id'),
+    source: z.string().optional().describe('gbp | gsc | ga4 | bing | wordpress | dataforseo — required for config/pull'),
+    fields: z.record(z.string()).optional().describe('for config — key:value pairs matching that source\'s field keys'),
+  },
+  (a) => {
+    switch (a.action) {
+      case 'list': return api('GET', `/api/leads/${need(a.id, 'id')}/connections`);
+      case 'config': return api('PUT', `/api/leads/${need(a.id, 'id')}/connections/${need(a.source, 'source')}/config`, a.fields || {});
+      case 'pull': return api('POST', `/api/leads/${need(a.id, 'id')}/connections/${need(a.source, 'source')}/pull`);
+    }
+  }
+);
+
 // ── workspace_audits ──────────────────────────────────────────────
 defineTool(
   'workspace_audits',
