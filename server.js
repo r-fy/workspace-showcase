@@ -15,6 +15,7 @@ try { webpush = require('web-push'); } catch (e) {}
 let twilio = null;
 try { twilio = require('twilio'); } catch (e) {}
 const { renderAuditHtml } = require('./audit_render');
+const { SOURCES: CLIENT_CONNECTION_SOURCES } = require('./client_connections');
 const { Readable } = require('stream');
 const app = express();
 const PORT = parseInt(process.env.PORT || '4000');
@@ -422,6 +423,30 @@ addColumn(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES lea
 migrate(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`);
 migrate(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`);
 migrate(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`);
+
+// Client Connections tab: per-lead credentials (lead_secrets) and the last
+// pulled result per source (lead_connections) — separate from the account-wide
+// connections table above. Secrets never ride /api/sync or any list route;
+// they're written via PUT and read back only inside a pull().
+migrate(`
+  CREATE TABLE IF NOT EXISTS lead_secrets (
+    lead_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (lead_id, source_id, key)
+  );
+  CREATE TABLE IF NOT EXISTS lead_connections (
+    lead_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'unset',
+    data TEXT NOT NULL DEFAULT '{}',
+    detail TEXT NOT NULL DEFAULT '',
+    checked_at INTEGER,
+    PRIMARY KEY (lead_id, source_id)
+  );
+`);
 
 // rfy-crm: lead contact/dial fields + disposition, and calls→lead link.
 // disposition is a single current tag-system value (e.g. "warm") — colors come
@@ -1098,6 +1123,74 @@ app.post('/api/leads/:id/merge', auth, (req, res) => {
     db.prepare('UPDATE leads SET deleted_at=?, updated_at=? WHERE id=? AND user_id=?').run(t, t, source.id, req.userId);
   })();
   res.json({ ok: true });
+});
+
+// ── Client Connections (per-lead live data pulls) ────────────
+// On-demand only, per the plan — no background poller. GET lists every source
+// with its config state + last cached pull; POST .../pull runs that source's
+// pull() fresh and caches the result; PUT .../config writes credentials.
+function connSecretsFor(leadId, sourceId) {
+  const rows = db.prepare('SELECT key, value FROM lead_secrets WHERE lead_id=? AND source_id=?').all(leadId, sourceId);
+  return Object.fromEntries(rows.map(r => [r.key, r.value]));
+}
+
+app.get('/api/leads/:id/connections', auth, (req, res) => {
+  const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const cached = Object.fromEntries(db.prepare('SELECT * FROM lead_connections WHERE lead_id=?').all(lead.id).map(r => [r.source_id, r]));
+  res.json(CLIENT_CONNECTION_SOURCES.map(src => {
+    const secrets = connSecretsFor(lead.id, src.id);
+    const configured = src.fields.every(f => secrets[f.key]);
+    const row = cached[src.id];
+    return {
+      id: src.id, name: src.name, covers: src.covers,
+      fields: src.fields.map(f => ({ key: f.key, label: f.label, secret: !!f.secret, multiline: !!f.multiline, set: !!secrets[f.key] })),
+      configured,
+      status: row ? row.status : (configured ? 'unset' : 'unconfigured'),
+      data: row ? JSON.parse(row.data) : null,
+      detail: row ? row.detail : '',
+      checked_at: row ? row.checked_at : null,
+    };
+  }));
+});
+
+app.put('/api/leads/:id/connections/:source/config', auth, (req, res) => {
+  const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const src = CLIENT_CONNECTION_SOURCES.find(s => s.id === req.params.source);
+  if (!src) return res.status(404).json({ error: 'Unknown source' });
+  const t = now();
+  const upsert = db.prepare(`INSERT INTO lead_secrets (lead_id, source_id, key, value, updated_at) VALUES (?,?,?,?,?)
+    ON CONFLICT(lead_id, source_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`);
+  db.transaction(() => {
+    for (const f of src.fields) {
+      const v = req.body[f.key];
+      if (v === undefined || v === '') continue; // blank = leave the stored value alone
+      upsert.run(lead.id, src.id, f.key, String(v), t);
+    }
+  })();
+  res.json({ ok: true });
+});
+
+app.post('/api/leads/:id/connections/:source/pull', auth, async (req, res) => {
+  const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const src = CLIENT_CONNECTION_SOURCES.find(s => s.id === req.params.source);
+  if (!src) return res.status(404).json({ error: 'Unknown source' });
+  const secrets = connSecretsFor(lead.id, src.id);
+  const missing = src.fields.filter(f => !secrets[f.key]);
+  if (missing.length) return res.status(400).json({ error: `Not configured — missing ${missing.map(f => f.label).join(', ')}` });
+  let result;
+  try {
+    result = await src.pull(secrets, process.env);
+  } catch (e) {
+    result = { status: 'down', detail: e.message };
+  }
+  const t = now();
+  db.prepare(`INSERT INTO lead_connections (lead_id, source_id, status, data, detail, checked_at) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(lead_id, source_id) DO UPDATE SET status=excluded.status, data=excluded.data, detail=excluded.detail, checked_at=excluded.checked_at`)
+    .run(lead.id, src.id, result.status, JSON.stringify(result.data || {}), result.detail || '', t);
+  res.json({ id: src.id, status: result.status, data: result.data || {}, detail: result.detail || '', checked_at: t });
 });
 
 // ── Prospect lists (Dialer tab) ──────────────────────────────
