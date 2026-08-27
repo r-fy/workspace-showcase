@@ -5230,7 +5230,7 @@ function updateCrmHeader() {
 }
 
 function showCrmSub(sub) {
-  ['overview', 'audit', 'followup', 'calls'].forEach(s =>
+  ['overview', 'audit', 'followup', 'calls', 'connections'].forEach(s =>
     document.getElementById('crm-' + s + '-sub')?.classList.toggle('hidden', s !== sub));
 }
 
@@ -5243,6 +5243,7 @@ function switchCrmSub(sub, preferId) {
   if (sub === 'audit') renderCrmAuditSub(preferId);
   if (sub === 'followup') renderCrmFollowupSub(preferId);
   if (sub === 'calls') renderCrmCallsSub();
+  if (sub === 'connections') renderCrmConnectionsSub();
 }
 
 function leadStatusColor(s) {
@@ -5697,6 +5698,117 @@ function renderCrmCallsSub() {
   renderSmsLog();
   initDialer();
   loadUsagePanel();
+}
+
+// ── Connections sub-tab: per-lead live data sources, on-demand pulls ────
+let leadConnections = [];
+let connConfigOpenId = null; // which source's config form is expanded, if any
+
+async function renderCrmConnectionsSub() {
+  const area = document.getElementById('lead-connections-area');
+  if (!area || !currentLead) return;
+  area.innerHTML = '<div style="padding:24px;color:#666;font-size:13px;">Loading…</div>';
+  try { leadConnections = await apiCall('GET', `/leads/${currentLead.id}/connections`); }
+  catch (e) { area.innerHTML = '<div style="padding:24px;color:#c0392b;font-size:13px;">Could not load connections.</div>'; return; }
+  drawConnections();
+}
+
+function connStatusLabel(c) {
+  if (!c.configured) return { text: 'not configured', cls: 'conn-unconfigured' };
+  if (c.status === 'up') return { text: 'live', cls: 'conn-up' };
+  if (c.status === 'down') return { text: 'broken', cls: 'conn-down' };
+  return { text: 'not pulled yet', cls: 'conn-unconfigured' };
+}
+
+function fmtConnTime(ts) {
+  if (!ts) return 'never';
+  const mins = Math.round((Date.now() - ts) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+function drawConnections() {
+  const area = document.getElementById('lead-connections-area');
+  if (!area) return;
+  const cards = leadConnections.map(c => {
+    const st = connStatusLabel(c);
+    const metrics = c.data && Object.keys(c.data).length
+      ? `<div class="conn-metrics">${Object.entries(c.data).map(([k, v]) =>
+          `<div class="conn-metric"><div class="conn-metric-label">${escHtml(k)}</div><div class="conn-metric-val">${escHtml(String(v))}</div></div>`).join('')}</div>`
+      : '';
+    const configForm = connConfigOpenId === c.id ? `
+      <div class="conn-config-form">
+        ${c.fields.map(f => f.multiline
+          ? `<label class="conn-field-label">${escHtml(f.label)}${f.set ? ' (set — leave blank to keep)' : ''}<textarea data-conn-field="${f.key}" rows="3" placeholder="${f.set ? '••••••••' : ''}"></textarea></label>`
+          : `<label class="conn-field-label">${escHtml(f.label)}${f.set ? ' (set — leave blank to keep)' : ''}<input type="${f.secret ? 'password' : 'text'}" data-conn-field="${f.key}" placeholder="${f.set ? '••••••••' : ''}"></label>`
+        ).join('')}
+        <div class="conn-config-actions">
+          <button class="btn-sm" data-conn-save="${c.id}">Save</button>
+          <button class="btn-sm" data-conn-cancel="1">Cancel</button>
+        </div>
+      </div>` : '';
+    return `
+    <div class="conn-card">
+      <div class="conn-card-top">
+        <div>
+          <div class="conn-card-name">${escHtml(c.name)}</div>
+          <div class="conn-card-covers">${escHtml(c.covers)}</div>
+        </div>
+        <span class="conn-pill ${st.cls}"><span class="conn-dot"></span>${st.text}</span>
+      </div>
+      ${metrics}
+      ${c.detail ? `<div class="conn-detail">${escHtml(c.detail)}</div>` : ''}
+      ${configForm}
+      <div class="conn-card-foot">
+        <span class="conn-last">pulled ${fmtConnTime(c.checked_at)}</span>
+        <div style="display:flex;gap:6px;">
+          <button class="conn-link-btn" data-conn-config="${c.id}">${c.configured ? 'Edit config' : 'Configure'}</button>
+          <button class="conn-pull-btn" data-conn-pull="${c.id}" ${c.configured ? '' : 'disabled'}>Pull now</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  area.innerHTML = `
+    <div class="conn-panel-head">
+      <div class="conn-panel-title">Live data sources — ${leadConnections.filter(c => c.configured).length} / ${leadConnections.length} configured</div>
+    </div>
+    <div class="conn-grid">${cards}</div>`;
+
+  area.querySelectorAll('[data-conn-config]').forEach(b => b.addEventListener('click', () => {
+    connConfigOpenId = connConfigOpenId === b.dataset.connConfig ? null : b.dataset.connConfig;
+    drawConnections();
+  }));
+  area.querySelectorAll('[data-conn-cancel]').forEach(b => b.addEventListener('click', () => { connConfigOpenId = null; drawConnections(); }));
+  area.querySelectorAll('[data-conn-save]').forEach(b => b.addEventListener('click', () => saveConnConfig(b.dataset.connSave)));
+  area.querySelectorAll('[data-conn-pull]').forEach(b => b.addEventListener('click', () => pullConnection(b.dataset.connPull)));
+}
+
+async function saveConnConfig(sourceId) {
+  const area = document.getElementById('lead-connections-area');
+  const body = {};
+  area.querySelectorAll(`[data-conn-field]`).forEach(el => { body[el.dataset.connField] = el.value; });
+  try { await apiCall('PUT', `/leads/${currentLead.id}/connections/${sourceId}/config`, body); }
+  catch (e) { toast('Could not save config'); return; }
+  connConfigOpenId = null;
+  toast('Saved');
+  renderCrmConnectionsSub();
+}
+
+async function pullConnection(sourceId) {
+  const btn = document.querySelector(`[data-conn-pull="${sourceId}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Pulling…'; }
+  try {
+    const result = await apiCall('POST', `/leads/${currentLead.id}/connections/${sourceId}/pull`);
+    const idx = leadConnections.findIndex(c => c.id === sourceId);
+    if (idx !== -1) leadConnections[idx] = { ...leadConnections[idx], ...result };
+    if (result.status === 'down') toast(`${sourceId}: ${result.detail || 'pull failed'}`);
+  } catch (e) {
+    toast('Pull failed: ' + e.message);
+  }
+  drawConnections();
 }
 
 // Standalone Dialer tab (v162): free dialing like the pre-CRM Calls tab.
