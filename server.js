@@ -2739,19 +2739,11 @@ migrate(`CREATE TABLE IF NOT EXISTS connections (
 const OWNER_ID = Object.values(USERS)[0] || 'owner';
 let connectionsRunning = false;
 
-// One reminder per service per 24h while it stays low/down, so a dead key
-// pings once a day instead of once an hour.
+// Reminders for low/down services were removed at Raffi's request (2026-08-30) —
+// the Connections tab itself is the alerting surface now. Kept as a stub so the
+// two callers and the alerted_at column stay untouched.
 function alertConnection(row, prev) {
-  if (!['low', 'down'].includes(row.status)) return null;
-  const t = now();
-  if (prev?.alerted_at && t - prev.alerted_at < 24 * 3600 * 1000) return prev.alerted_at;
-  const title = row.status === 'low'
-    ? `${row.name} balance low: $${row.balance}`
-    : `${row.name} is down: ${row.detail}`;
-  db.prepare(`INSERT INTO reminders (id, user_id, title, description, first_fire_at, next_fire_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(uid(), OWNER_ID, title, 'From the Connections tab. Used by: ' + row.used_by, t, t, t, t);
-  return t;
+  return prev?.alerted_at || null;
 }
 
 async function refreshConnections() {
