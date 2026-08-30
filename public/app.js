@@ -6394,8 +6394,8 @@ function advanceToNextLead(fromLeadId) {
 // current_situation, findings (each with sources), heatmaps, gsc, narrative.
 // The form below is the source of truth; the iframe just renders it via the
 // server's /api/audits/render (same audit_render.js the report PDF pipeline
-// uses), including that template's own contenteditable + "Export as PDF"
-// button — clicking Export inside the preview prints just that iframe.
+// uses). The preview is strictly read-only (no contenteditable — edits there
+// never saved, only the form does); its "Export as PDF" button prints the iframe.
 let audits = [];
 let currentAuditId = null;
 let currentAudit = null; // full record: {id, business_name, status, data, updated_at}

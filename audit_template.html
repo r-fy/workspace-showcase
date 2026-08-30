@@ -47,7 +47,6 @@
     body { background: #fff; padding: 0; }
     .sheet { box-shadow: none; border-radius: 0; padding: 0; max-width: 100%; }
     .no-print { display: none !important; }
-    [contenteditable]:hover, [contenteditable]:focus { outline: none !important; background: transparent !important; }
   }
   .edit-bar {
     max-width: 760px; margin: 0 auto 16px; background: {{color_accent}}; color: #fff;
@@ -60,18 +59,15 @@
   }
   .edit-bar-blocked { background: #b8560f; }
   .edit-bar-blocked button { opacity: 0.5; cursor: not-allowed; }
-  [contenteditable="true"] { border-radius: 3px; }
-  [contenteditable="true"]:hover { background: rgba(47,111,237,0.08); outline: 1px dashed rgba(47,111,237,0.4); }
-  [contenteditable="true"]:focus { background: rgba(47,111,237,0.08); outline: 1px dashed {{color_hook_border}}; }
 </style>
 </head>
 <body>
   {{edit_bar}}
   <div class="sheet">
-    <h1 contenteditable="true" spellcheck="false">{{business_name}}</h1>
-    <p class="subtitle" contenteditable="true" spellcheck="false">{{report_type_label}} &middot; {{city}} &middot; {{date}}</p>
+    <h1>{{business_name}}</h1>
+    <p class="subtitle">{{report_type_label}} &middot; {{city}} &middot; {{date}}</p>
 
-    <div class="hook" contenteditable="true" spellcheck="false">{{wiifm_hook}}</div>
+    <div class="hook">{{wiifm_hook}}</div>
 
     <h2>{{section_1_title}}</h2>
     <table class="situation">
@@ -89,28 +85,13 @@
     </table>
 
     <h2>{{biggest_opportunity_title}}</h2>
-    <div class="callout" contenteditable="true" spellcheck="false">{{biggest_opportunity}}</div>
+    <div class="callout">{{biggest_opportunity}}</div>
 
     {{gsc_section}}
 
-    <div class="cta" contenteditable="true" spellcheck="false">{{closing_cta}}</div>
+    <div class="cta">{{closing_cta}}</div>
 
     <p class="footer">Prepared for {{business_name}} &middot; {{date}}</p>
   </div>
-  <script>
-    // A plain click on a link normally places a caret to edit text instead
-    // of navigating, when that link sits inside an editable region (e.g. the
-    // ranking-value links in "where you stand right now" — the heatmap
-    // "full report" links aren't editable, so they don't have this problem).
-    // Open it like a normal link instead; the text is still editable via
-    // keyboard (select, delete, retype).
-    document.addEventListener('click', function (e) {
-      var a = e.target.closest('a[href]');
-      if (a && a.closest('[contenteditable="true"]')) {
-        e.preventDefault();
-        window.open(a.href, '_blank', 'noopener');
-      }
-    });
-  </script>
 </body>
 </html>

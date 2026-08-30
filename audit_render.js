@@ -52,7 +52,7 @@ function renderEditBar(blocked) {
   </div>`;
   }
   return `<div class="edit-bar no-print">
-    <span>Click any text to edit it. When it looks right, press <strong>&#8984;P</strong> (or Ctrl+P) and save as PDF.</span>
+    <span>This preview is read-only. Edit in the form on the left, then press <strong>&#8984;P</strong> (or Ctrl+P) and save as PDF.</span>
     <button onclick="window.print()">Export as PDF</button>
   </div>`;
 }
@@ -100,16 +100,16 @@ function renderAuditHtml(data) {
 
   const findingsRows = (data.findings || []).map(f => `
         <tr>
-          <td class="area-cell"><span class="dot ${escape(f.status)}"></span><span contenteditable="true" spellcheck="false">${escape(f.area)}</span></td>
-          <td contenteditable="true" spellcheck="false">${highlightFillins(escape(f.finding))}</td>
+          <td class="area-cell"><span class="dot ${escape(f.status)}"></span><span>${escape(f.area)}</span></td>
+          <td>${highlightFillins(escape(f.finding))}</td>
         </tr>`).join('');
 
   const situationRows = (data.current_situation || []).map(r => {
     const link = safeUrl(r.link);
     const value = link
-      ? `<a href="${escape(link)}" target="_blank" rel="noopener" contenteditable="true" spellcheck="false">${escape(r.value)}</a>`
-      : `<span contenteditable="true" spellcheck="false">${escape(r.value)}</span>`;
-    return `<tr><td contenteditable="true" spellcheck="false">${escape(r.label)}</td><td>${value}</td></tr>`;
+      ? `<a href="${escape(link)}" target="_blank" rel="noopener">${escape(r.value)}</a>`
+      : `<span>${escape(r.value)}</span>`;
+    return `<tr><td>${escape(r.label)}</td><td>${value}</td></tr>`;
   }).join('\n      ');
 
   const fields = {
