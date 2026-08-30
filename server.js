@@ -871,11 +871,17 @@ app.post('/api/audits', auth, (req, res) => {
 });
 
 app.put('/api/audits/:id', auth, (req, res) => {
-  const { business_name, status, data, lead_id } = req.body;
+  const { business_name, status, data, lead_id, base_updated_at } = req.body;
   if (lead_id !== undefined && !validLeadId(req.userId, lead_id)) return res.status(400).json({ error: 'lead_id must point at an existing lead' });
   const t = now();
   const a = db.prepare('SELECT * FROM audits WHERE id = ? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!a) return res.status(404).json({ error: 'Not found' });
+  // Optimistic concurrency: a client that sends the updated_at it loaded gets a
+  // 409 if someone else saved since, instead of silently overwriting their work.
+  // Clients that omit it (MCP server, scripts, offline replays) keep last-write-wins.
+  if (base_updated_at !== undefined && +base_updated_at !== a.updated_at) {
+    return res.status(409).json({ error: 'conflict', updated_at: a.updated_at });
+  }
   db.prepare('UPDATE audits SET business_name=?, status=?, data=?, lead_id=?, updated_at=? WHERE id=? AND user_id=?')
     .run(business_name ?? a.business_name, status ?? a.status, JSON.stringify(data ?? JSON.parse(a.data)), lead_id !== undefined ? lead_id : a.lead_id, t, req.params.id, req.userId);
   const updated = db.prepare('SELECT * FROM audits WHERE id = ?').get(req.params.id);

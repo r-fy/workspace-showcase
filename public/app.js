@@ -160,7 +160,7 @@ async function apiFetch(method, path, body, opId) {
   catch (e) { e.retriable = true; throw e; }
   if (res.status === 401) { showLogin(); const e = new Error('Unauthorized'); e.retriable = true; throw e; }
   if (res.status === 429 || res.status >= 500) { const e = new Error(await res.text()); e.retriable = true; throw e; }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) { const e = new Error(await res.text()); e.status = res.status; throw e; }
   return res.json();
 }
 async function apiCall(method, path, body) {
@@ -4656,6 +4656,9 @@ document.addEventListener('keydown', e => {
   // and confirm, instead of popping the browser's "Save page" dialog.
   if (mod && e.key === 's') {
     e.preventDefault();
+    // Audit editor showing: Cmd+S saves the audit (a note can be open in
+    // another tab at the same time, so route by what's actually on screen).
+    if (currentAuditId && currentTab === 'crm' && crmSubTab === 'audit') { saveAuditNow(); return; }
     if (currentNoteId && noteEditor) { clearTimeout(saveNoteTimer); saveCurrentNote(); toast('Saved'); }
     return;
   }
@@ -6398,6 +6401,13 @@ let currentAuditId = null;
 let currentAudit = null; // full record: {id, business_name, status, data, updated_at}
 let saveAuditTimer = null;
 let previewAuditTimer = null;
+// Dirty tracking: every edit bumps auditEditSeq; a save that completes with the
+// seq unchanged marks auditSavedSeq caught up. Dirty = the two differ.
+let auditEditSeq = 0;
+let auditSavedSeq = 0;
+let auditSaveInFlight = false;  // serialize saves so a debounced save can't race a manual one
+let auditSavePending = false;   // an edit landed mid-flight — save again after this one returns
+let auditConflictHold = false;  // user cancelled a conflict prompt — autosave stays off until manual Save
 
 function emptyAuditData() {
   return {
@@ -6457,8 +6467,15 @@ function renderAuditsList() {
 // POST without a live lead_id.)
 
 async function openAudit(id) {
+  // Flush unsaved edits on the audit we're leaving (manual=true so a conflict
+  // still prompts instead of silently dropping the edits).
+  if (currentAuditId && currentAuditId !== id && auditDirty()) {
+    clearTimeout(saveAuditTimer);
+    await saveCurrentAudit(true);
+  }
   try { currentAudit = await apiCall('GET', '/audits/' + id); } catch (e) { toast('Could not load audit'); return; }
   currentAuditId = id;
+  auditEditSeq = 0; auditSavedSeq = 0; auditConflictHold = false;
   renderAuditsList();
   renderAuditEditor();
   if (isMobile()) closeSidebar();
@@ -6574,6 +6591,7 @@ function renderAuditEditor() {
         <option value="ads"${d.report_type === 'ads' ? ' selected' : ''}>Google Ads</option>
       </select>
       <span class="audit-save-status" id="audit-save-status"></span>
+      <button class="audit-add-btn" id="audit-save-btn" title="Save now (Cmd/Ctrl+S)">Save</button>
       <button class="danger-btn" id="audit-delete-btn">Delete</button>
     </div>
     <div class="audit-body">
@@ -6643,6 +6661,7 @@ function wireAuditEditorEvents() {
     onAuditChanged();
   });
   document.getElementById('audit-delete-btn').addEventListener('click', deleteCurrentAudit);
+  document.getElementById('audit-save-btn').addEventListener('click', saveAuditNow);
 
   area.querySelectorAll('[data-path]').forEach(el => {
     const ev = el.tagName === 'SELECT' ? 'change' : 'input';
@@ -6704,38 +6723,92 @@ function getAuditArray(root, path) {
 
 function onAuditChanged(rebuild) {
   if (rebuild) { renderAuditEditor(); } // rebuild also re-renders the preview itself
-  const status = document.getElementById('audit-save-status');
-  if (status) status.textContent = 'Saving…';
+  auditEditSeq++;
+  setAuditStatus('Unsaved changes');
   clearTimeout(saveAuditTimer);
-  saveAuditTimer = setTimeout(saveCurrentAudit, 600);
+  // After a cancelled conflict prompt, autosave stays off — otherwise every
+  // keystroke would 409 and re-prompt. Only the Save button / Cmd+S resumes.
+  if (!auditConflictHold) saveAuditTimer = setTimeout(saveCurrentAudit, 600);
   if (!rebuild) {
     clearTimeout(previewAuditTimer);
     previewAuditTimer = setTimeout(refreshAuditPreview, 500);
   }
 }
 
-async function saveCurrentAudit() {
-  if (!currentAuditId) return;
+function setAuditStatus(text) {
+  const status = document.getElementById('audit-save-status');
+  if (status) status.textContent = text;
+}
+
+function auditDirty() {
+  return auditEditSeq !== auditSavedSeq;
+}
+
+function saveAuditNow() {
+  clearTimeout(saveAuditTimer);
+  saveCurrentAudit(true);
+}
+
+function applyAuditSaved(rec, id, saved, seqAtStart) {
+  rec.updated_at = saved.updated_at;
+  const idx = audits.findIndex(a => a.id === id);
+  if (idx >= 0) audits[idx] = { id: saved.id, business_name: saved.business_name, status: saved.status, report_type: rec.data.report_type || 'seo', updated_at: saved.updated_at };
+  renderAuditsList();
+  // Keep the CRM sub-tab's history rows in sync too
+  const la = currentLead?.audits?.find(a => a.id === id);
+  if (la) { la.status = saved.status; la.report_type = rec.data.report_type || 'seo'; la.updated_at = saved.updated_at; }
+  auditConflictHold = false;
+  if (auditEditSeq === seqAtStart) { auditSavedSeq = seqAtStart; setAuditStatus('Saved'); }
+}
+
+async function saveCurrentAudit(manual) {
+  if (!currentAuditId || !currentAudit) return;
+  if (auditConflictHold && !manual) return;
+  // One save in flight at a time: a debounced save racing a manual one would
+  // carry a stale base_updated_at and 409 against our own write.
+  if (auditSaveInFlight) { auditSavePending = true; return; }
+  auditSaveInFlight = true;
   const id = currentAuditId;
+  const rec = currentAudit; // keep the right record even if the user switches audits mid-flight
+  const seqAtStart = auditEditSeq;
+  setAuditStatus('Saving…');
+  const body = {
+    business_name: rec.data.identity.business_name || 'Untitled audit',
+    status: rec.status,
+    data: rec.data,
+  };
+  // Offline writes replay from the outbox later, possibly after the row changed —
+  // a baked-in stale base would make the replay 409 and get dropped, losing the
+  // edit outright. Offline stays last-write-wins like before.
+  if (navigator.onLine) body.base_updated_at = rec.updated_at;
   try {
-    const saved = await apiCall('PUT', '/audits/' + id, {
-      business_name: currentAudit.data.identity.business_name || 'Untitled audit',
-      status: currentAudit.status,
-      data: currentAudit.data,
-    });
-    const idx = audits.findIndex(a => a.id === id);
-    if (idx >= 0) audits[idx] = { id: saved.id, business_name: saved.business_name, status: saved.status, report_type: currentAudit.data.report_type || 'seo', updated_at: saved.updated_at };
-    renderAuditsList();
-    // Keep the CRM sub-tab's history rows in sync too
-    const la = currentLead?.audits?.find(a => a.id === id);
-    if (la) { la.status = saved.status; la.report_type = currentAudit.data.report_type || 'seo'; la.updated_at = saved.updated_at; }
-    const status = document.getElementById('audit-save-status');
-    if (status) status.textContent = 'Saved';
+    const saved = await apiCall('PUT', '/audits/' + id, body);
+    applyAuditSaved(rec, id, saved, seqAtStart);
   } catch (e) {
-    const status = document.getElementById('audit-save-status');
-    if (status) status.textContent = 'Save failed';
+    if (e.status === 409) {
+      if (confirm('This audit changed somewhere else since you opened it (another device or session). Overwrite with your version?')) {
+        try {
+          // Re-send without the base: a deliberate, user-confirmed overwrite.
+          const saved = await apiCall('PUT', '/audits/' + id, { business_name: body.business_name, status: body.status, data: body.data });
+          applyAuditSaved(rec, id, saved, seqAtStart);
+        } catch (e2) { setAuditStatus('Save failed'); }
+      } else {
+        auditConflictHold = true;
+        setAuditStatus('Not saved — changed elsewhere. Hit Save to overwrite.');
+      }
+    } else {
+      setAuditStatus('Save failed');
+    }
+  } finally {
+    auditSaveInFlight = false;
+    if (auditSavePending) { auditSavePending = false; saveCurrentAudit(manual); }
   }
 }
+
+// Warn before closing the tab/window with unsaved audit edits.
+window.addEventListener('beforeunload', e => {
+  if (currentAuditId && auditDirty()) { e.preventDefault(); e.returnValue = ''; }
+});
 
 // The preview iframe is sandboxed without allow-same-origin, so the parent can't read
 // or set its scroll position directly (v128's fix used to). The frame reports its scroll
