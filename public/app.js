@@ -250,10 +250,20 @@ function applyProspectSyncData(data) {
   if (currentProspectListId && currentProspectList) {
     currentProspectList.prospects = (data.prospects || []).filter(p => p.list_id === currentProspectListId).map(p => {
       const pending = pendingProspectOutcomes[p.id];
-      if (pending === undefined) return p;
-      if (p.outcome === pending) { delete pendingProspectOutcomes[p.id]; return p; }
-      return { ...p, outcome: pending }; // PUT hasn't landed in this snapshot yet — keep the user's pick
+      if (pending !== undefined) {
+        if (p.outcome === pending) delete pendingProspectOutcomes[p.id];
+        else p = { ...p, outcome: pending }; // PUT hasn't landed in this snapshot yet — keep the user's pick
+      }
+      const pendingNote = pendingProspectNotes[p.id];
+      if (pendingNote !== undefined) {
+        if ((p.call_note || '') === pendingNote) delete pendingProspectNotes[p.id];
+        else p = { ...p, call_note: pendingNote };
+      }
+      return p;
     });
+    // A full redraw would yank focus and cursor out of a note mid-typing —
+    // hold back like renderCallLog({fromPoll:true}) does for its notes box.
+    if (document.querySelector('.prospect-note-input:focus')) return;
     renderProspectListView();
   }
 }
@@ -5866,6 +5876,7 @@ let currentProspectList = null;  // full record incl. prospects[] from GET /pros
 let lastDialedProspectId = null; // highlighted row — set on Dial, cleared only by dialing another
 const openProspectNotesIds = new Set(); // ids with the score/notes panel expanded — survives re-renders
 const pendingProspectOutcomes = {}; // id -> outcome not yet confirmed by a sync payload, wins over stale ones
+const pendingProspectNotes = {};    // id -> call_note not yet confirmed by a sync payload, same idea
 const selectedProspects = new Set(); // bulk-select state — survives re-renders same as openProspectNotesIds
 let lastClickedProspectId = null;    // shift-click range anchor, mirrors the expenses list pattern
 let activeProspectOutcomeFilter = null; // outcome key, or null = show all
@@ -6010,10 +6021,12 @@ function buildScoreCardBody(s) {
 }
 
 function renderProspectScorePanel(p) {
-  if (!p.notes) return '';
   const s = parseProspectScore(p.notes);
-  if (!s) return `<div class="prospect-row-notes hidden" data-notes-id="${p.id}">${escHtml(p.notes)}</div>`;
-  return `<div class="prospect-row-notes prospect-row-notes-scored hidden" data-notes-id="${p.id}">${buildScoreCardBody(s)}</div>`;
+  const body = s ? buildScoreCardBody(s)
+    : p.notes ? `<div class="prospect-raw-notes">${escHtml(p.notes)}</div>` : '';
+  // The panel always exists now — every prospect gets an editable note-to-self
+  // (why/when to call back), even ones with no scrape data.
+  return `<div class="prospect-row-notes prospect-row-notes-scored hidden" data-notes-id="${p.id}">${body}<textarea class="call-notes-input prospect-note-input" data-note-id="${p.id}" placeholder="Note to self — why or when to call back…">${escHtml(p.call_note || '')}</textarea></div>`;
 }
 
 // Read-only card above the editable Notes textarea on a lead — same scoring
@@ -6070,7 +6083,7 @@ function renderProspectListView() {
     return `<div class="prospect-row${rowClass ? ' ' + rowClass : ''}" data-id="${p.id}">
       <input type="checkbox" class="prospect-row-check" data-id="${p.id}"${selectedProspects.has(p.id) ? ' checked' : ''}>
       <div class="prospect-row-main" data-toggle-notes="${p.id}">
-        <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}</div>
+        <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}${p.call_note ? ' <span class="prospect-note-flag" title="Has a note">📝</span>' : ''}</div>
         <div class="prospect-row-contact">${escHtml(contact)}${p.city ? ' · ' + escHtml(p.city) : ''}</div>
       </div>
       <select class="prospect-outcome-select" data-outcome-id="${p.id}">${outcomeOpts}</select>
@@ -6127,6 +6140,8 @@ function renderProspectListView() {
   el.querySelectorAll('[data-notes-id]').forEach(panel => {
     if (openProspectNotesIds.has(panel.dataset.notesId)) panel.classList.remove('hidden');
   });
+  el.querySelectorAll('.prospect-note-input').forEach(ta =>
+    ta.addEventListener('input', () => saveProspectNoteDebounced(ta.dataset.noteId, ta.value)));
   el.querySelectorAll('[data-toggle-notes]').forEach(main =>
     main.addEventListener('click', () => {
       const id = main.dataset.toggleNotes;
@@ -6189,6 +6204,20 @@ async function renameProspectListActive() {
   currentProspectList.name = name.trim();
   renderProspectListView();
   loadProspectLists();
+}
+
+// Per-id timers (NOT one shared timer like saveCallNoteDebounced) — typing in
+// row A then clicking into row B within 600ms must not cancel A's save.
+const prospectNoteTimers = {};
+function saveProspectNoteDebounced(id, note) {
+  const p = currentProspectList?.prospects.find(x => x.id === id);
+  if (p) p.call_note = note; // keep the in-memory model current so a re-render doesn't stomp the screen
+  pendingProspectNotes[id] = note;
+  clearTimeout(prospectNoteTimers[id]);
+  prospectNoteTimers[id] = setTimeout(async () => {
+    try { await apiCall('PUT', '/prospects/' + id, { call_note: note }); }
+    catch (e) { toast('Could not save note'); }
+  }, 600);
 }
 
 async function updateProspectOutcome(id, outcome) {

@@ -512,6 +512,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_prospect_outcome_events_user ON prospect_outcome_events(user_id, created_at);
 `);
 addColumn(`ALTER TABLE calls ADD COLUMN prospect_id TEXT REFERENCES prospects(id) DEFAULT NULL`);
+// Free-typed note-to-self per prospect (why/when to call back). Separate from
+// `notes`, which belongs to the scrape pipeline and is regex-parsed for the
+// scorecard — a typed note in there would corrupt the parse.
+addColumn(`ALTER TABLE prospects ADD COLUMN call_note TEXT DEFAULT NULL`);
 migrate(`CREATE INDEX IF NOT EXISTS idx_calls_prospect ON calls(prospect_id, started_at)`);
 
 // SMS (Texts, lives in the Dialer tab): one row per message, same
@@ -1322,11 +1326,11 @@ app.post('/api/prospect-lists/:id/import', auth, (req, res) => {
 app.put('/api/prospects/:id', auth, (req, res) => {
   const p = db.prepare('SELECT * FROM prospects WHERE id=? AND user_id=?').get(req.params.id, req.userId);
   if (!p) return res.status(404).json({ error: 'Not found' });
-  const { name = p.name, phone = p.phone, email = p.email, source = p.source, city = p.city, niche = p.niche, notes = p.notes, outcome = p.outcome } = req.body;
+  const { name = p.name, phone = p.phone, email = p.email, source = p.source, city = p.city, niche = p.niche, notes = p.notes, call_note = p.call_note, outcome = p.outcome } = req.body;
   if (!OUTCOME_TYPES.includes(outcome)) return res.status(400).json({ error: 'invalid outcome' });
   const t = now();
-  db.prepare('UPDATE prospects SET name=?, phone=?, email=?, source=?, city=?, niche=?, notes=?, outcome=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(name, phone, email, source, city, niche, notes, outcome, t, req.params.id, req.userId);
+  db.prepare('UPDATE prospects SET name=?, phone=?, email=?, source=?, city=?, niche=?, notes=?, call_note=?, outcome=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(name, phone, email, source, city, niche, notes, call_note, outcome, t, req.params.id, req.userId);
   if (outcome !== p.outcome) {
     db.prepare('INSERT INTO prospect_outcome_events (id, prospect_id, user_id, outcome, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(uid(), req.params.id, req.userId, outcome, t);
@@ -1362,7 +1366,9 @@ app.post('/api/prospects/:id/promote', auth, (req, res) => {
       source: p.source,
       city: p.city,
       niche: p.niche,
-      notes: p.notes,
+      // Note goes FIRST — parseProspectScore's "Quick wins" regex grabs
+      // everything to end-of-string, so appending would swallow the note.
+      notes: [p.call_note ? 'Note: ' + p.call_note : '', p.notes].filter(Boolean).join('\n'),
     }, req.userId);
   } catch (e) {
     return res.status(400).json({ error: /UNIQUE/.test(e.message) ? 'A lead with this website domain already exists' : e.message });

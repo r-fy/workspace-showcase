@@ -1271,6 +1271,9 @@ header {
   padding: 12px 0 2px; border-top: 1px dashed #222; margin-top: 6px;
 }
 .prospect-row-notes.prospect-row-notes-scored { white-space: normal; }
+.prospect-raw-notes { white-space: pre-wrap; }
+.prospect-note-input { margin-top: 10px; }
+.prospect-note-flag { font-size: 10px; }
 .lead-score-card {
   border: 1px solid #1c1c1c; border-top: 1px solid #1c1c1c; border-radius: 6px;
   padding: 14px 16px; margin: 0 0 14px;
