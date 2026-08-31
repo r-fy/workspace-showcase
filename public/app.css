@@ -1554,6 +1554,12 @@ header {
   padding: 10px 12px; font-size: 12.5px; color: #999; font-family: inherit; line-height: 1.5;
 }
 .daily-task-context textarea:focus { border-color: #3a3a3a; outline: none; color: #ccc; }
+.daily-task-context-view {
+  width: 100%; min-height: 70px; white-space: pre-wrap; cursor: text;
+  background: #131313; border: 1px solid #232323; border-radius: 6px;
+  padding: 10px 12px; font-size: 12.5px; color: #999; line-height: 1.5;
+}
+.daily-task-context-view strong { color: #ccc; }
 .daily-task-qa { margin-bottom: 20px; }
 .daily-task-question-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .daily-task-question { font-size: 14px; color: #ccc; font-weight: 600; line-height: 1.4; }
