@@ -7063,7 +7063,7 @@ function dtMdInline(s) {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
 }
-function dtStripMd(s) { return String(s).replace(/\*\*|\*/g, ''); }
+function dtStripMd(s) { return String(s).replace(/\*\*|__|\*|_|~~|`/g, ''); }
 
 function renderDailyTaskForm() {
   const area = document.getElementById('daily-task-editor-area');
