@@ -6997,7 +6997,7 @@ function renderDailyTasksList() {
   list.innerHTML = filtered.map(t => `
     <div class="note-item${t.id === currentDailyTaskId ? ' active' : ''}" data-id="${t.id}">
       <div class="note-item-title">${escHtml(isoToMdy(t.task_date))}</div>
-      <div class="note-item-snippet">${escHtml((t.questions[0]?.question || '').slice(0, 60))}</div>
+      <div class="note-item-snippet">${escHtml(dtStripMd(t.questions[0]?.question || '').slice(0, 60))}</div>
       <div class="note-item-tags"><span class="note-tag" style="--tag-c:${tagColor(DAILY_TASK_CAT_LABELS[t.category])}">${escHtml(DAILY_TASK_CAT_LABELS[t.category])}</span></div>
     </div>`).join('') || '<div style="padding:16px 12px;color:#444;font-size:12px;">No daily tasks yet</div>';
   list.querySelectorAll('.note-item').forEach(el => el.addEventListener('click', () => openDailyTask(el.dataset.id)));
@@ -7056,6 +7056,15 @@ function newDailyTaskPaste() {
   });
 }
 
+// Inline markdown for TRW prompt display: **bold** and *italic* only (bold pass first
+// or the single-asterisk pass eats the ** markers). Input is escHtml'd here.
+function dtMdInline(s) {
+  return escHtml(s)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+}
+function dtStripMd(s) { return String(s).replace(/\*\*|__|\*|_|~~|`/g, ''); }
+
 function renderDailyTaskForm() {
   const area = document.getElementById('daily-task-editor-area');
   const d = dailyTaskDraft;
@@ -7075,12 +7084,13 @@ function renderDailyTaskForm() {
       ${d.context ? `
       <div class="daily-task-context">
         <div class="daily-task-context-label">Context</div>
-        <textarea id="dt-context">${escHtml(d.context)}</textarea>
+        <div id="dt-context-view" class="daily-task-context-view" title="Click to edit">${dtMdInline(d.context)}</div>
+        <textarea id="dt-context" hidden>${escHtml(d.context)}</textarea>
       </div>` : ''}
       ${d.questions.map((q, i) => `
         <div class="daily-task-qa">
           <div class="daily-task-question-row">
-            <div class="daily-task-question">${escHtml(q.question)}</div>
+            <div class="daily-task-question">${dtMdInline(q.question)}</div>
             <button class="daily-task-remove-q" data-i="${i}" title="Remove this question">✕</button>
           </div>
           <textarea class="daily-task-answer" data-i="${i}" placeholder="Your answer…">${escHtml(q.answer)}</textarea>
@@ -7103,10 +7113,21 @@ function renderDailyTaskForm() {
   document.getElementById('dt-date').addEventListener('change', e => { d.task_date = e.target.value; });
   document.getElementById('dt-source-url').addEventListener('change', e => { d.source_url = e.target.value.trim(); renderDailyTaskForm(); });
   const dtContextEl = document.getElementById('dt-context');
+  const dtContextView = document.getElementById('dt-context-view');
   if (dtContextEl) {
     const growContext = () => { dtContextEl.style.height = 'auto'; dtContextEl.style.height = dtContextEl.scrollHeight + 'px'; };
     dtContextEl.addEventListener('input', e => { d.context = e.target.value; growContext(); });
-    growContext();
+    // Click the rendered view to edit raw text; blur swaps back to the rendered view.
+    // Only these two nodes swap — no full re-render, so a blur caused by pressing
+    // Save/Copy doesn't destroy the button mid-click.
+    dtContextView.addEventListener('click', () => {
+      dtContextView.hidden = true; dtContextEl.hidden = false;
+      growContext(); dtContextEl.focus();
+    });
+    dtContextEl.addEventListener('blur', () => {
+      dtContextView.innerHTML = dtMdInline(d.context);
+      dtContextEl.hidden = true; dtContextView.hidden = false;
+    });
   }
   document.getElementById('dt-copy-btn').addEventListener('click', () => {
     navigator.clipboard.writeText(formatQABlock(d.source_url, d.questions)).then(() => toast('Copied'));
