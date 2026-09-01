@@ -263,7 +263,10 @@ function applyProspectSyncData(data) {
     });
     // A full redraw would yank focus and cursor out of a note mid-typing —
     // hold back like renderCallLog({fromPoll:true}) does for its notes box.
-    if (document.querySelector('.prospect-note-input:focus')) return;
+    // — and the same for a recording playing inside a prospect's panel, where
+    // a rebuild would yank the audio mid-listen.
+    if (document.querySelector('.prospect-note-input:focus') ||
+        document.querySelector('#prospect-list-view audio')) return;
     renderProspectListView();
   }
 }
@@ -2600,6 +2603,15 @@ function callStatusInfo(c) {
     : inbound && c.status === 'ringing' ? { label: 'Ringing', cls: 'call-status-dim' }
     : CALL_STATUS_LABEL[c.status] || { label: c.status, cls: 'call-status-dim' };
 }
+// Play/download buttons for a recorded call — shared by the call log and the
+// prospect panel's past-calls rows. data-slot names the audio slot to fill.
+function callRecBtnsHtml(c, slotId) {
+  if (!c.recording_sid) return '';
+  return `
+    <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" data-slot="${escHtml(slotId)}" title="Play recording">▶</button>
+    <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>`;
+}
+
 const CALL_STATUS_COLOR = { 'call-status-ok': '#5fc83b', 'call-status-bad': '#f87171', 'call-status-dim': '#888' };
 let activeCallStatus = null; // one status label, or null for "all" — same single-select pattern as the Notes/Projects tag filter bars
 
@@ -2675,9 +2687,7 @@ function renderCallLog(opts) {
         <div class="call-item-actions">
           <button class="call-star-btn${c.starred ? ' starred' : ''}" data-star-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}">${c.starred ? '★' : '☆'}</button>
           <button class="call-notes-btn${c.notes ? ' has-notes' : ''}" data-notes-id="${c.id}" title="Notes">📝</button>
-          ${c.recording_sid ? `
-            <button class="call-play-btn" data-sid="${escHtml(c.recording_sid)}" title="Play recording">▶</button>
-            <button class="call-dl-btn" data-sid="${escHtml(c.recording_sid)}" data-num="${escHtml(c.to_number)}" data-ts="${c.started_at}" title="Download recording">↓</button>` : ''}
+          ${callRecBtnsHtml(c, 'call-audio-' + (c.recording_sid || c.id))}
           <button class="call-del-btn" data-id="${escHtml(c.id)}" title="Delete call">🗑</button>
         </div>
       </div>
@@ -2712,7 +2722,7 @@ function renderCallLog(opts) {
     ta.addEventListener('input', () => saveCallNoteDebounced(ta.dataset.id, ta.value));
   });
   log.querySelectorAll('.call-play-btn').forEach(btn => {
-    btn.addEventListener('click', () => playRecording(btn.dataset.sid, btn));
+    btn.addEventListener('click', () => playRecording(btn.dataset.sid, btn, btn.dataset.slot));
   });
   log.querySelectorAll('.call-dl-btn').forEach(btn => {
     btn.addEventListener('click', () => downloadRecording(btn.dataset.sid, btn.dataset.num, +btn.dataset.ts));
@@ -2837,8 +2847,8 @@ async function fetchRecordingUrl(sid) {
   return url;
 }
 
-async function playRecording(sid, btn) {
-  const slot = document.getElementById('call-audio-' + sid);
+async function playRecording(sid, btn, slotId) {
+  const slot = document.getElementById(slotId);
   if (!slot) return;
   if (slot.querySelector('audio')) { slot.innerHTML = ''; return; } // toggle off
   btn.textContent = '…';
@@ -6020,13 +6030,36 @@ function buildScoreCardBody(s) {
     ${winsHtml ? `<p class="prospect-wins-label">Quick wins</p><ul class="prospect-wins">${winsHtml}</ul>` : ''}`;
 }
 
+// Calls belonging to this prospect: stamped prospect_id (dialed via the row's
+// Dial button) plus hand-dials to the same number, matched by last 10 digits.
+function prospectCalls(p) {
+  const ten = clientLast10(p.phone);
+  return calls.filter(c => c.prospect_id === p.id ||
+    (ten && clientLast10(c.direction === 'inbound' ? c.from_number : c.to_number) === ten));
+}
+
+function prospectCallsHtml(p) {
+  const list = prospectCalls(p);
+  if (!list.length) return '';
+  return `<div class="prospect-calls"><div class="prospect-calls-label">Past calls</div>` + list.map(c => {
+    const st = callStatusInfo(c);
+    return `<div class="prospect-call-row">
+      <span class="agenda-time agenda-time-neutral">${escHtml(fmtFireTime(c.started_at))}</span>
+      <span class="call-status ${st.cls}">${escHtml(st.label)}</span>
+      ${c.duration ? `<span class="call-dur">${escHtml(fmtCallDur(c.duration))}</span>` : ''}
+      ${callRecBtnsHtml(c, 'pcall-audio-' + c.id)}
+      <div class="call-audio-slot" id="pcall-audio-${escHtml(c.id)}"></div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
 function renderProspectScorePanel(p) {
   const s = parseProspectScore(p.notes);
   const body = s ? buildScoreCardBody(s)
     : p.notes ? `<div class="prospect-raw-notes">${escHtml(p.notes)}</div>` : '';
   // The panel always exists now — every prospect gets an editable note-to-self
   // (why/when to call back), even ones with no scrape data.
-  return `<div class="prospect-row-notes prospect-row-notes-scored hidden" data-notes-id="${p.id}">${body}<textarea class="call-notes-input prospect-note-input" data-note-id="${p.id}" placeholder="Note to self — why or when to call back…">${escHtml(p.call_note || '')}</textarea></div>`;
+  return `<div class="prospect-row-notes prospect-row-notes-scored hidden" data-notes-id="${p.id}">${body}${prospectCallsHtml(p)}<textarea class="call-notes-input prospect-note-input" data-note-id="${p.id}" placeholder="Note to self — why or when to call back…">${escHtml(p.call_note || '')}</textarea></div>`;
 }
 
 // Read-only card above the editable Notes textarea on a lead — same scoring
@@ -6142,6 +6175,10 @@ function renderProspectListView() {
   });
   el.querySelectorAll('.prospect-note-input').forEach(ta =>
     ta.addEventListener('input', () => saveProspectNoteDebounced(ta.dataset.noteId, ta.value)));
+  el.querySelectorAll('.call-play-btn').forEach(btn =>
+    btn.addEventListener('click', () => playRecording(btn.dataset.sid, btn, btn.dataset.slot)));
+  el.querySelectorAll('.call-dl-btn').forEach(btn =>
+    btn.addEventListener('click', () => downloadRecording(btn.dataset.sid, btn.dataset.num, +btn.dataset.ts)));
   el.querySelectorAll('[data-toggle-notes]').forEach(main =>
     main.addEventListener('click', () => {
       const id = main.dataset.toggleNotes;
