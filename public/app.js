@@ -2439,6 +2439,14 @@ async function initDialer() {
     // ring here (outbound-only never needed it). Also means tokenWillExpire
     // now fires even while idle, keeping the token fresh for free.
     twDevice.on('incoming', handleIncomingCall);
+    // The registration is what makes inbound calls ring. It silently lapses
+    // when the machine sleeps, the network drops, or the token expires while
+    // the tab is backgrounded — and nothing ever re-registered, so callbacks
+    // went straight to voicemail until a full reload (seen live 2026-09-01:
+    // every inbound leg logged no-answer/0s at Twilio). Re-register on the
+    // SDK's own unregistered event, on tab wake/network changes, and on a slow
+    // safety interval.
+    twDevice.on('unregistered', () => { ensureDialerRegistered(); });
     try { await twDevice.register(); } catch (e) { console.warn('twilio register failed:', e); }
     setDialerStatus('Ready', 'dialer-status-ready');
   } catch(e) {
@@ -2446,6 +2454,29 @@ async function initDialer() {
       ? 'Twilio not configured on the server' : 'Could not reach server', 'dialer-status-err');
   }
 }
+
+// Re-register the device if its Twilio registration lapsed. Fresh token first
+// (the old one is usually the reason it lapsed); guarded so it never runs
+// mid-call, twice at once, or against a destroyed device.
+let twReregistering = false;
+async function ensureDialerRegistered() {
+  if (!twDevice || twDevice.state !== 'unregistered') return;
+  if (twCall || twDialing || twReregistering) return;
+  twReregistering = true;
+  try {
+    twDevice.updateToken(await refreshDialerToken());
+    await twDevice.register();
+    setDialerStatus('Ready', 'dialer-status-ready');
+  } catch (e) {
+    console.warn('twilio re-register failed:', e);
+  } finally {
+    twReregistering = false;
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) ensureDialerRegistered(); });
+window.addEventListener('online', () => ensureDialerRegistered());
+window.addEventListener('focus', () => ensureDialerRegistered());
+setInterval(ensureDialerRegistered, 60 * 1000);
 
 function startCallTimer() {
   const start = Date.now();
