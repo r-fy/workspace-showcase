@@ -56,12 +56,6 @@ let dragNoteId = null;
 let mobileColIdx = 0;
 let allColumns = [];
 
-let coldEmailDaily = [];
-let coldEmailAccounts = [];
-let coldEmailReplies = [];
-let coldEmailStatus = null;
-let coldEmailDays = 30;
-const ceChartHiddenSeries = new Set();
 
 let outbox = [];
 let idb = null;
@@ -462,7 +456,7 @@ const NAV_TAB_LABELS = {
   todo: 'To Do',
   notes: 'Notes', tasks: 'Projects', expenses: 'Expenses', calendar: 'Calendar',
   crm: 'CRM', dialer: 'Dialer', 'daily-tasks': 'TRW Daily Tasks',
-  tourist: 'Tourist', 'cold-email': 'Cold Email', archive: 'Archive', connections: 'Connections',
+  tourist: 'Tourist', archive: 'Archive', connections: 'Connections',
 };
 // Tab renames across versions: the old Leads/Audits/Follow-ups tabs collapsed
 // into CRM (v160); the old Calls tab is the standalone Dialer again (v162).
@@ -583,7 +577,6 @@ function switchTab(tab) {
   document.getElementById('dialer-view')?.classList.toggle('hidden', tab !== 'dialer');
   document.getElementById('tourist-view')?.classList.toggle('hidden', tab !== 'tourist');
   document.getElementById('daily-tasks-view')?.classList.toggle('hidden', tab !== 'daily-tasks');
-  document.getElementById('cold-email-view')?.classList.toggle('hidden', tab !== 'cold-email');
   document.getElementById('connections-view')?.classList.toggle('hidden', tab !== 'connections');
   document.getElementById('notes-panel')?.classList.toggle('hidden', tab !== 'notes');
   document.getElementById('tasks-panel')?.classList.toggle('hidden', tab !== 'tasks');
@@ -592,7 +585,6 @@ function switchTab(tab) {
   document.getElementById('crm-panel')?.classList.toggle('hidden', tab !== 'crm');
   document.getElementById('dialer-panel')?.classList.toggle('hidden', tab !== 'dialer');
   document.getElementById('daily-tasks-panel')?.classList.toggle('hidden', tab !== 'daily-tasks');
-  document.getElementById('cold-email-panel')?.classList.toggle('hidden', tab !== 'cold-email');
   if (tab === 'tasks' && boards.length && !currentBoardId) selectBoard(boards[0].id);
   if (tab === 'todo') loadEisenhowerDay();
   if (tab === 'trash') loadTrash();
@@ -602,7 +594,6 @@ function switchTab(tab) {
   if (tab === 'crm') loadCrm();
   if (tab === 'dialer') loadDialerTab();
   if (tab === 'daily-tasks') loadDailyTasks();
-  if (tab === 'cold-email') loadColdEmail();
   if (tab === 'connections') loadConnections();
   if (tab !== 'expenses') { selectedExpenses.clear(); lastClickedExpenseId = null; }
 }
@@ -4942,211 +4933,6 @@ document.getElementById('rem-recur').addEventListener('change', updateRecurRows)
 document.getElementById('rem-lead').addEventListener('input', e => {
   document.getElementById('rem-lead-unit').disabled = !e.target.value.trim();
 });
-// ── Cold Email (Instantly daily reporting) ─────────────────────
-const CE_METRICS = [
-  { key: 'sent', label: 'Sent', color: '#4a90e0' },
-  { key: 'opens', label: 'Opens', color: '#4caf32' },
-  { key: 'replies', label: 'Replies', color: '#e0a94a' },
-  { key: 'bounces', label: 'Bounces', color: '#e05a4a' },
-];
-
-async function loadColdEmail() {
-  try {
-    [coldEmailDaily, coldEmailAccounts, coldEmailReplies, coldEmailStatus] = await Promise.all([
-      apiCall('GET', '/cold-email/daily?days=' + coldEmailDays),
-      apiCall('GET', '/cold-email/accounts'),
-      apiCall('GET', '/cold-email/replies'),
-      apiCall('GET', '/cold-email/status'),
-    ]);
-  } catch (e) { toast('Could not load cold email data'); return; }
-  renderColdEmail();
-}
-
-function ceLastRefreshedHtml() {
-  const s = coldEmailStatus;
-  if (!s) return '';
-  if (!s.configured) return '<span style="color:#e0a94a;">Instantly key not configured on the server</span>';
-  if (!s.last_success_at) return '<span style="color:#999;">Never refreshed yet</span>';
-  const errBit = s.last_error ? ` <span style="color:#e05a4a;" title="${escHtml(s.last_error)}">(last attempt failed)</span>` : '';
-  return `<span style="color:#999;">Last refreshed: ${escHtml(fmtDate(s.last_success_at))}</span>${errBit}`;
-}
-
-async function refreshColdEmail() {
-  toast('Refreshing…');
-  try {
-    await apiCall('POST', '/cold-email/pull');
-    toast('Refreshed');
-  } catch (e) { toast('Refresh failed — check INSTANTLY_API_KEY is configured'); }
-  await loadColdEmail();
-}
-
-function ceFmtCompact(v) {
-  if (v >= 1000) return (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'K';
-  return String(Math.round(v));
-}
-
-function ceFmtDateLabel(dateStr) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return `${MONTH_ABBR[m - 1]} ${d}`;
-}
-
-function ceByDate(rows) {
-  const byDate = {};
-  for (const r of rows) {
-    const b = (byDate[r.date] ??= { sent: 0, opens: 0, replies: 0, bounces: 0, unread_replies: 0 });
-    b.sent += r.sent; b.opens += r.opens; b.replies += r.replies; b.bounces += r.bounces;
-    b.unread_replies += r.unread_replies;
-  }
-  return byDate;
-}
-
-function ceStatTilesHtml(rows) {
-  const totals = rows.reduce((a, r) => ({
-    sent: a.sent + r.sent, opens: a.opens + r.opens, replies: a.replies + r.replies, bounces: a.bounces + r.bounces,
-  }), { sent: 0, opens: 0, replies: 0, bounces: 0 });
-  const pct = (n, d) => d ? (100 * n / d).toFixed(1) + '%' : '—';
-  const tiles = [
-    ['Sent', totals.sent],
-    ['Open rate', pct(totals.opens, totals.sent)],
-    ['Reply rate', pct(totals.replies, totals.sent)],
-    ['Bounce rate', pct(totals.bounces, totals.sent)],
-  ];
-  return `<div class="exp-chart-stats" style="padding:0 0 24px;">${tiles.map(([label, val]) => `
-    <div class="exp-chart-stat">
-      <span class="exp-chart-stat-val">${escHtml(String(val))}</span>
-      <span class="exp-chart-stat-label">${escHtml(label)}</span>
-    </div>`).join('')}</div>`;
-}
-
-function ceChartHtml(rows) {
-  const byDate = ceByDate(rows);
-  const dates = Object.keys(byDate).sort();
-  const legend = CE_METRICS.map(m => {
-    const hidden = ceChartHiddenSeries.has(m.key);
-    return `<span class="exp-chart-legend-item${hidden ? ' hidden-series' : ''}" data-metric="${m.key}" title="Click to ${hidden ? 'show' : 'isolate/hide'}"><span class="exp-chart-legend-swatch" style="background:${m.color}"></span>${m.label}</span>`;
-  }).join('');
-  if (dates.length < 2) {
-    return `<div class="expense-chart-wrap"><div class="exp-chart-legend">${legend}</div><div class="expense-chart-empty">Not enough days of data yet — check back after the pull has run a few times.</div></div>`;
-  }
-  const visible = CE_METRICS.filter(m => !ceChartHiddenSeries.has(m.key));
-  let maxVal = 0;
-  for (const m of visible) for (const dt of dates) maxVal = Math.max(maxVal, byDate[dt][m.key] || 0);
-  const niceMax = niceCeil(maxVal || 1);
-  const W = 900, H = 260, padL = 44, padR = 16, padT = 16, padB = 30;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const xFor = i => padL + (dates.length > 1 ? (i / (dates.length - 1)) * plotW : plotW / 2);
-  const yFor = v => padT + plotH - (v / niceMax) * plotH;
-
-  let gridLines = '', yLabels = '';
-  for (let i = 0; i <= 4; i++) {
-    const val = niceMax * i / 4, y = yFor(val);
-    gridLines += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" class="exp-chart-grid"/>`;
-    yLabels += `<text x="${padL - 8}" y="${y + 4}" class="exp-chart-axis-label" text-anchor="end">${ceFmtCompact(val)}</text>`;
-  }
-  let xLabels = '';
-  const labelStep = dates.length > 10 ? Math.ceil(dates.length / 10) : 1;
-  dates.forEach((dt, i) => {
-    if (i % labelStep !== 0 && i !== dates.length - 1) return;
-    xLabels += `<text x="${xFor(i)}" y="${H - 8}" class="exp-chart-axis-label" text-anchor="middle">${ceFmtDateLabel(dt)}</text>`;
-  });
-  let paths = '';
-  visible.forEach(m => {
-    const pts = dates.map((dt, i) => `${xFor(i)},${yFor(byDate[dt][m.key] || 0)}`).join(' ');
-    paths += `<polyline points="${pts}" fill="none" stroke="${m.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-    dates.forEach((dt, i) => {
-      paths += `<circle cx="${xFor(i)}" cy="${yFor(byDate[dt][m.key] || 0)}" r="3" fill="${m.color}"><title>${ceFmtDateLabel(dt)}: ${byDate[dt][m.key] || 0} ${m.label.toLowerCase()}</title></circle>`;
-    });
-  });
-  return `
-    <div class="expense-chart-wrap">
-      <div class="exp-chart-legend">${legend}</div>
-      <svg class="exp-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-        ${gridLines}${yLabels}${xLabels}${paths}
-      </svg>
-    </div>`;
-}
-
-function ceCampaignTableHtml(rows) {
-  const byCampaign = {};
-  for (const r of rows) {
-    const c = (byCampaign[r.campaign_id] ??= { name: r.campaign_name || r.campaign_id, sent: 0, replies: 0, unread: 0, lastDate: '' });
-    c.sent += r.sent; c.replies += r.replies;
-    if (r.date > c.lastDate) { c.lastDate = r.date; c.unread = r.unread_replies; }
-  }
-  const campaigns = Object.values(byCampaign).sort((a, b) => b.sent - a.sent);
-  if (!campaigns.length) return '<div class="expense-chart-empty">No campaign data yet.</div>';
-  return `<table class="ce-table"><thead><tr><th>Campaign</th><th>Sent</th><th>Replies</th><th>Unread</th></tr></thead><tbody>
-    ${campaigns.map(c => `<tr><td>${escHtml(c.name)}</td><td>${c.sent}</td><td>${c.replies}</td><td>${c.unread ? `<span class="ce-unread-badge">${c.unread}</span>` : '—'}</td></tr>`).join('')}
-  </tbody></table>`;
-}
-
-function ceInterestBadge(v) {
-  if (v == null) return '';
-  if (v > 0) return '<span class="ce-interest-badge ce-interest-pos">Interested</span>';
-  if (v < 0) return '<span class="ce-interest-badge ce-interest-neg">Not interested</span>';
-  return '<span class="ce-interest-badge ce-interest-neu">Neutral</span>';
-}
-
-function ceRepliesHtml(replies) {
-  if (!replies.length) return '<div class="expense-chart-empty">No replies yet.</div>';
-  return replies.map(r => `
-    <div class="ce-reply-card${r.is_unread ? ' ce-reply-unread' : ''}">
-      <div class="ce-reply-head">
-        <span class="ce-reply-from">${escHtml(r.from_name || r.from_email)}</span>
-        <span class="ce-reply-date">${escHtml(fmtDate(r.timestamp_email))}</span>
-      </div>
-      <div class="ce-reply-subject">${escHtml(r.subject)} ${ceInterestBadge(r.ai_interest)}${r.is_unread ? '<span class="ce-unread-badge" style="margin-left:6px;">unread</span>' : ''}</div>
-      <div class="ce-reply-preview">${escHtml(r.preview)}</div>
-      <div class="ce-reply-meta">${escHtml(r.campaign_name || r.campaign_id)} · ${escHtml(r.from_email)}</div>
-    </div>`).join('');
-}
-
-function ceAccountTableHtml(accounts) {
-  if (!accounts.length) return '<div class="expense-chart-empty">No account health data yet.</div>';
-  return `<table class="ce-table"><thead><tr><th>Inbox</th><th>Warmup score</th><th>Daily limit</th></tr></thead><tbody>
-    ${accounts.map(a => `<tr><td>${escHtml(a.account_email)}</td><td>${a.warmup_score ?? '—'}</td><td>${a.daily_limit ?? '—'}</td></tr>`).join('')}
-  </tbody></table>`;
-}
-
-function renderColdEmail() {
-  const area = document.getElementById('cold-email-area');
-  if (!area) return;
-  area.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-      <h2 style="margin:0;font-size:16px;color:#e0e0e0;">Cold Email</h2>
-      <div>
-        <select id="ce-days-select" style="margin-right:8px;">
-          <option value="7"${coldEmailDays === 7 ? ' selected' : ''}>Last 7 days</option>
-          <option value="30"${coldEmailDays === 30 ? ' selected' : ''}>Last 30 days</option>
-          <option value="90"${coldEmailDays === 90 ? ' selected' : ''}>Last 90 days</option>
-        </select>
-        <button id="ce-refresh-inline-btn">↻ Refresh now</button>
-      </div>
-    </div>
-    <div style="font-size:12px;margin-bottom:16px;">${ceLastRefreshedHtml()}</div>
-    ${ceStatTilesHtml(coldEmailDaily)}
-    ${ceChartHtml(coldEmailDaily)}
-    <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Recent replies</h3>
-    <div class="ce-replies-list">${ceRepliesHtml(coldEmailReplies)}</div>
-    <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Campaigns</h3>
-    ${ceCampaignTableHtml(coldEmailDaily)}
-    <h3 style="font-size:13px;color:#999;margin:24px 0 8px;">Inbox health</h3>
-    ${ceAccountTableHtml(coldEmailAccounts)}
-  `;
-  area.querySelectorAll('.exp-chart-legend-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const key = el.dataset.metric;
-      ceChartHiddenSeries.has(key) ? ceChartHiddenSeries.delete(key) : ceChartHiddenSeries.add(key);
-      renderColdEmail();
-    });
-  });
-  document.getElementById('ce-days-select')?.addEventListener('change', e => {
-    coldEmailDays = parseInt(e.target.value, 10);
-    loadColdEmail();
-  });
-  document.getElementById('ce-refresh-inline-btn')?.addEventListener('click', refreshColdEmail);
-}
-
 document.getElementById('rem-weekdays').addEventListener('click', e => {
   const btn = e.target.closest('.rem-wd');
   if (!btn) return;
@@ -5206,7 +4992,6 @@ document.getElementById('disposition-custom').addEventListener('keydown', e => {
   pickDisposition(name);
 });
 document.getElementById('new-daily-task-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('daily-tasks'); newDailyTaskPaste(); });
-document.getElementById('cold-email-refresh-btn').addEventListener('click', e => { e.stopPropagation(); switchTab('cold-email'); refreshColdEmail(); });
 document.getElementById('bulk-delete-btn').addEventListener('click',bulkDeleteTasks);
 document.getElementById('cancel-sel-btn').addEventListener('click',()=>{selectedTasks.clear();updateBulkActions();renderKanban();});
 document.getElementById('modal-close').addEventListener('click',closeTaskModal);
@@ -5219,10 +5004,10 @@ document.getElementById('modal-board-select')?.addEventListener('change', e => {
 });
 document.getElementById('task-modal').addEventListener('click',e=>{if(e.target===document.getElementById('task-modal'))closeTaskModal();});
 
-// ── Leads (CRM hub tying audits/followups/cold-email replies together) ──
+// ── Leads (CRM hub tying audits/followups together) ──
 // See CRM-UNIFICATION-PLAN.md. No relational/blob split here — the list rows
 // are server-computed rollups, the detail record carries the full linked
-// audits/followups/replies arrays for the merged timeline.
+// audits/followups arrays for the merged timeline.
 let leads = [];
 let currentLeadId = null;
 let currentLead = null; // full record from GET /api/leads/:id
@@ -5280,7 +5065,6 @@ function renderLeadsList() {
     const badges = [];
     if (l.disposition) badges.push(`<span class="note-tag" style="--tag-c:${tagColor(l.disposition)}">${escHtml(l.disposition)}</span>`);
     if (l.audit_count) badges.push(`<span class="note-tag">${l.audit_count} audit${l.audit_count > 1 ? 's' : ''}</span>`);
-    if (l.unread_replies) badges.push(`<span class="note-tag" style="--tag-c:#c0392b">${l.unread_replies} unread</span>`);
     if (l.next_followup_label) {
       const overdue = l.next_followup_due && l.next_followup_due < Date.now();
       badges.push(`<span class="note-tag"${overdue ? ' style="--tag-c:#c0392b"' : ''}>${overdue ? 'Overdue: ' : 'Next: '}${escHtml(l.next_followup_label)}</span>`);
@@ -5294,7 +5078,7 @@ function renderLeadsList() {
   }).join('') || '<div style="padding:16px 12px;color:#444;font-size:12px;">No leads yet.</div>';
   area.innerHTML = `<div class="note-item${leadsView === 'unmatched' ? ' active' : ''}" data-unmatched="1" style="border-left:2px solid #c9a227;">
       <div class="note-item-title">⚠ Unmatched</div>
-      <div class="note-item-snippet">Audits, follow-ups, replies not yet linked to a lead</div>
+      <div class="note-item-snippet">Audits and follow-ups not yet linked to a lead</div>
     </div>` + rows;
   area.querySelectorAll('.note-item[data-id]').forEach(el => el.addEventListener('click', () => openLead(el.dataset.id)));
   area.querySelector('[data-unmatched]')?.addEventListener('click', openUnmatched);
@@ -5491,7 +5275,7 @@ async function saveLead() {
 
 async function deleteCurrentLead() {
   if (!currentLeadId) return;
-  if (!confirm('Delete this lead? Linked audits/follow-ups/replies stay — they just become unlinked.')) return;
+  if (!confirm('Delete this lead? Linked audits/follow-ups stay — they just become unlinked.')) return;
   const id = currentLeadId;
   try { await apiCall('DELETE', '/leads/' + id); } catch (e) {}
   leads = leads.filter(l => l.id !== id);
@@ -5519,20 +5303,7 @@ function leadTimelineRowHtml(item) {
       ${unlinkBtn}
     </div>`;
   }
-  // Reply rows expand inline on click (rfy-crm §7.3 — the shipped hub gave
-  // no way to actually read a reply). preview is everything the DB stores
-  // (Instantly's content_preview), so this IS the full available content.
-  return `<div class="lead-timeline-row lead-timeline-reply" data-reply-toggle="${item.id}">
-    <span class="lead-timeline-type">Reply</span>
-    <span class="lead-timeline-label">${escHtml(item.from_name || item.from_email)}: ${escHtml(item.subject || '')}</span>
-    <span class="lead-timeline-date">${fmtDate(item.ts)}</span>
-    ${unlinkBtn}
-  </div>
-  <div class="lead-reply-detail hidden" id="reply-detail-${item.id}">
-    <div class="lead-reply-meta">${escHtml(item.from_name || '')} &lt;${escHtml(item.from_email || '')}&gt;${item.campaign_name ? ' · ' + escHtml(item.campaign_name) : ''}</div>
-    <div class="lead-reply-subject">${escHtml(item.subject || '(no subject)')}</div>
-    <div class="lead-reply-body">${escHtml(item.preview || '(no preview stored)')}</div>
-  </div>`;
+  return '';
 }
 
 function renderLeadTimeline() {
@@ -5541,15 +5312,12 @@ function renderLeadTimeline() {
   const items = [
     ...currentLead.audits.map(a => ({ kind: 'audit', ts: a.updated_at, ...a })),
     ...currentLead.followups.map(f => ({ kind: 'followup', ts: f.updated_at, ...f })),
-    ...currentLead.replies.map(r => ({ kind: 'reply', ts: r.timestamp_email, ...r })),
   ].sort((a, b) => b.ts - a.ts);
   wrap.innerHTML = `<div class="audit-section-title">Timeline</div>` +
     (items.length ? items.map(leadTimelineRowHtml).join('')
       : '<div style="padding:8px 0;color:#444;font-size:12px;">Nothing linked yet — link items from the Unmatched list.</div>');
   wrap.querySelectorAll('[data-open-audit]').forEach(el => el.addEventListener('click', () => switchCrmSub('audit', el.dataset.openAudit)));
   wrap.querySelectorAll('[data-open-followup]').forEach(el => el.addEventListener('click', () => switchCrmSub('followup', el.dataset.openFollowup)));
-  wrap.querySelectorAll('[data-reply-toggle]').forEach(el => el.addEventListener('click', () =>
-    document.getElementById('reply-detail-' + el.dataset.replyToggle)?.classList.toggle('hidden')));
   wrap.querySelectorAll('[data-unlink]').forEach(el => el.addEventListener('click', async e => {
     e.stopPropagation();
     try { await apiCall('POST', '/leads/' + currentLeadId + '/unlink', { type: el.dataset.unlinkType, id: el.dataset.unlink }); toast('Unlinked'); openLead(currentLeadId); }
@@ -5559,7 +5327,7 @@ function renderLeadTimeline() {
 
 function renderUnmatchedView() {
   const area = document.getElementById('lead-editor-area');
-  const u = leadUnmatched || { audits: [], followups: [], replies: [] };
+  const u = leadUnmatched || { audits: [], followups: [] };
   function section(title, arr, type, labelFn) {
     if (!arr.length) return '';
     return `<div class="audit-section-title">${title}</div>` + arr.map(x => `
@@ -5570,13 +5338,12 @@ function renderUnmatchedView() {
         <button class="cancel-sel-btn" data-dismiss="${x.id}" data-dismiss-type="${type}" title="Delete — not useful, don't want to link it">🗑</button>
       </div>`).join('');
   }
-  const empty = !u.audits.length && !u.followups.length && !u.replies.length;
+  const empty = !u.audits.length && !u.followups.length;
   area.innerHTML = `
     <div class="daily-task-form">
       <div class="audit-section-title" style="margin-top:0;">Unmatched</div>
       ${section('Audits', u.audits, 'audit', x => x.business_name)}
       ${section('Follow-ups', u.followups, 'followup', x => x.business_name || x.lead_name)}
-      ${section('Replies', u.replies, 'reply', x => (x.from_name || x.from_email) + ' — ' + (x.subject || ''))}
       ${empty ? '<div style="padding:8px 0;color:#444;font-size:12px;">Nothing unmatched.</div>' : ''}
     </div>`;
   area.querySelectorAll('[data-attach]').forEach(btn => btn.addEventListener('click', () => attachToExistingLead(btn.dataset.attachType, btn.dataset.attach)));
@@ -5584,7 +5351,7 @@ function renderUnmatchedView() {
   area.querySelectorAll('[data-dismiss]').forEach(btn => btn.addEventListener('click', () => dismissUnmatched(btn.dataset.dismissType, btn.dataset.dismiss)));
 }
 
-const UNMATCHED_DELETE_ROUTE = { audit: '/audits/', followup: '/followups/', reply: '/replies/' };
+const UNMATCHED_DELETE_ROUTE = { audit: '/audits/', followup: '/followups/' };
 async function dismissUnmatched(type, id) {
   if (!confirm('Delete this permanently?')) return;
   try {

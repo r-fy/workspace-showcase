@@ -1356,25 +1356,6 @@ header {
 .audit-status-pill.status-sent { background: #123018; color: #5fc83b; }
 .audit-type-pill { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: #1a2233; color: #7fa8e0; }
 
-/* ── Cold Email ─────────────────────────────────────────────── */
-.ce-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.ce-table th { text-align: left; color: #a3a4a8; font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 10px; border-bottom: 1px solid #2a2a2a; }
-.ce-table td { padding: 8px 10px; color: #ccc; border-bottom: 1px solid #1c1c1c; }
-.ce-unread-badge { display: inline-block; padding: 1px 7px; border-radius: 8px; background: #3a2410; color: #e0a94a; font-size: 11px; }
-.ce-replies-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
-.ce-reply-card { background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; padding: 10px 14px; }
-.ce-reply-card.ce-reply-unread { border-left: 2px solid #e0a94a; }
-.ce-reply-head { display: flex; justify-content: space-between; font-size: 12px; color: #999; margin-bottom: 4px; }
-.ce-reply-from { font-weight: 600; color: #ccc; }
-.ce-reply-subject { font-size: 13px; color: #e0e0e0; margin-bottom: 4px; }
-.ce-reply-preview { font-size: 12px; color: #999; white-space: pre-wrap; overflow: hidden; text-overflow: ellipsis; max-height: 3.6em; }
-.ce-reply-meta { font-size: 11px; color: #8f9095; margin-top: 6px; }
-.ce-interest-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 6px; }
-.ce-interest-pos { background: #123018; color: #5fc83b; }
-.ce-interest-neg { background: #3a1414; color: #e05a4a; }
-.ce-interest-neu { background: #262626; color: #999; }
-#cold-email-area select, #cold-email-area button { background: #161616; border: 1px solid #2a2a2a; color: #ccc; border-radius: 4px; padding: 6px 10px; font-size: 12px; font-family: inherit; cursor: pointer; }
-
 #audit-editor-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .audit-toolbar {
   display: flex; align-items: center; gap: 10px; padding: 10px 20px;
@@ -1393,9 +1374,9 @@ header {
 .audit-section-title:first-child { margin-top: 0; }
 
 /* Leads timeline / unmatched triage rows — merged multi-source list, no
-   existing row template fits (audit/followup/reply each have different
-   fields), so this is genuinely new markup rather than reused audit-item/
-   note-item styling. */
+   existing row template fits (audit/followup each have different fields),
+   so this is genuinely new markup rather than reused audit-item/note-item
+   styling. */
 .lead-timeline-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1c1c1c; font-size: 13px; cursor: pointer; }
 .lead-timeline-row:last-child { border-bottom: none; }
 .lead-timeline-type { flex: 0 0 auto; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #5fc83b; width: 64px; }
@@ -1644,19 +1625,9 @@ header {
   display: flex; align-items: center; justify-content: center; z-index: 650;
 }
 
-/* Inline reply detail in the lead timeline (§7.3) */
-.lead-reply-detail {
-  padding: 8px 12px 12px 74px; border-bottom: 1px solid #1c1c1c;
-  background: #101010; font-size: 13px;
-}
-.lead-reply-meta { color: #a3a4a8; font-size: 12px; margin-bottom: 4px; }
-.lead-reply-subject { color: #e0e0e0; font-weight: 600; margin-bottom: 6px; }
-.lead-reply-body { color: #bbb; white-space: pre-wrap; line-height: 1.5; }
-
 @media (max-width: 640px) {
   .crm-detail-header { gap: 8px; padding: 8px 10px; }
   .crm-lead-name { max-width: 100%; }
-  .lead-reply-detail { padding-left: 12px; }
 }
 
 /* ── Inbound calls (v161): ring banner ─────────────────────────── */

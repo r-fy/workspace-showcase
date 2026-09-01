@@ -236,7 +236,7 @@ Fields for create/update: amount, date (YYYY-MM-DD), category?, payee?, note?, s
 // ── workspace_leads ────────────────────────────────────────────────
 defineTool(
   'workspace_leads',
-  `CRM leads. action: "list" (with rollup badges) | "get" (id — includes its audits/followups/replies timeline) | "unmatched" (audits/followups/replies not yet linked to a lead) | "create" | "update" (id + fields) | "delete" (id) | "link" (id=lead id, type: 'audit'|'followup'|'reply', item_id) | "unlink" (same shape as link) | "merge" (id=source lead id, into_lead_id=target — repoints children, soft-deletes source).
+  `CRM leads. action: "list" (with rollup badges) | "get" (id — includes its audits/followups timeline) | "unmatched" (audits/followups not yet linked to a lead) | "create" | "update" (id + fields) | "delete" (id) | "link" (id=lead id, type: 'audit'|'followup', item_id) | "unlink" (same shape as link) | "merge" (id=source lead id, into_lead_id=target — repoints children, soft-deletes source).
 Fields for create/update: business_name, website?, primary_email?, city?, niche?, status?, notes?, contact_name?, phone_number?, address?, source?, disposition?.`,
   {
     action: z.enum(['list', 'get', 'unmatched', 'create', 'update', 'delete', 'link', 'unlink', 'merge']),
@@ -253,8 +253,8 @@ Fields for create/update: business_name, website?, primary_email?, city?, niche?
     address: z.string().optional(),
     source: z.string().optional(),
     disposition: z.string().optional(),
-    type: z.enum(['audit', 'followup', 'reply']).optional().describe('for link/unlink'),
-    item_id: z.string().optional().describe('the audit/followup/reply id, for link/unlink'),
+    type: z.enum(['audit', 'followup']).optional().describe('for link/unlink'),
+    item_id: z.string().optional().describe('the audit/followup id, for link/unlink'),
     into_lead_id: z.string().optional().describe('merge target lead id'),
   },
   (a) => {
@@ -426,28 +426,6 @@ category is one of: business_masters, daily_marketing, daily_seo_task.`,
       case 'delete': return api('DELETE', `/api/daily-tasks/${need(a.id, 'id')}`);
       case 'eisenhower_get': return api('GET', `/api/eisenhower/${need(a.date, 'date')}`);
       case 'eisenhower_put': return api('PUT', `/api/eisenhower/${need(a.date, 'date')}`, { do: a.eis_do, schedule: a.eis_schedule, delegate: a.eis_delegate, delete: a.eis_delete });
-    }
-  }
-);
-
-// ── workspace_cold_email ──────────────────────────────────────────
-defineTool(
-  'workspace_cold_email',
-  `Cold email reporting, read-only mirror of Instantly (plus a manual trigger to pull fresh data). action: "daily" (days? default 30, max 365 — per-campaign daily rollup) | "accounts" (sending-account warmup health) | "pull" (trigger an immediate re-pull from Instantly, normally runs hourly) | "replies" (limit? default 30, max 100) | "status" (is it configured, last pull attempt/success/error) | "delete_reply" (id — hard delete, dismissing a reply can resurface it on the next pull if Instantly still returns it).`,
-  {
-    action: z.enum(['daily', 'accounts', 'pull', 'replies', 'status', 'delete_reply']),
-    days: z.number().optional(),
-    limit: z.number().optional(),
-    id: z.string().optional(),
-  },
-  (a) => {
-    switch (a.action) {
-      case 'daily': return api('GET', `/api/cold-email/daily${a.days ? '?days=' + a.days : ''}`);
-      case 'accounts': return api('GET', '/api/cold-email/accounts');
-      case 'pull': return api('POST', '/api/cold-email/pull');
-      case 'replies': return api('GET', `/api/cold-email/replies${a.limit ? '?limit=' + a.limit : ''}`);
-      case 'status': return api('GET', '/api/cold-email/status');
-      case 'delete_reply': return api('DELETE', `/api/replies/${need(a.id, 'id')}`);
     }
   }
 );

@@ -128,13 +128,6 @@
           <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
           <button class="nav-menu-item" data-tab="connections">Connections</button>
         </div>
-        <div class="nav-row" draggable="true" data-tab="cold-email">
-          <button class="icon-btn nav-expand-btn" title="Switch section">▾</button>
-          <button class="icon-btn nav-reorder-btn nav-up-btn" title="Move up">▲</button>
-          <button class="icon-btn nav-reorder-btn nav-down-btn" title="Move down">▼</button>
-          <button class="nav-menu-item" data-tab="cold-email">Cold Email</button>
-          <button class="icon-btn nav-add-btn" id="cold-email-refresh-btn" title="Refresh now">↻</button>
-        </div>
       </div>
       <div class="nav-popup hidden" id="nav-popup"></div>
       <div id="notes-panel" class="panel-section">
@@ -187,9 +180,6 @@
       <div id="daily-tasks-panel" class="panel-section hidden">
         <div id="daily-task-cat-bar" class="tags-bar" style="display:none"></div>
         <div class="notes-list" id="daily-tasks-list"></div>
-      </div>
-      <div id="cold-email-panel" class="panel-section hidden">
-        <div class="ce-campaign-list" id="ce-campaign-list"></div>
       </div>
       <div class="left-panel-footer">
         <button class="icon-btn" id="archive-btn" title="Archive">🗄</button>
@@ -406,11 +396,6 @@
           Select an entry, or hit + to paste a new one.
         </div>
       </div>
-    </div>
-
-    <!-- Cold Email view (Instantly daily reporting) -->
-    <div class="view hidden" id="cold-email-view" style="flex-direction:column;overflow-y:auto;">
-      <div id="cold-email-area" style="padding:20px;"></div>
     </div>
 
     <div class="view hidden" id="connections-view" style="flex-direction:column;overflow-y:auto;">

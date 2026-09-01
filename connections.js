@@ -73,22 +73,6 @@ const CHECKS = [
     },
   },
   {
-    id: 'instantly', name: 'Instantly', group: 'plan', used_by: 'cold email, CRM replies', alert_at: null,
-    env: ['INSTANTLY_API_KEY'],
-    async run(env) {
-      const h = { Authorization: 'Bearer ' + env.INSTANTLY_API_KEY };
-      const [plan, accts] = await Promise.all([
-        get('https://api.instantly.ai/api/v2/workspace-billing/plan-details', { headers: h }),
-        get('https://api.instantly.ai/api/v2/accounts?limit=100', { headers: h }),
-      ]);
-      if (!plan.ok && !accts.ok) return { status: 'down', detail: `HTTP ${plan.status}` };
-      const items = accts.json?.items || [];
-      const active = items.filter(a => a.status === 1).length;
-      const name = plan.json?.plan_name || plan.json?.name || plan.json?.plan || '';
-      return { status: 'up', detail: `${name ? name + ', ' : ''}${active}/${items.length} accounts active` };
-    },
-  },
-  {
     id: 'n8n', name: 'n8n (self hosted)', group: 'plan', used_by: 'scrape button, prospecting', alert_at: null,
     env: [],
     async run(env) {

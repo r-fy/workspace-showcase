@@ -344,55 +344,13 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_eisenhower_user_date ON eisenhower_days(user_id, entry_date);
 `);
 
-// Cold Email tab: daily rollup pulled from Instantly, one row per campaign per
-// day — relational (not a blob like audits/daily_tasks) because this data is
-// machine-pulled and time-series, the chart needs to query across dates with
-// plain SQL rather than parsing JSON blobs client-side.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS cold_email_daily (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'owner',
-    date TEXT NOT NULL,
-    campaign_id TEXT NOT NULL,
-    campaign_name TEXT NOT NULL DEFAULT '',
-    sent INTEGER NOT NULL DEFAULT 0,
-    opens INTEGER NOT NULL DEFAULT 0,
-    replies INTEGER NOT NULL DEFAULT 0,
-    bounces INTEGER NOT NULL DEFAULT 0,
-    unread_replies INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL
-  );
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_cold_email_daily_unique ON cold_email_daily(user_id, date, campaign_id);
-  CREATE INDEX IF NOT EXISTS idx_cold_email_daily_date ON cold_email_daily(user_id, date);
+// Cold Email tab removed 2026-09-01 (data exported to the outreach folder
+// first). These drops clear the old Instantly-mirror tables from live DBs.
+migrate(`DROP TABLE IF EXISTS cold_email_daily`);
+migrate(`DROP TABLE IF EXISTS cold_email_replies`);
+migrate(`DROP TABLE IF EXISTS cold_email_account_health`);
 
-  CREATE TABLE IF NOT EXISTS cold_email_replies (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL DEFAULT 'owner',
-    campaign_id TEXT NOT NULL DEFAULT '',
-    campaign_name TEXT NOT NULL DEFAULT '',
-    from_email TEXT NOT NULL DEFAULT '',
-    from_name TEXT NOT NULL DEFAULT '',
-    subject TEXT NOT NULL DEFAULT '',
-    preview TEXT NOT NULL DEFAULT '',
-    thread_id TEXT NOT NULL DEFAULT '',
-    is_unread INTEGER NOT NULL DEFAULT 0,
-    ai_interest INTEGER DEFAULT NULL,
-    timestamp_email INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_cold_email_replies_ts ON cold_email_replies(user_id, timestamp_email);
-
-  CREATE TABLE IF NOT EXISTS cold_email_account_health (
-    account_email TEXT NOT NULL,
-    user_id TEXT NOT NULL DEFAULT 'owner',
-    warmup_score INTEGER DEFAULT NULL,
-    daily_limit INTEGER DEFAULT NULL,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (user_id, account_email)
-  );
-`);
-
-// Leads tab: hub row tying together audits / followups / cold_email_replies
+// Leads tab: hub row tying together audits / followups
 // for the same real-world prospect. website_domain is the only automatic
 // matching key (normalized in app code); business_name text is a human hint,
 // never auto-matched. See CRM-UNIFICATION-PLAN.md.
@@ -419,10 +377,8 @@ db.exec(`
 `);
 addColumn(`ALTER TABLE audits ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
 addColumn(`ALTER TABLE followups ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
-addColumn(`ALTER TABLE cold_email_replies ADD COLUMN lead_id TEXT REFERENCES leads(id) DEFAULT NULL`);
 migrate(`CREATE INDEX IF NOT EXISTS idx_audits_lead ON audits(lead_id)`);
 migrate(`CREATE INDEX IF NOT EXISTS idx_followups_lead ON followups(lead_id)`);
-migrate(`CREATE INDEX IF NOT EXISTS idx_cold_email_replies_lead ON cold_email_replies(lead_id)`);
 
 // Client Connections tab: per-lead credentials (lead_secrets) and the last
 // pulled result per source (lead_connections) — separate from the account-wide
@@ -984,16 +940,6 @@ app.delete('/api/followups/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-// Hard delete — cold_email_replies has no trash tier (it's a synced mirror of
-// Instantly's inbox, not user-authored data). Dismissing a stale/spam auto-
-// reply here can resurface it on the next hourly pull if Instantly still
-// returns it in its last-50-received window; nothing to do about that short
-// of tracking dismissals separately, not worth it unless it's a real problem.
-app.delete('/api/replies/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM cold_email_replies WHERE id=? AND user_id=?').run(req.params.id, req.userId);
-  res.json({ ok: true });
-});
-
 // Stateless render — used for the live preview + the printable/exportable
 // document. Takes data straight from the request so unsaved edits preview
 // immediately, no round trip through the DB.
@@ -1005,7 +951,7 @@ app.post('/api/audits/render', auth, (req, res) => {
   }
 });
 
-// ── Leads (CRM hub tying audits/followups/cold_email_replies together) ──
+// ── Leads (CRM hub tying audits/followups together) ──
 // See CRM-UNIFICATION-PLAN.md. business_name text is a human hint only —
 // website_domain is the one automatic matching key, normalized via normalizeDomain().
 function leadRollup(lead) {
@@ -1018,14 +964,12 @@ function leadRollup(lead) {
       if (next) { next_followup_due = next.due_at; next_followup_label = next.label; }
     } catch {}
   }
-  const unreadReplies = db.prepare('SELECT COUNT(*) c FROM cold_email_replies WHERE lead_id=? AND is_unread=1').get(lead.id).c;
   const lastActivity = db.prepare(`
     SELECT MAX(x) m FROM (
       SELECT MAX(updated_at) x FROM audits WHERE lead_id=? AND deleted_at IS NULL
       UNION ALL SELECT MAX(updated_at) FROM followups WHERE lead_id=? AND deleted_at IS NULL
-      UNION ALL SELECT MAX(timestamp_email) FROM cold_email_replies WHERE lead_id=?
-    )`).get(lead.id, lead.id, lead.id).m;
-  return { audit_count: auditCount, unread_replies: unreadReplies, next_followup_due, next_followup_label, last_activity_at: lastActivity || lead.updated_at };
+    )`).get(lead.id, lead.id).m;
+  return { audit_count: auditCount, next_followup_due, next_followup_label, last_activity_at: lastActivity || lead.updated_at };
 }
 
 app.get('/api/leads', auth, (req, res) => {
@@ -1036,8 +980,7 @@ app.get('/api/leads', auth, (req, res) => {
 app.get('/api/leads/unmatched', auth, (req, res) => {
   const audits = db.prepare('SELECT id, business_name, status, updated_at FROM audits WHERE lead_id IS NULL AND deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
   const followups = db.prepare('SELECT id, lead_name, business_name, status, updated_at FROM followups WHERE lead_id IS NULL AND deleted_at IS NULL AND user_id=? ORDER BY updated_at DESC').all(req.userId);
-  const replies = db.prepare('SELECT id, from_email, from_name, subject, timestamp_email FROM cold_email_replies WHERE lead_id IS NULL AND user_id=? ORDER BY timestamp_email DESC').all(req.userId);
-  res.json({ audits, followups, replies });
+  res.json({ audits, followups });
 });
 
 app.get('/api/leads/:id', auth, (req, res) => {
@@ -1047,8 +990,7 @@ app.get('/api/leads/:id', auth, (req, res) => {
     .map(a => { let report_type = 'seo'; try { report_type = JSON.parse(a.data).report_type || 'seo'; } catch {} return { id: a.id, business_name: a.business_name, status: a.status, report_type, updated_at: a.updated_at }; });
   const leadFollowups = db.prepare('SELECT id, lead_name, business_name, status, data, updated_at FROM followups WHERE lead_id=? AND deleted_at IS NULL ORDER BY updated_at DESC').all(lead.id)
     .map(f => { let touches = []; try { touches = JSON.parse(f.data).touches || []; } catch {} const next = touches.find(t => t.status === 'pending'); return { id: f.id, lead_name: f.lead_name, business_name: f.business_name, status: f.status, updated_at: f.updated_at, next_due_at: next ? next.due_at : null, next_label: next ? next.label : null }; });
-  const leadReplies = db.prepare('SELECT id, campaign_id, campaign_name, from_email, from_name, subject, preview, is_unread, ai_interest, timestamp_email FROM cold_email_replies WHERE lead_id=? ORDER BY timestamp_email DESC').all(lead.id);
-  res.json({ ...lead, audits: leadAudits, followups: leadFollowups, replies: leadReplies });
+  res.json({ ...lead, audits: leadAudits, followups: leadFollowups });
 });
 
 // Prospect notes (Outscraper scoring template, see parseProspectScore in
@@ -1101,11 +1043,11 @@ app.delete('/api/leads/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
-const LEAD_LINK_TABLES = { audit: 'audits', followup: 'followups', reply: 'cold_email_replies' };
+const LEAD_LINK_TABLES = { audit: 'audits', followup: 'followups' };
 
 app.post('/api/leads/:id/link', auth, (req, res) => {
   const table = LEAD_LINK_TABLES[req.body.type];
-  if (!table) return res.status(400).json({ error: 'type must be audit, followup, or reply' });
+  if (!table) return res.status(400).json({ error: 'type must be audit or followup' });
   const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
   db.prepare(`UPDATE ${table} SET lead_id=? WHERE id=? AND user_id=?`).run(lead.id, req.body.id, req.userId);
@@ -1114,7 +1056,7 @@ app.post('/api/leads/:id/link', auth, (req, res) => {
 
 app.post('/api/leads/:id/unlink', auth, (req, res) => {
   const table = LEAD_LINK_TABLES[req.body.type];
-  if (!table) return res.status(400).json({ error: 'type must be audit, followup, or reply' });
+  if (!table) return res.status(400).json({ error: 'type must be audit or followup' });
   db.prepare(`UPDATE ${table} SET lead_id=NULL WHERE id=? AND lead_id=? AND user_id=?`).run(req.body.id, req.params.id, req.userId);
   res.json({ ok: true });
 });
@@ -1129,7 +1071,6 @@ app.post('/api/leads/:id/merge', auth, (req, res) => {
   db.transaction(() => {
     db.prepare('UPDATE audits SET lead_id=? WHERE lead_id=? AND user_id=?').run(target.id, source.id, req.userId);
     db.prepare('UPDATE followups SET lead_id=? WHERE lead_id=? AND user_id=?').run(target.id, source.id, req.userId);
-    db.prepare('UPDATE cold_email_replies SET lead_id=? WHERE lead_id=? AND user_id=?').run(target.id, source.id, req.userId);
     db.prepare('UPDATE leads SET deleted_at=?, updated_at=? WHERE id=? AND user_id=?').run(t, t, source.id, req.userId);
   })();
   res.json({ ok: true });
@@ -1463,189 +1404,10 @@ app.put('/api/eisenhower/:date', auth, (req, res) => {
   res.json(data);
 });
 
-// ── Cold Email (Instantly reporting) ──────────────────────────
-// Hits Instantly's REST API directly (this is a server process, it can't use
-// the Claude-side Instantly MCP connection that only exists in interactive
-// sessions) — same tolerate-missing-config pattern as Twilio above: without
-// the key the tab just stays empty instead of crashing.
-// Endpoints + field names below were verified live against the real API
-// (not guessed) — see COLD_EMAIL_WORKSPACE_SECTION_PLAN.md in the outreach
-// repo for how. Two things worth remembering if this ever looks wrong:
-// - /campaigns/analytics/daily has no bounce field at all (Instantly only
-//   tracks bounces as a period total, via /campaigns/analytics/overview),
-//   so bounces here are a per-pull period total stashed on the latest day's
-//   row, not a true daily breakdown.
-// - opened/unique_opened will read 0 for campaigns with open_tracking off
-//   (which Raffi's campaigns deliberately run with, per Can's
-//   deliverability-first method) — that's accurate, not a bug.
-const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY || '';
-const INSTANTLY_BASE = 'https://api.instantly.ai/api/v2';
-if (!INSTANTLY_API_KEY) console.warn('cold email pull disabled — INSTANTLY_API_KEY not configured');
-
 // n8n webhook URL that kicks off the Outscraper prospecting workflow — see
 // POST /api/prospect-lists/scrape below. Never logged, never sent to the client.
 const N8N_SCRAPE_WEBHOOK_URL = process.env.N8N_SCRAPE_WEBHOOK_URL || '';
 if (!N8N_SCRAPE_WEBHOOK_URL) console.warn('scrape-new-prospects button disabled — N8N_SCRAPE_WEBHOOK_URL not configured');
-
-async function instantlyGet(path) {
-  const res = await fetch(INSTANTLY_BASE + path, { headers: { Authorization: 'Bearer ' + INSTANTLY_API_KEY } });
-  if (!res.ok) throw new Error('Instantly API ' + res.status + ' on ' + path);
-  return res.json();
-}
-
-let coldEmailPullRunning = false;
-let coldEmailLastAttemptAt = null;
-let coldEmailLastSuccessAt = null;
-let coldEmailLastError = null;
-async function pullColdEmailStats() {
-  if (!INSTANTLY_API_KEY || coldEmailPullRunning) return;
-  coldEmailPullRunning = true;
-  coldEmailLastAttemptAt = now();
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    const startDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    const campaignsResp = await instantlyGet('/campaigns');
-    const campaigns = campaignsResp.items || [];
-    const t = now();
-    const upsertDaily = db.prepare(`
-      INSERT INTO cold_email_daily (id, user_id, date, campaign_id, campaign_name, sent, opens, replies, bounces, unread_replies, updated_at)
-      VALUES (?, 'owner', ?, ?, ?, ?, ?, ?, 0, 0, ?)
-      ON CONFLICT(user_id, date, campaign_id) DO UPDATE SET
-        campaign_name=excluded.campaign_name, sent=excluded.sent, opens=excluded.opens,
-        replies=excluded.replies, updated_at=excluded.updated_at
-    `);
-    for (const c of campaigns) {
-      let daily = [];
-      try {
-        // Plain array, not wrapped in items/result — confirmed against the live API.
-        daily = await instantlyGet(`/campaigns/analytics/daily?campaign_id=${c.id}&start_date=${startDate}&end_date=${today}`);
-      } catch (e) {
-        console.warn('cold email: daily analytics failed for campaign', c.id, e.message);
-        continue;
-      }
-      let latestDate = null;
-      for (const d of daily) {
-        upsertDaily.run(c.id + ':' + d.date, d.date, c.id, c.name || '', d.sent || 0, d.opened || 0, d.replies || 0, t);
-        if (!latestDate || d.date > latestDate) latestDate = d.date;
-      }
-      if (!latestDate) continue;
-      try {
-        const overview = await instantlyGet(`/campaigns/analytics/overview?id=${c.id}&start_date=${startDate}&end_date=${today}`);
-        db.prepare(`UPDATE cold_email_daily SET bounces=? WHERE user_id='owner' AND date=? AND campaign_id=?`)
-          .run(overview.bounced_count || 0, latestDate, c.id);
-      } catch (e) { console.warn('cold email: overview (bounces) failed for campaign', c.id, e.message); }
-    }
-    try {
-      const unread = await instantlyGet('/emails/unread/count');
-      // Workspace-wide number, not per-campaign — stash it against today's
-      // most-recently-touched campaign row rather than invent a
-      // campaign-less row the UI has no place to display.
-      db.prepare(`UPDATE cold_email_daily SET unread_replies=? WHERE user_id='owner' AND date=? AND campaign_id = (
-        SELECT campaign_id FROM cold_email_daily WHERE user_id='owner' AND date=? ORDER BY updated_at DESC LIMIT 1
-      )`).run(unread.count || 0, today, today);
-    } catch (e) { console.warn('cold email: unread count failed', e.message); }
-
-    try {
-      const accountsResp = await instantlyGet('/accounts');
-      const accounts = accountsResp.items || [];
-      const upsertAcct = db.prepare(`
-        INSERT INTO cold_email_account_health (account_email, user_id, warmup_score, daily_limit, updated_at)
-        VALUES (?, 'owner', ?, ?, ?)
-        ON CONFLICT(user_id, account_email) DO UPDATE SET
-          warmup_score=excluded.warmup_score, daily_limit=excluded.daily_limit, updated_at=excluded.updated_at
-      `);
-      for (const a of accounts) {
-        upsertAcct.run(a.email, a.stat_warmup_score ?? null, a.daily_limit ?? null, t);
-      }
-    } catch (e) { console.warn('cold email: account health failed', e.message); }
-
-    try {
-      const campaignNameById = Object.fromEntries(campaigns.map(c => [c.id, c.name || '']));
-      const emailsResp = await instantlyGet('/emails?email_type=received&limit=50');
-      const emails = emailsResp.items || [];
-      const upsertReply = db.prepare(`
-        INSERT INTO cold_email_replies (id, user_id, campaign_id, campaign_name, from_email, from_name, subject, preview, thread_id, is_unread, ai_interest, timestamp_email, updated_at)
-        VALUES (?, 'owner', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          campaign_name=excluded.campaign_name, from_email=excluded.from_email, from_name=excluded.from_name,
-          subject=excluded.subject, preview=excluded.preview, is_unread=excluded.is_unread,
-          ai_interest=excluded.ai_interest, updated_at=excluded.updated_at
-      `);
-      for (const e of emails) {
-        const fromInfo = (e.from_address_json && e.from_address_json[0]) || {};
-        upsertReply.run(
-          e.id, e.campaign_id || '', campaignNameById[e.campaign_id] || '',
-          e.from_address_email || fromInfo.address || '', fromInfo.name || '',
-          e.subject || '', e.content_preview || '', e.thread_id || '',
-          e.is_unread ? 1 : 0, e.ai_interest_value ?? null,
-          new Date(e.timestamp_email || e.timestamp_created).getTime(), t
-        );
-      }
-    } catch (e) { console.warn('cold email: replies failed', e.message); }
-
-    // Auto-link replies to leads by normalized domain match — only ever
-    // touches lead_id IS NULL rows, so it never fights a manual correction.
-    try {
-      const domainLeads = db.prepare(`SELECT id, website_domain FROM leads WHERE user_id='owner' AND website_domain IS NOT NULL AND website_domain != '' AND deleted_at IS NULL`).all();
-      if (domainLeads.length) {
-        const byDomain = new Map(domainLeads.map(l => [l.website_domain, l.id]));
-        const unmatched = db.prepare(`SELECT id, from_email FROM cold_email_replies WHERE user_id='owner' AND lead_id IS NULL`).all();
-        const link = db.prepare('UPDATE cold_email_replies SET lead_id=? WHERE id=?');
-        for (const r of unmatched) {
-          const d = normalizeDomain(r.from_email);
-          if (d && byDomain.has(d)) link.run(byDomain.get(d), r.id);
-        }
-      }
-    } catch (e) { console.warn('cold email: lead domain-match failed', e.message); }
-
-    coldEmailLastSuccessAt = now();
-    coldEmailLastError = null;
-  } catch (e) {
-    console.warn('cold email pull failed:', e.message);
-    coldEmailLastError = e.message;
-  } finally {
-    coldEmailPullRunning = false;
-  }
-}
-setInterval(() => pullColdEmailStats().catch(err => console.warn('cold email pull tick failed:', err.message)), 60 * 60 * 1000);
-pullColdEmailStats().catch(err => console.warn('cold email startup pull failed:', err.message));
-
-app.get('/api/cold-email/daily', auth, (req, res) => {
-  const days = Math.min(parseInt(req.query.days, 10) || 30, 365);
-  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
-  const rows = db.prepare(`SELECT date, campaign_id, campaign_name, sent, opens, replies, bounces, unread_replies
-    FROM cold_email_daily WHERE user_id=? AND date>=? ORDER BY date ASC`).all(req.userId, since);
-  res.json(rows);
-});
-
-app.get('/api/cold-email/accounts', auth, (req, res) => {
-  const rows = db.prepare(`SELECT account_email, warmup_score, daily_limit, updated_at
-    FROM cold_email_account_health WHERE user_id=? ORDER BY account_email ASC`).all(req.userId);
-  res.json(rows);
-});
-
-app.post('/api/cold-email/pull', auth, async (req, res) => {
-  if (!INSTANTLY_API_KEY) return res.status(503).json({ error: 'INSTANTLY_API_KEY not configured' });
-  await pullColdEmailStats();
-  res.json({ ok: true });
-});
-
-app.get('/api/cold-email/replies', auth, (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
-  const rows = db.prepare(`SELECT id, campaign_id, campaign_name, from_email, from_name, subject, preview,
-    thread_id, is_unread, ai_interest, timestamp_email, lead_id
-    FROM cold_email_replies WHERE user_id=? ORDER BY timestamp_email DESC LIMIT ?`).all(req.userId, limit);
-  res.json(rows);
-});
-
-app.get('/api/cold-email/status', auth, (req, res) => {
-  res.json({
-    configured: !!INSTANTLY_API_KEY,
-    last_attempt_at: coldEmailLastAttemptAt,
-    last_success_at: coldEmailLastSuccessAt,
-    last_error: coldEmailLastError,
-  });
-});
 
 // ── Notes ────────────────────────────────────────────────────
 app.get('/api/notes', auth, (req, res) => {
