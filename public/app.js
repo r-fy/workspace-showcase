@@ -2885,16 +2885,22 @@ function smsDisplayName(s) {
   return s.lead_id ? (leads.find(l => l.id === s.lead_id)?.business_name || null) : null;
 }
 
+// Collapsed by default (Raffi 2026-09-01): pick "Texts" to open the list,
+// like a dropdown, instead of the whole log always showing. State survives
+// the 2s sync poll's re-render and reloads via localStorage.
+let smsLogOpen = localStorage.getItem('sms-log-open') === '1';
+
 function renderSmsLog() {
   const log = document.getElementById('sms-log');
   if (!log) return;
   const inCrm = dialerInCrm();
   const scoped = inCrm && currentLeadId ? smsMessages.filter(s => s.lead_id === currentLeadId) : smsMessages;
-  if (!scoped.length) {
-    log.innerHTML = `<div class="agenda-empty">${inCrm ? 'No texts with this lead yet' : 'No texts yet'}</div>`;
-    return;
-  }
-  log.innerHTML = '<div class="agenda-section-label">Texts</div>' + scoped.map(s => {
+  const header = `<button class="sms-log-toggle${smsLogOpen ? ' open' : ''}" id="sms-log-toggle">
+    <span class="sms-log-caret">${smsLogOpen ? '▾' : '▸'}</span> Texts${scoped.length ? ` (${scoped.length})` : ''}
+  </button>`;
+  const body = !smsLogOpen ? '' : !scoped.length
+    ? `<div class="agenda-empty">${inCrm ? 'No texts with this lead yet' : 'No texts yet'}</div>`
+    : scoped.map(s => {
     const inbound = s.direction === 'inbound';
     const num = inbound ? s.from_number : s.to_number;
     const chipName = !inCrm ? smsDisplayName(s) : null;
@@ -2913,6 +2919,12 @@ function renderSmsLog() {
       <div class="sms-body">${escHtml(s.body)}</div>
     </div>`;
   }).join('');
+  log.innerHTML = header + body;
+  document.getElementById('sms-log-toggle')?.addEventListener('click', () => {
+    smsLogOpen = !smsLogOpen;
+    localStorage.setItem('sms-log-open', smsLogOpen ? '1' : '0');
+    renderSmsLog();
+  });
 }
 
 // ── Push notifications setup ──
