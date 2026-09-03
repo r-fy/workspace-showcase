@@ -119,7 +119,7 @@ defineTool(
   `Kanban boards/columns/tasks. action:
 "board_list" | "board_create" (name, columns?: string[] of column names) | "board_update" (id, name?, position?) | "board_delete" (id, permanent — no trash tier, archive first) | "board_archive" (id) | "board_columns" (id — lists a board's columns with their tasks nested) |
 "column_create" (board_id, name) | "column_update" (id, name?, position?) | "column_delete" (id) |
-"task_create" (column_id, title, description?, claude_marked?, tags?) | "task_update" (id, title?, description?, column_id?, position?, claude_marked?, tags?) | "task_delete" (id, soft-delete) | "task_bulk_delete" (ids: string[]) | "task_archive" (id) | "task_bulk_archive" (ids: string[]).
+"task_create" (column_id, title, description?, claude_marked?, claude_model?, tags?) | "task_update" (id, title?, description?, column_id?, position?, claude_marked?, claude_model?, tags?) | "task_delete" (id, soft-delete) | "task_bulk_delete" (ids: string[]) | "task_archive" (id) | "task_bulk_archive" (ids: string[]). claude_model is one of '', 'sonnet', 'opus-4-6', 'fable'.
 Note: every board has a fixed "Top 3" tray column (kind=top3, capped at 3 tasks) — moving a 4th task in fails with an error.`,
   {
     action: z.enum(['board_list', 'board_create', 'board_update', 'board_delete', 'board_archive', 'board_columns',
@@ -134,6 +134,7 @@ Note: every board has a fixed "Top 3" tray column (kind=top3, capped at 3 tasks)
     title: z.string().optional(),
     description: z.string().optional(),
     claude_marked: z.boolean().optional(),
+    claude_model: z.string().optional(),
     tags: z.string().optional(),
     ids: z.array(z.string()).optional(),
   },
@@ -148,8 +149,8 @@ Note: every board has a fixed "Top 3" tray column (kind=top3, capped at 3 tasks)
       case 'column_create': return api('POST', '/api/columns', { board_id: need(a.board_id, 'board_id'), name: need(a.name, 'name') });
       case 'column_update': return api('PUT', `/api/columns/${need(a.id, 'id')}`, { name: a.name, position: a.position });
       case 'column_delete': return api('DELETE', `/api/columns/${need(a.id, 'id')}`);
-      case 'task_create': return api('POST', '/api/tasks', { column_id: need(a.column_id, 'column_id'), title: need(a.title, 'title'), description: a.description, claude_marked: a.claude_marked ? 1 : 0, tags: a.tags });
-      case 'task_update': return api('PUT', `/api/tasks/${need(a.id, 'id')}`, { title: a.title, description: a.description, column_id: a.column_id, position: a.position, claude_marked: a.claude_marked !== undefined ? (a.claude_marked ? 1 : 0) : undefined, tags: a.tags });
+      case 'task_create': return api('POST', '/api/tasks', { column_id: need(a.column_id, 'column_id'), title: need(a.title, 'title'), description: a.description, claude_marked: a.claude_marked ? 1 : 0, claude_model: a.claude_model, tags: a.tags });
+      case 'task_update': return api('PUT', `/api/tasks/${need(a.id, 'id')}`, { title: a.title, description: a.description, column_id: a.column_id, position: a.position, claude_marked: a.claude_marked !== undefined ? (a.claude_marked ? 1 : 0) : undefined, claude_model: a.claude_model, tags: a.tags });
       case 'task_delete': return api('DELETE', `/api/tasks/${need(a.id, 'id')}`);
       case 'task_bulk_delete': return api('DELETE', '/api/tasks', { ids: need(a.ids, 'ids') });
       case 'task_archive': return api('POST', `/api/tasks/${need(a.id, 'id')}/archive`);

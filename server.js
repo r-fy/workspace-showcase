@@ -143,6 +143,7 @@ addColumn(`ALTER TABLE columns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`
 addColumn(`ALTER TABLE tasks   ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'`);
 // Claude mark: flags a task as greenlit for Claude Code to work on (read via direct DB query)
 addColumn(`ALTER TABLE tasks ADD COLUMN claude_marked INTEGER NOT NULL DEFAULT 0`);
+addColumn(`ALTER TABLE tasks ADD COLUMN claude_model TEXT`);
 addColumn(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''`);
 // Top 3 tray: a fixed per-board column (kind='top3') for pinning up to 3 urgent tasks.
 addColumn(`ALTER TABLE columns ADD COLUMN kind TEXT DEFAULT NULL`);
@@ -1621,14 +1622,18 @@ app.delete('/api/columns/:id', auth, (req, res) => {
 });
 
 // ── Tasks ─────────────────────────────────────────────────────
+const CLAUDE_MODELS = new Set(['', 'sonnet', 'opus-4-6', 'fable']);
+
 app.post('/api/tasks', auth, (req, res) => {
   const { column_id, title, description = '', claude_marked = 0, tags = '' } = req.body;
+  const claude_model = req.body.claude_model ?? '';
   if (!column_id || !title) return res.status(400).json({ error: 'column_id and title required' });
+  if (!CLAUDE_MODELS.has(claude_model)) return res.status(400).json({ error: 'invalid claude_model' });
   if (top3CapExceeded(column_id, req.userId, null)) return res.status(400).json({ error: 'Top 3 is full' });
   const maxPos = db.prepare('SELECT COALESCE(MAX(position),-1) AS m FROM tasks WHERE column_id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL').get(column_id, req.userId).m;
   const id = uid(), t = now();
-  db.prepare('INSERT INTO tasks (id, column_id, title, description, position, claude_marked, tags, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, column_id, title, description, maxPos + 1, claude_marked ? 1 : 0, tags, req.userId, t, t);
+  db.prepare('INSERT INTO tasks (id, column_id, title, description, position, claude_marked, claude_model, tags, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, column_id, title, description, maxPos + 1, claude_marked ? 1 : 0, claude_model, tags, req.userId, t, t);
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(id));
 });
 
@@ -1640,11 +1645,13 @@ app.put('/api/tasks/:id', auth, (req, res) => {
     column_id = task.column_id, position = task.position,
     claude_marked = task.claude_marked, tags = task.tags
   } = req.body;
+  const claude_model = req.body.claude_model ?? task.claude_model ?? '';
+  if (!CLAUDE_MODELS.has(claude_model)) return res.status(400).json({ error: 'invalid claude_model' });
   if (column_id !== task.column_id && top3CapExceeded(column_id, req.userId, task.id)) {
     return res.status(400).json({ error: 'Top 3 is full' });
   }
-  db.prepare('UPDATE tasks SET title=?, description=?, column_id=?, position=?, claude_marked=?, tags=?, updated_at=? WHERE id=? AND user_id=?')
-    .run(title, description, column_id, position, claude_marked ? 1 : 0, tags, now(), req.params.id, req.userId);
+  db.prepare('UPDATE tasks SET title=?, description=?, column_id=?, position=?, claude_marked=?, claude_model=?, tags=?, updated_at=? WHERE id=? AND user_id=?')
+    .run(title, description, column_id, position, claude_marked ? 1 : 0, claude_model, tags, now(), req.params.id, req.userId);
   res.json(db.prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id));
 });
 
