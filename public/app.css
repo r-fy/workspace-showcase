@@ -305,12 +305,6 @@ header {
 .task-claude-btn svg { width: 14px; height: 14px; }
 .task-claude-btn:hover { opacity: 0.7; }
 .task-claude-btn.active { filter: grayscale(0) drop-shadow(0 0 6px rgba(218,119,86,0.6)); opacity: 1; }
-.task-model-select {
-  max-width: 100%; margin-top: 4px; margin-left: 24px; font-family: inherit; font-size: 11px;
-  background: #0d0d0d; color: #c9c9c9; border: 1px solid #555; border-radius: 4px; padding: 2px 4px;
-}
-.task-model-select[hidden] { display: none; }
-#modal-claude-model { margin: 0; }
 .task-desc-preview { font-size: 11px; color: #7d7e83; margin-top: 3px; margin-left: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .task-checklist-preview { display: flex; align-items: center; gap: 2px; margin-top: 5px; margin-left: 24px; font-size: 11px; }
 .task-checks-done { color: #4ade80; font-weight: 600; }
