@@ -2505,6 +2505,8 @@ function endCallUi(callRef) {
   const suppressed = switchingToInbound;
   switchingToInbound = false;
   const wasLive = !!twCall;
+  const wasPnavCall = pnavCall; // navigator-initiated — the outcome IS the disposition, no modal
+  pnavCall = false;
   twCall = null;
   twDialing = false;
   hideCallFloatBar();
@@ -2522,21 +2524,37 @@ function endCallUi(callRef) {
   // an incoming one (suppressed) gets no picker at all.
   // Auto-advance only for queue dialing (from a lead's Calls sub-tab) —
   // inbound callbacks and standalone-Dialer calls just close after picking.
-  if (wasLive && endedLeadId && !suppressed) openDispositionModal(endedLeadId, { advance: !inbound && fromQueue });
+  if (wasLive && endedLeadId && !suppressed && !wasPnavCall) openDispositionModal(endedLeadId, { advance: !inbound && fromQueue });
+  // Navigator auto-dial: an outcome-confirm mid-call hung up the old call and
+  // asked us to dial the next uncalled prospect once it fully tears down.
+  // Consumed exactly once here, never from the confirm handler itself, so a
+  // fast double hangUp() can't stack two auto-dials.
+  if (pnavAutoDialId) {
+    const nextId = pnavAutoDialId;
+    pnavAutoDialId = null;
+    pnavSelect(nextId);
+    pnavDial(nextId);
+  }
 }
 
+// callGen: bumped by hangUp() so a startCall() still awaiting its own token
+// fetch / connect() can tell its dial was cancelled and bail out cleanly,
+// instead of landing a second call on top of whatever hangUp() already ended.
+let callGen = 0;
 async function startCall() {
   // twDialing guards the async window before connect() resolves — twCall
   // alone would let a double-click place two simultaneous billable calls.
   if (twCall || twDialing) return;
+  const gen = ++callGen;
   const num = normalizeDialNumber(document.getElementById('dial-number').value);
   if (!num) { toast('Enter a valid phone number'); return; }
   twDialing = true;
-  if (!twDevice) { await initDialer(); if (!twDevice) { twDialing = false; return; } }
+  if (!twDevice) { await initDialer(); if (gen !== callGen) { twDialing = false; return; } if (!twDevice) { twDialing = false; return; } }
   // An idle Device never hears tokenWillExpire (no signaling stream until the
   // first connect) — a stale token would fail every call until a page reload.
   if (Date.now() - twTokenAt > 50 * 60000) {
     try { twDevice.updateToken(await refreshDialerToken()); } catch(e) {}
+    if (gen !== callGen) { twDialing = false; return; }
   }
   // Capture the lead context at dial time — the disposition/auto-advance flow
   // uses this, not whatever lead happens to be open when the call ends.
@@ -2557,8 +2575,11 @@ async function startCall() {
     // Triggers the mic permission prompt on first use. LeadId/ProspectId are
     // custom params the /api/twilio/voice webhook validates and stamps on
     // the calls row (ProspectId only set when dialed via dialProspect()).
-    twCall = await twDevice.connect({ params: { To: num, LeadId: crmCallLeadId || '', ProspectId: prospectIdForCall || '' } });
+    const call = await twDevice.connect({ params: { To: num, LeadId: crmCallLeadId || '', ProspectId: prospectIdForCall || '' } });
+    if (gen !== callGen) { try { call.disconnect(); } catch(e2) {} twDialing = false; return; }
+    twCall = call;
   } catch(e) {
+    if (gen !== callGen) { twDialing = false; return; } // cancelled mid-connect — hangUp() already cleaned up
     console.warn('twilio connect failed:', e);
     const msg = String(e && (e.message || e.name) || '');
     toast(/Permission|NotAllowed/i.test(msg) ? 'Microphone blocked — allow it in browser settings' : 'Could not start call');
@@ -2579,6 +2600,7 @@ async function startCall() {
 // disconnectAll covers the window where connect() hasn't resolved yet —
 // otherwise Hang Up is dead exactly when a stuck "Connecting…" needs it.
 function hangUp() {
+  callGen++; // cancels a startCall() still awaiting init/token/connect
   if (twCall) twCall.disconnect();
   else if (twDevice) { twDevice.disconnectAll(); endCallUi(); }
 }
@@ -4739,6 +4761,84 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// A7: one explicit predicate for "the navigator owns the keyboard right now" —
+// Dialer tab open, Navigator on, login screen gone, and none of these other
+// surfaces showing (the cheat sheet overlay is the one deliberate exception).
+function pnavKeysActive() {
+  if (currentTab !== 'dialer' || !prospectNavigatorOn) return false;
+  if (!document.getElementById('login-overlay').classList.contains('hidden')) return false;
+  const blockingModalIds = ['prospect-import-modal', 'disposition-modal', 'task-modal', 'expense-modal', 'reminder-modal'];
+  if (blockingModalIds.some(id => !document.getElementById(id)?.classList.contains('hidden'))) return false;
+  if (!document.getElementById('search-dropdown').classList.contains('hidden')) return false;
+  return true;
+}
+
+// Registered once at startup, capture phase, so it runs (and can
+// stopPropagation) before the search/Escape handler above and the
+// #dial-number input's own Enter handler ever see the key (A6).
+document.addEventListener('keydown', e => {
+  if (!pnavKeysActive()) return;
+
+  const ae = document.activeElement;
+  const inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
+  if (inField) {
+    // Every other key types normally (this also covers #dial-number — A6
+    // wants Enter there to reach that input's own handler, untouched).
+    if (e.key === 'Escape') { ae.blur(); e.preventDefault(); e.stopPropagation(); }
+    return;
+  }
+
+  if (pnavHelpOpen) {
+    if (e.key === '?' || e.key === 'Escape') { pnavToggleCheat(false); pnavFlashLegend('help'); e.preventDefault(); e.stopPropagation(); }
+    return;
+  }
+
+  if (pnavConfirm) {
+    if (e.key === 'Enter') { const t = pnavConfirm.type; pnavConfirmYes(); pnavFlashLegend(t === 'outcome' ? 'outcome' : 'promote'); e.preventDefault(); e.stopPropagation(); return; }
+    if (e.key === 'Escape') { pnavCancelConfirm(); e.preventDefault(); e.stopPropagation(); return; }
+    const swap = PNAV_OUTCOME_KEYS.find(([k]) => k === e.key);
+    if (swap) { pnavRequestOutcome(swap[1]); pnavFlashLegend('outcome'); e.preventDefault(); e.stopPropagation(); return; }
+    if (e.key.toLowerCase() === 'p') { pnavRequestPromote(); pnavFlashLegend('promote'); e.preventDefault(); e.stopPropagation(); return; }
+  }
+
+  const key = e.key;
+  if (key === 'ArrowLeft' || key === 'ArrowRight' || key.toLowerCase() === 'j' || key.toLowerCase() === 'k') {
+    pnavAdvance(key === 'ArrowRight' || key.toLowerCase() === 'j' ? 1 : -1);
+    pnavFlashLegend('move'); e.preventDefault(); e.stopPropagation();
+  } else if (key.toLowerCase() === 'd' || key === 'Enter') {
+    const p = pnavCurrent();
+    if (p && !twCall && !twDialing) pnavDial(p.id);
+    pnavFlashLegend('dial'); e.preventDefault(); e.stopPropagation();
+  } else if (key.toLowerCase() === 'h') {
+    hangUp();
+    pnavFlashLegend('hangup'); e.preventDefault(); e.stopPropagation();
+  } else if (key === 'Escape') {
+    if (twCall) hangUp();
+    e.preventDefault(); e.stopPropagation();
+  } else if (key >= '1' && key <= '8') {
+    const pair = PNAV_OUTCOME_KEYS.find(([k]) => k === key);
+    if (pair) pnavRequestOutcome(pair[1]);
+    pnavFlashLegend('outcome'); e.preventDefault(); e.stopPropagation();
+  } else if (key === ' ') {
+    pnavJumpNextUncalled();
+    pnavFlashLegend('next'); e.preventDefault(); e.stopPropagation();
+  } else if (key.toLowerCase() === 'n') {
+    document.getElementById('pnav-note-box')?.focus();
+    pnavFlashLegend('note'); e.preventDefault(); e.stopPropagation();
+  } else if (key.toLowerCase() === 'p') {
+    pnavRequestPromote();
+    pnavFlashLegend('promote'); e.preventDefault(); e.stopPropagation();
+  } else if (key.toLowerCase() === 'g') {
+    pnavOpenGbp(); e.preventDefault(); e.stopPropagation();
+  } else if (key.toLowerCase() === 'w') {
+    pnavOpenWebsite(); e.preventDefault(); e.stopPropagation();
+  } else if (key.toLowerCase() === 'f') {
+    pnavToggleFocus(); pnavFlashLegend('focus'); e.preventDefault(); e.stopPropagation();
+  } else if (key === '?') {
+    pnavToggleCheat(true); pnavFlashLegend('help'); e.preventDefault(); e.stopPropagation();
+  }
+}, true);
+
 // ── Event wiring ───────────────────────────────────────────────
 // Search bar
 const searchInput = document.getElementById('search-input');
@@ -5702,6 +5802,24 @@ let lastClickedProspectId = null;    // shift-click range anchor, mirrors the ex
 let activeProspectOutcomeFilter = null; // outcome key, or null = show all
 let dialingProspectId = null;    // one-shot: set by dialProspect(), read+cleared by startCall()
 let prospectStatsDate = null;    // null = viewing "today" (live via sync); 'YYYY-MM-DD' = a frozen past day
+let openProspectListSeq = 0;     // request sequence — a stale GET /prospect-lists/:id response is ignored
+
+// ── Navigator (Close-style keyboard step-through) ────────────────────────
+// One prospect at a time: arrow keys move, 1-8 open an inline confirm strip
+// before an outcome saves, then jumps to the next uncalled prospect and
+// dials it. Reuses every existing call/save function below — no second path.
+let prospectNavigatorOn = localStorage.getItem('prospect-navigator') === '1';
+let pnavFocus = localStorage.getItem('prospect-navigator-focus') === '1';
+let pnavCurrentId = null;
+let pnavConfirm = null;   // { type:'outcome', outcome } | { type:'promote' } | null
+let pnavAutoDialId = null; // one-shot: set right before hangUp(), consumed exactly once by endCallUi
+let pnavHelpOpen = false;
+let pnavCall = false;     // this live call was navigator-initiated — endCallUi skips the disposition modal
+
+const PNAV_OUTCOME_KEYS = [
+  ['1', 'no_answer'], ['2', 'voicemail'], ['3', 'gatekeeper'], ['4', 'interested'],
+  ['5', 'not_interested'], ['6', 'follow_up_later'], ['7', 'bad_fit'], ['8', 'booked'],
+];
 
 async function loadProspectLists() {
   try { prospectLists = await apiCall('GET', '/prospect-lists'); } catch (e) { return; }
@@ -5754,11 +5872,16 @@ async function jumpToProspect(id) {
 }
 
 async function openProspectList(id) {
+  const seq = ++openProspectListSeq;
   let list;
   try { list = await apiCall('GET', '/prospect-lists/' + id); } catch (e) { toast('Could not load list'); return; }
+  if (seq !== openProspectListSeq) return; // a newer open request already landed — ignore this stale reply
+  const listChanged = currentProspectListId !== id;
   currentProspectListId = id;
   currentProspectList = list;
   selectedProspects.clear(); lastClickedProspectId = null; activeProspectOutcomeFilter = null;
+  if (listChanged) { pnavCurrentId = null; pnavConfirm = null; }
+  if (prospectNavigatorOn) pnavEnsureCurrent();
   renderProspectListsPanel();
   renderProspectListView();
   if (isMobile()) closeSidebar();
@@ -5880,6 +6003,333 @@ function renderLeadScoreCard(notes) {
   return `<div class="prospect-row-notes prospect-row-notes-scored lead-score-card">${buildScoreCardBody(s)}</div>`;
 }
 
+function toggleProspectNavigator() {
+  prospectNavigatorOn = !prospectNavigatorOn;
+  localStorage.setItem('prospect-navigator', prospectNavigatorOn ? '1' : '0');
+  pnavConfirm = null; pnavHelpOpen = false;
+  if (prospectNavigatorOn) pnavEnsureCurrent();
+  renderProspectListView();
+}
+
+function pnavList() { return (currentProspectList && currentProspectList.prospects) || []; }
+function pnavIndex() { return pnavList().findIndex(p => p.id === pnavCurrentId); }
+function pnavCurrent() { const i = pnavIndex(); return i === -1 ? null : pnavList()[i]; }
+
+function pnavEnsureCurrent() {
+  const list = pnavList();
+  if (!list.length) { pnavCurrentId = null; return; }
+  if (!list.some(p => p.id === pnavCurrentId)) pnavCurrentId = list[0].id;
+}
+
+function pnavSelect(id) {
+  pnavConfirm = null;
+  pnavCurrentId = id;
+  renderProspectListView();
+}
+
+function pnavAdvance(dir) {
+  const list = pnavList();
+  const i = pnavIndex();
+  if (i === -1) return;
+  const next = i + dir;
+  if (next < 0 || next >= list.length) return; // no wrap
+  pnavSelect(list[next].id);
+}
+
+// First not_yet_called, not-promoted prospect strictly AFTER afterId, no wrap.
+function pnavNextUncalled(afterId) {
+  const list = pnavList();
+  const i = list.findIndex(p => p.id === afterId);
+  for (let k = i + 1; k < list.length; k++) {
+    if (list[k].outcome === 'not_yet_called' && !list[k].promoted_lead_id) return list[k].id;
+  }
+  return null;
+}
+
+function pnavJumpNextUncalled() {
+  const nextId = pnavNextUncalled(pnavCurrentId);
+  if (!nextId) { toast('No uncalled prospects left'); return; }
+  pnavSelect(nextId);
+}
+
+// Every navigator-initiated dial (direct D/Enter, or the auto-dial after an
+// outcome confirm) goes through here so pnavCall is set before startCall()
+// ever runs — endCallUi (A3) reads it to suppress the CRM disposition modal.
+function pnavDial(id) {
+  pnavCall = true;
+  dialProspect(id);
+}
+
+function pnavRequestOutcome(outcome) {
+  pnavConfirm = { type: 'outcome', outcome };
+  renderProspectListView();
+}
+function pnavRequestPromote() {
+  const p = pnavCurrent();
+  if (!p) return;
+  if (p.promoted_lead_id) { toast('Already promoted'); return; }
+  pnavConfirm = { type: 'promote' };
+  renderProspectListView();
+}
+function pnavCancelConfirm() {
+  pnavConfirm = null;
+  renderProspectListView();
+}
+
+async function pnavConfirmYes() {
+  const pc = pnavConfirm;
+  const p = pnavCurrent();
+  if (!pc || !p) { pnavConfirm = null; renderProspectListView(); return; }
+  pnavConfirm = null;
+
+  if (pc.type === 'outcome') {
+    const id = p.id;
+    const ok = await updateProspectOutcome(id, pc.outcome); // A1: only advance/dial on true
+    if (!ok) { renderProspectListView(); return; }
+    const nextId = pnavNextUncalled(id);
+    if (!nextId) { renderProspectListView(); return; } // stays selected, card shows "End of list"
+    if (twCall || twDialing) {
+      // Mid-call: hang up first: endCallUi consumes pnavAutoDialId exactly
+      // once, after this call has fully torn down (A2/A3).
+      pnavAutoDialId = nextId;
+      hangUp();
+      renderProspectListView();
+    } else {
+      pnavSelect(nextId);
+      pnavDial(nextId);
+    }
+  } else if (pc.type === 'promote') {
+    const lead = await promoteProspect(p.id, { silent: true }); // A4
+    if (lead) toast('Promoted to lead');
+    renderProspectListView();
+  }
+}
+
+function pnavToggleFocus() {
+  pnavFocus = !pnavFocus;
+  localStorage.setItem('prospect-navigator-focus', pnavFocus ? '1' : '0');
+  renderProspectListView();
+}
+function pnavToggleCheat(force) {
+  pnavHelpOpen = typeof force === 'boolean' ? force : !pnavHelpOpen;
+  renderProspectListView();
+}
+function pnavOpenGbp() {
+  const p = pnavCurrent();
+  const s = p && parseProspectScore(p.notes);
+  if (!s || !s.gbpUrl) { pnavFlashLegend('gbp', true); return; }
+  window.open(s.gbpUrl, '_blank', 'noopener');
+  pnavFlashLegend('gbp');
+}
+function pnavOpenWebsite() {
+  const p = pnavCurrent();
+  const s = p && parseProspectScore(p.notes);
+  if (!s || !s.website || s.website === 'None') { pnavFlashLegend('website', true); return; }
+  window.open(s.website, '_blank', 'noopener');
+  pnavFlashLegend('website');
+}
+function pnavFlashLegend(group, bad) {
+  const cls = bad ? 'flash-bad' : 'flash';
+  document.querySelectorAll(`[data-legend-key="${group}"]`).forEach(elm => {
+    elm.classList.add(cls);
+    setTimeout(() => elm.classList.remove(cls), 320);
+  });
+}
+
+function pnavOutcomePillHtml(outcome) {
+  const label = PROSPECT_OUTCOMES.find(([k]) => k === outcome)?.[1] || outcome;
+  return `<span class="outcome-pill outcome-${escHtml(outcome)}">${escHtml(label)}</span>`;
+}
+
+function pnavListRowsHtml(list) {
+  if (!list.length) return '<div class="agenda-empty">No prospects yet — Import to add some.</div>';
+  return list.map(p => `
+    <div class="prospect-row pnav-row${p.id === pnavCurrentId ? ' current' : ''}" data-pnav-row="${p.id}">
+      <div class="prospect-row-main">
+        <div class="prospect-row-name">${escHtml(p.name || 'Unnamed')}${p.promoted_lead_id ? ' <span class="lead-flag">✓ Lead</span>' : ''}</div>
+        <div class="prospect-row-contact">${escHtml(fmtPhone(p.phone) || p.phone || '—')}</div>
+      </div>
+      ${pnavOutcomePillHtml(p.outcome)}
+    </div>`).join('');
+}
+
+function pnavConfirmHtml(p) {
+  if (!pnavConfirm || !p) return '<div class="pnav-confirm hidden"></div>';
+  const label = PROSPECT_OUTCOMES.find(([k]) => k === pnavConfirm.outcome)?.[1] || pnavConfirm.outcome;
+  const question = pnavConfirm.type === 'outcome'
+    ? `Mark ${escHtml(p.name || 'this prospect')} as ${escHtml(label)}?`
+    : `Promote ${escHtml(p.name || 'this prospect')} to a lead?`;
+  return `<div class="pnav-confirm">
+    <div>${question}</div>
+    <div class="confirm-actions">
+      <button class="confirm-yes" id="pnav-confirm-yes" tabindex="-1"><span class="keycap">Enter</span> Yes</button>
+      <button class="confirm-no" id="pnav-confirm-no" tabindex="-1"><span class="keycap">Esc</span> No</button>
+    </div>
+  </div>`;
+}
+
+function pnavOutcomesGridHtml(p) {
+  const pendingOutcome = pnavConfirm && pnavConfirm.type === 'outcome' ? pnavConfirm.outcome : null;
+  return `<div class="outcomes-grid pnav-outcomes-grid">` + PNAV_OUTCOME_KEYS.map(([key, outcome]) => {
+    const label = PROSPECT_OUTCOMES.find(([k]) => k === outcome)?.[1] || outcome;
+    const cls = ['outcome-btn'];
+    if (p.outcome === outcome) cls.push('picked');
+    if (pendingOutcome === outcome) cls.push('pending');
+    return `<button class="${cls.join(' ')}" data-pnav-outcome="${outcome}" tabindex="-1">
+      <span class="outcome-badge">${key}</span>${escHtml(label)}
+    </button>`;
+  }).join('') + `</div>`;
+}
+
+function pnavCardBodyHtml(p, idx, total) {
+  if (!p) return '<div class="agenda-empty">No prospects in this list.</div>';
+  const s = parseProspectScore(p.notes);
+  const scoreHtml = s ? buildScoreCardBody(s)
+    : p.notes ? `<div class="prospect-raw-notes">${escHtml(p.notes)}</div>` : '';
+  const gbpUrl = s && s.gbpUrl;
+  const websiteUrl = s && s.website && s.website !== 'None' ? s.website : null;
+  const statusHtml = twCall
+    ? `<div class="status-line status-incall">● In call</div>`
+    : `<div class="status-line status-idle">Ready</div>`;
+  const dialActionsHtml = twCall
+    ? `<div class="dial-actions"><button class="hangup-btn" id="pnav-hangup-btn" tabindex="-1">Hang Up</button></div>`
+    : `<div class="dial-actions"><button class="dial-btn" id="pnav-dial-btn"${p.phone ? '' : ' disabled'} tabindex="-1">📞 Dial</button></div>`;
+  const subParts = [fmtPhone(p.phone) || p.phone || '—'];
+  if (p.city) subParts.push(p.city);
+  if (p.niche) subParts.push(p.niche); // A8: omitted entirely when empty, not shown as a blank segment
+  const endOfList = idx === total - 1 && !pnavNextUncalled(p.id) && !pnavConfirm;
+  return `
+    <div class="focus-name">${escHtml(p.name || 'Unnamed')}</div>
+    <div class="focus-sub">${escHtml(subParts.join(' · '))}</div>
+    ${statusHtml}
+    ${scoreHtml}
+    <div class="card-links-row">
+      <button class="website-btn" id="pnav-gbp-btn"${gbpUrl ? '' : ' disabled'} tabindex="-1" data-legend-key="gbp">GBP ↗</button>
+      <button class="website-btn" id="pnav-website-btn"${websiteUrl ? '' : ' disabled'} tabindex="-1" data-legend-key="website">Website ↗</button>
+    </div>
+    ${endOfList ? `<div class="end-of-list">End of list — every remaining prospect has an outcome.</div>` : ''}
+    ${dialActionsHtml}
+    ${pnavOutcomesGridHtml(p)}
+    <textarea class="note-box prospect-note-input" id="pnav-note-box" data-note-id="${p.id}" placeholder="Note to self — why or when to call back…">${escHtml(p.call_note || '')}</textarea>
+    <div class="card-links-row">
+      ${p.promoted_lead_id ? '<span style="color:#5fc83b;">✓ Lead</span>' : `<button class="prospect-promote-btn" id="pnav-promote-btn" tabindex="-1">Promote</button>`}
+    </div>
+    ${prospectCallsHtml(p)}
+  `;
+}
+
+const PNAV_LEGEND_ITEMS = [
+  { group: 'move', html: '<span class="keycap" data-legend-key="move">←→</span>/<span class="keycap" data-legend-key="move">JK</span> move' },
+  { group: 'dial', html: '<span class="keycap" data-legend-key="dial">D</span> dial' },
+  { group: 'hangup', html: '<span class="keycap" data-legend-key="hangup">H</span> hang up' },
+  { group: 'outcome', html: '<span class="keycap" data-legend-key="outcome">1-8</span> outcome' },
+  { group: 'next', html: '<span class="keycap" data-legend-key="next">Space</span> next uncalled' },
+  { group: 'note', html: '<span class="keycap" data-legend-key="note">N</span> note' },
+  { group: 'promote', html: '<span class="keycap" data-legend-key="promote">P</span> promote' },
+  { group: 'gbp', html: '<span class="keycap" data-legend-key="gbp">G</span> GBP' },
+  { group: 'website', html: '<span class="keycap" data-legend-key="website">W</span> website' },
+  { group: 'focus', html: '<span class="keycap" data-legend-key="focus">F</span> focus' },
+  { group: 'help', html: '<span class="keycap" data-legend-key="help">?</span> help' },
+];
+function pnavLegendHtml() {
+  return `<div class="pnav-legend" id="pnav-legend">` + PNAV_LEGEND_ITEMS.map((it, i) =>
+    `<span class="legend-item">${it.html}</span>${i < PNAV_LEGEND_ITEMS.length - 1 ? '<span class="legend-sep">·</span>' : ''}`).join('') + `</div>`;
+}
+
+function pnavCheatHtml() {
+  const rows = [
+    ['Move prev / next', '←→ / JK'],
+    ['Dial current', 'D / Enter'],
+    ['Hang up', 'H'],
+    ['Outcome 1–8 (confirm first)', '1–8'],
+    ['Confirm yes / no', 'Enter / Esc'],
+    ['Next not-yet-called', 'Space'],
+    ['Focus note', 'N'],
+    ['Promote to lead (confirm first)', 'P'],
+    ['Open GBP', 'G'],
+    ['Open website', 'W'],
+    ['Focus mode', 'F'],
+    ['This help', '?'],
+  ];
+  return `<div id="pnav-cheat-overlay" class="pnav-cheat-overlay">
+    <div class="cheat-box">
+      <h2>Keyboard cheat sheet</h2>
+      ${rows.map(([label, key]) => `<div class="cheat-row"><span>${escHtml(label)}</span><span class="keycap">${escHtml(key)}</span></div>`).join('')}
+      <div class="cheat-close">press ? or Esc to close</div>
+    </div>
+  </div>`;
+}
+
+function pnavShellHtml(list) {
+  const idx = pnavIndex();
+  const p = pnavCurrent();
+  const total = list.length;
+  return `
+    <div class="pnav-shell${pnavFocus ? ' pnav-focus' : ''}" id="pnav-shell">
+      <div class="pnav-list" id="pnav-list">${pnavListRowsHtml(list)}</div>
+      <div class="pnav-card">
+        <div class="pnav-card-header">
+          <div class="pnav-nav">
+            <button id="pnav-prev-btn" tabindex="-1">‹ Prev</button>
+            <span class="pnav-count">${total ? idx + 1 : 0} / ${total}</span>
+            <button id="pnav-next-btn" tabindex="-1">Next ›</button>
+          </div>
+          <button class="focus-toggle-btn${pnavFocus ? ' on' : ''}" id="pnav-focus-toggle-btn" tabindex="-1" data-legend-key="focus">🔎 Focus</button>
+        </div>
+        ${pnavConfirmHtml(p)}
+        <div class="pnav-card-body" id="pnav-card-body">${pnavCardBodyHtml(p, idx, total)}</div>
+      </div>
+    </div>
+    ${pnavLegendHtml()}
+    ${pnavHelpOpen ? pnavCheatHtml() : ''}
+  `;
+}
+
+function wirePnavShell() {
+  document.querySelectorAll('[data-pnav-row]').forEach(row =>
+    row.addEventListener('click', () => pnavSelect(row.dataset.pnavRow)));
+  document.querySelector('.pnav-row.current')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+  document.getElementById('pnav-prev-btn')?.addEventListener('click', () => pnavAdvance(-1));
+  document.getElementById('pnav-next-btn')?.addEventListener('click', () => pnavAdvance(1));
+  document.getElementById('pnav-focus-toggle-btn')?.addEventListener('click', pnavToggleFocus);
+
+  document.getElementById('pnav-confirm-yes')?.addEventListener('click', pnavConfirmYes);
+  document.getElementById('pnav-confirm-no')?.addEventListener('click', pnavCancelConfirm);
+
+  document.getElementById('pnav-dial-btn')?.addEventListener('click', () => { const p = pnavCurrent(); if (p) pnavDial(p.id); });
+  document.getElementById('pnav-hangup-btn')?.addEventListener('click', hangUp);
+  document.querySelectorAll('[data-pnav-outcome]').forEach(btn =>
+    btn.addEventListener('click', () => pnavRequestOutcome(btn.dataset.pnavOutcome)));
+  document.getElementById('pnav-promote-btn')?.addEventListener('click', pnavRequestPromote);
+  document.getElementById('pnav-gbp-btn')?.addEventListener('click', pnavOpenGbp);
+  document.getElementById('pnav-website-btn')?.addEventListener('click', pnavOpenWebsite);
+  const note = document.getElementById('pnav-note-box');
+  if (note) note.addEventListener('input', () => saveProspectNoteDebounced(note.dataset.noteId, note.value));
+
+  document.querySelectorAll('.call-play-btn').forEach(btn =>
+    btn.addEventListener('click', () => playRecording(btn.dataset.sid, btn, btn.dataset.slot)));
+  document.querySelectorAll('.call-dl-btn').forEach(btn =>
+    btn.addEventListener('click', () => downloadRecording(btn.dataset.sid, btn.dataset.num, +btn.dataset.ts)));
+
+  document.getElementById('pnav-cheat-overlay')?.addEventListener('click', e => {
+    if (e.target.id === 'pnav-cheat-overlay') pnavToggleCheat(false);
+  });
+}
+
+// Header is shared by both the classic row list and Navigator mode — the
+// toggle button lives here so it's always reachable regardless of which is showing.
+function prospectListHeaderHtml(l) {
+  return `<div class="prospect-list-header">
+    <span class="prospect-list-title">${escHtml(l.name)}${l.source ? ` <span style="color:#555;font-size:11px;font-weight:400;">(${escHtml(l.source)})</span>` : ''}</span>
+    <div class="prospect-list-header-actions">
+      <button class="del-task-btn prospect-nav-toggle-btn${prospectNavigatorOn ? ' active' : ''}" id="prospect-nav-toggle-btn">⌨ Navigator</button>
+      <button class="del-task-btn prospect-list-rename-btn" id="prospect-list-rename-btn">✏️ Rename</button>
+      <button class="del-task-btn" id="prospect-list-del-btn">🗑 Delete list</button>
+    </div>
+  </div>`;
+}
+
 function renderProspectListView() {
   const el = document.getElementById('prospect-list-view');
   if (!el) return;
@@ -5890,6 +6340,16 @@ function renderProspectListView() {
   // prune selection of anything no longer in the list (deleted elsewhere, sync tick, etc.)
   const liveIds = new Set(allProspectsInList.map(p => p.id));
   [...selectedProspects].forEach(id => { if (!liveIds.has(id)) selectedProspects.delete(id); });
+
+  if (prospectNavigatorOn) {
+    pnavEnsureCurrent();
+    el.innerHTML = prospectListHeaderHtml(l) + pnavShellHtml(allProspectsInList);
+    document.getElementById('prospect-nav-toggle-btn')?.addEventListener('click', toggleProspectNavigator);
+    document.getElementById('prospect-list-rename-btn')?.addEventListener('click', renameProspectListActive);
+    document.getElementById('prospect-list-del-btn')?.addEventListener('click', deleteProspectListActive);
+    wirePnavShell();
+    return;
+  }
 
   const outcomeCounts = {};
   allProspectsInList.forEach(p => { outcomeCounts[p.outcome] = (outcomeCounts[p.outcome] || 0) + 1; });
@@ -5939,14 +6399,7 @@ function renderProspectListView() {
     </div>`;
   }).join('') || (activeProspectOutcomeFilter ? '<div class="agenda-empty">No prospects with this status.</div>' : '<div class="agenda-empty">No prospects yet — Import to add some.</div>');
 
-  el.innerHTML = `
-    <div class="prospect-list-header">
-      <span class="prospect-list-title">${escHtml(l.name)}${l.source ? ` <span style="color:#555;font-size:11px;font-weight:400;">(${escHtml(l.source)})</span>` : ''}</span>
-      <div class="prospect-list-header-actions">
-        <button class="del-task-btn prospect-list-rename-btn" id="prospect-list-rename-btn">✏️ Rename</button>
-        <button class="del-task-btn" id="prospect-list-del-btn">🗑 Delete list</button>
-      </div>
-    </div>
+  el.innerHTML = prospectListHeaderHtml(l) + `
     ${filterBarHtml}
     <div class="exp-bulk-bar prospect-bulk-bar${anySelected ? '' : ' hidden'}">
       <label class="prospect-select-all-wrap"><input type="checkbox" class="prospect-select-all"${allFilteredSelected ? ' checked' : ''}> Select all</label>
@@ -5997,6 +6450,7 @@ function renderProspectListView() {
     }));
   document.getElementById('prospect-list-del-btn')?.addEventListener('click', deleteProspectListActive);
   document.getElementById('prospect-list-rename-btn')?.addEventListener('click', renameProspectListActive);
+  document.getElementById('prospect-nav-toggle-btn')?.addEventListener('click', toggleProspectNavigator);
 
   // Select-all — there may be two checkboxes (bulk bar + empty-state row); keep them in sync
   el.querySelectorAll('.prospect-select-all').forEach(cb => cb.addEventListener('change', () => {
@@ -6067,15 +6521,25 @@ function saveProspectNoteDebounced(id, note) {
   }, 600);
 }
 
+// Returns true on success, false on failure (reverts the optimistic write and
+// toasts) — the navigator's confirm flow only advances/dials on true.
 async function updateProspectOutcome(id, outcome) {
   const p = currentProspectList?.prospects.find(x => x.id === id);
+  const prevOutcome = p ? p.outcome : undefined;
   if (p) p.outcome = outcome; // optimistic — a sync tick landing mid-request must not revert this
   pendingProspectOutcomes[id] = outcome;
   try {
     await apiCall('PUT', '/prospects/' + id, { outcome });
     await loadProspectLists(); // counts changed
     if (prospectStatsDate === null) loadProspectStatsForDate(laTodayStr()); // instant feedback on today's tally
-  } catch (e) { delete pendingProspectOutcomes[id]; toast('Could not update outcome'); renderProspectListView(); }
+    return true;
+  } catch (e) {
+    delete pendingProspectOutcomes[id];
+    if (p) p.outcome = prevOutcome;
+    toast('Could not update outcome');
+    renderProspectListView();
+    return false;
+  }
 }
 
 // Daily cold-calling stats bar (v180) — dials, first-dial time, total talk
@@ -6152,15 +6616,19 @@ function dialProspect(id) {
   startCall();
 }
 
-async function promoteProspect(id) {
+// opts.silent (navigator confirm flow) skips both the toast and the
+// jump-to-lead confirm() prompt — the old row button keeps them unchanged.
+async function promoteProspect(id, opts) {
+  opts = opts || {};
   let lead;
   try { lead = await apiCall('POST', '/prospects/' + id + '/promote'); }
-  catch (e) { toast(e.message || 'Could not promote'); return; }
-  toast('Promoted to lead: ' + (lead.business_name || 'Untitled lead'));
+  catch (e) { toast(e.message || 'Could not promote'); return null; }
+  if (!opts.silent) toast('Promoted to lead: ' + (lead.business_name || 'Untitled lead'));
   const p = currentProspectList?.prospects.find(x => x.id === id);
   if (p) p.promoted_lead_id = lead.id;
   renderProspectListView();
-  if (confirm('Open the new lead now?')) { switchTab('crm'); openLead(lead.id); }
+  if (!opts.silent && confirm('Open the new lead now?')) { switchTab('crm'); openLead(lead.id); }
+  return lead;
 }
 
 // Only clears the prospect's own promoted flag — never touches the lead
