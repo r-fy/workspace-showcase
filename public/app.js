@@ -2549,7 +2549,7 @@ async function startCall() {
   const num = normalizeDialNumber(document.getElementById('dial-number').value);
   if (!num) { toast('Enter a valid phone number'); pnavCall = false; return; }
   twDialing = true;
-  if (!twDevice) { await initDialer(); if (gen !== callGen) { return; } if (!twDevice) { twDialing = false; return; } }
+  if (!twDevice) { await initDialer(); if (gen !== callGen) { return; } if (!twDevice) { twDialing = false; pnavCall = false; return; } }
   // An idle Device never hears tokenWillExpire (no signaling stream until the
   // first connect) — a stale token would fail every call until a page reload.
   if (Date.now() - twTokenAt > 50 * 60000) {
@@ -2603,7 +2603,7 @@ function hangUp() {
   callGen++; // cancels a startCall() still awaiting init/token/connect
   if (twCall) twCall.disconnect();
   else if (twDevice) { twDevice.disconnectAll(); endCallUi(); }
-  else { twDialing = false; pnavAutoDialId = null; } // nothing to hang up on — this is what unwedges a stranded dialer
+  else { twDialing = false; pnavCall = false; pnavAutoDialId = null; } // nothing to hang up on — this is what unwedges a stranded dialer
 }
 
 // Keypad: appends digits while idle, sends DTMF tones (phone-tree navigation)
