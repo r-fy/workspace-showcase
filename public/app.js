@@ -2603,7 +2603,7 @@ function hangUp() {
   callGen++; // cancels a startCall() still awaiting init/token/connect
   if (twCall) twCall.disconnect();
   else if (twDevice) { twDevice.disconnectAll(); endCallUi(); }
-  else { twDialing = false; pnavCall = false; pnavAutoDialId = null; } // nothing to hang up on — this is what unwedges a stranded dialer
+  else endCallUi(); // nothing live to hang up — still consumes a pending auto-dial and unwedges a stranded dialer
 }
 
 // Keypad: appends digits while idle, sends DTMF tones (phone-tree navigation)
