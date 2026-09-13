@@ -2509,6 +2509,7 @@ function endCallUi(callRef) {
   pnavCall = false;
   twCall = null;
   twDialing = false;
+  if (prospectNavigatorOn && currentTab === 'dialer') renderProspectListView();
   hideCallFloatBar();
   document.getElementById('dial-call-btn')?.classList.remove('hidden');
   document.getElementById('dial-hangup-btn')?.classList.add('hidden');
@@ -2532,8 +2533,10 @@ function endCallUi(callRef) {
   if (pnavAutoDialId) {
     const nextId = pnavAutoDialId;
     pnavAutoDialId = null;
-    pnavSelect(nextId);
-    pnavDial(nextId);
+    if (prospectNavigatorOn && currentTab === 'dialer') {
+      pnavSelect(nextId);
+      pnavDial(nextId);
+    }
   }
 }
 
@@ -2578,6 +2581,7 @@ async function startCall() {
     const call = await twDevice.connect({ params: { To: num, LeadId: crmCallLeadId || '', ProspectId: prospectIdForCall || '' } });
     if (gen !== callGen) { try { call.disconnect(); } catch(e2) {} return; }
     twCall = call;
+    if (prospectNavigatorOn && currentTab === 'dialer') renderProspectListView();
   } catch(e) {
     if (gen !== callGen) { return; } // cancelled mid-connect — hangUp() already cleaned up
     console.warn('twilio connect failed:', e);
@@ -4779,6 +4783,7 @@ function pnavKeysActive() {
 // #dial-number input's own Enter handler ever see the key (A6).
 document.addEventListener('keydown', e => {
   if (!pnavKeysActive()) return;
+  if (e.repeat) return; // auto-repeat from a held key must never re-fire a dial/confirm action
   if (e.metaKey || e.ctrlKey || e.altKey) return; // never swallow OS/browser shortcuts (Cmd+F, Cmd+K, Alt+Left/Right, Cmd+W, etc.)
 
   const ae = document.activeElement;
@@ -4808,8 +4813,10 @@ document.addEventListener('keydown', e => {
     pnavAdvance(key === 'ArrowRight' || key.toLowerCase() === 'j' ? 1 : -1);
     pnavFlashLegend('move'); e.preventDefault(); e.stopPropagation();
   } else if (key.toLowerCase() === 'd' || key === 'Enter') {
-    const p = pnavCurrent();
-    if (p && !twCall && !twDialing) pnavDial(p.id);
+    if (!pnavConfirmBusy) {
+      const p = pnavCurrent();
+      if (p && !twCall && !twDialing) pnavDial(p.id);
+    }
     pnavFlashLegend('dial'); e.preventDefault(); e.stopPropagation();
   } else if (key.toLowerCase() === 'h') {
     hangUp();
@@ -4818,8 +4825,10 @@ document.addEventListener('keydown', e => {
     if (twCall) hangUp();
     e.preventDefault(); e.stopPropagation();
   } else if (key >= '1' && key <= '8') {
-    const pair = PNAV_OUTCOME_KEYS.find(([k]) => k === key);
-    if (pair) pnavRequestOutcome(pair[1]);
+    if (!pnavConfirmBusy) {
+      const pair = PNAV_OUTCOME_KEYS.find(([k]) => k === key);
+      if (pair) pnavRequestOutcome(pair[1]);
+    }
     pnavFlashLegend('outcome'); e.preventDefault(); e.stopPropagation();
   } else if (key === ' ') {
     pnavJumpNextUncalled();
@@ -5815,6 +5824,7 @@ let pnavFocus = localStorage.getItem('prospect-navigator-focus') === '1';
 let pnavCurrentId = null;
 let pnavConfirm = null;   // { type:'outcome', outcome } | { type:'promote' } | null
 let pnavAutoDialId = null; // one-shot: set right before hangUp(), consumed exactly once by endCallUi
+let pnavConfirmBusy = false; // true while an async pnavConfirmYes() is in flight — blocks a repeat/second keypress from dialing or re-marking
 let pnavHelpOpen = false;
 let pnavCall = false;     // this live call was navigator-initiated — endCallUi skips the disposition modal
 
@@ -5882,7 +5892,7 @@ async function openProspectList(id) {
   currentProspectListId = id;
   currentProspectList = list;
   selectedProspects.clear(); lastClickedProspectId = null; activeProspectOutcomeFilter = null;
-  if (listChanged) { pnavCurrentId = null; pnavConfirm = null; }
+  if (listChanged) { pnavCurrentId = null; pnavConfirm = null; pnavAutoDialId = null; }
   if (prospectNavigatorOn) pnavEnsureCurrent();
   renderProspectListsPanel();
   renderProspectListView();
@@ -6008,7 +6018,7 @@ function renderLeadScoreCard(notes) {
 function toggleProspectNavigator() {
   prospectNavigatorOn = !prospectNavigatorOn;
   localStorage.setItem('prospect-navigator', prospectNavigatorOn ? '1' : '0');
-  pnavConfirm = null; pnavHelpOpen = false;
+  pnavConfirm = null; pnavHelpOpen = false; pnavAutoDialId = null;
   if (prospectNavigatorOn) pnavEnsureCurrent();
   renderProspectListView();
 }
@@ -6085,27 +6095,31 @@ async function pnavConfirmYes() {
   const p = pnavCurrent();
   if (!pc || !p) { pnavConfirm = null; renderProspectListView(); return; }
   pnavConfirm = null;
-
-  if (pc.type === 'outcome') {
-    const id = p.id;
-    const ok = await updateProspectOutcome(id, pc.outcome); // A1: only advance/dial on true
-    if (!ok) { renderProspectListView(); return; }
-    const nextId = pnavNextUncalled(id);
-    if (!nextId) { renderProspectListView(); return; } // stays selected, card shows "End of list"
-    if (twCall || twDialing) {
-      // Mid-call: hang up first: endCallUi consumes pnavAutoDialId exactly
-      // once, after this call has fully torn down (A2/A3).
-      pnavAutoDialId = nextId;
-      hangUp();
+  pnavConfirmBusy = true;
+  try {
+    if (pc.type === 'outcome') {
+      const id = p.id;
+      const ok = await updateProspectOutcome(id, pc.outcome); // A1: only advance/dial on true
+      if (!ok) { renderProspectListView(); return; }
+      const nextId = pnavNextUncalled(id);
+      if (!nextId) { renderProspectListView(); return; } // stays selected, card shows "End of list"
+      if (twCall || twDialing) {
+        // Mid-call: hang up first: endCallUi consumes pnavAutoDialId exactly
+        // once, after this call has fully torn down (A2/A3).
+        pnavAutoDialId = nextId;
+        hangUp();
+        renderProspectListView();
+      } else {
+        pnavSelect(nextId);
+        pnavDial(nextId);
+      }
+    } else if (pc.type === 'promote') {
+      const lead = await promoteProspect(p.id, { silent: true }); // A4
+      if (lead) toast('Promoted to lead');
       renderProspectListView();
-    } else {
-      pnavSelect(nextId);
-      pnavDial(nextId);
     }
-  } else if (pc.type === 'promote') {
-    const lead = await promoteProspect(p.id, { silent: true }); // A4
-    if (lead) toast('Promoted to lead');
-    renderProspectListView();
+  } finally {
+    pnavConfirmBusy = false;
   }
 }
 
