@@ -1323,6 +1323,7 @@ header {
 .prospect-dial-btn:disabled { opacity: 0.35; cursor: default; }
 .prospect-promote-btn:hover { border-color: #3a3a3a; color: #ccc; }
 .prospect-promote-btn.promoted { color: #5fc83b; border-color: #1a3a12; }
+.lead-flag { color: #5fc83b; font-size: 11px; font-weight: 600; }
 .prospect-unpromote-btn { color: #8f9095; font-size: 12px; padding: 5px 7px; border-radius: 4px; }
 .prospect-unpromote-btn:hover { color: #f0b429; border: 1px solid #3a2f0f; background: #241d0a; }
 .prospect-del-btn { color: #7d7e83; font-size: 13px; padding: 3px 6px; }
@@ -1397,7 +1398,7 @@ header {
 .status-idle { color: #7d7e83; }
 .status-incall { color: #8ce870; font-weight: 600; }
 
-.dial-actions { display: flex; gap: 8px; margin-top: 12px; }
+.pnav-card .dial-actions { display: flex; gap: 8px; margin-top: 12px; }
 .dial-btn, .hangup-btn {
   flex: 1; font-size: 13px; font-weight: 600; padding: 9px 14px; border-radius: 6px; border: 1px solid #2a5a20;
   background: #1a3a13; color: #8ce870; transition: all 0.12s;
@@ -1470,7 +1471,8 @@ header {
 @media (max-width: 900px) {
   .pnav-shell { flex-direction: column; min-height: 0; }
   .pnav-shell .pnav-list { display: none; } /* list hidden regardless of Focus toggle — no room for it */
-  .pnav-nav button { padding: 6px 2px; } /* Prev/Next full-width-ish touch targets */
+  .pnav-nav { width: 100%; }
+  .pnav-nav button { flex: 1; width: 100%; padding: 8px 2px; } /* Prev/Next span full width per spec */
   .pnav-card-header { flex-wrap: wrap; }
 }
 @media (max-width: 640px) {

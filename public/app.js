@@ -2547,14 +2547,14 @@ async function startCall() {
   if (twCall || twDialing) return;
   const gen = ++callGen;
   const num = normalizeDialNumber(document.getElementById('dial-number').value);
-  if (!num) { toast('Enter a valid phone number'); return; }
+  if (!num) { toast('Enter a valid phone number'); pnavCall = false; return; }
   twDialing = true;
-  if (!twDevice) { await initDialer(); if (gen !== callGen) { twDialing = false; return; } if (!twDevice) { twDialing = false; return; } }
+  if (!twDevice) { await initDialer(); if (gen !== callGen) { return; } if (!twDevice) { twDialing = false; return; } }
   // An idle Device never hears tokenWillExpire (no signaling stream until the
   // first connect) — a stale token would fail every call until a page reload.
   if (Date.now() - twTokenAt > 50 * 60000) {
     try { twDevice.updateToken(await refreshDialerToken()); } catch(e) {}
-    if (gen !== callGen) { twDialing = false; return; }
+    if (gen !== callGen) { return; }
   }
   // Capture the lead context at dial time — the disposition/auto-advance flow
   // uses this, not whatever lead happens to be open when the call ends.
@@ -2576,10 +2576,10 @@ async function startCall() {
     // custom params the /api/twilio/voice webhook validates and stamps on
     // the calls row (ProspectId only set when dialed via dialProspect()).
     const call = await twDevice.connect({ params: { To: num, LeadId: crmCallLeadId || '', ProspectId: prospectIdForCall || '' } });
-    if (gen !== callGen) { try { call.disconnect(); } catch(e2) {} twDialing = false; return; }
+    if (gen !== callGen) { try { call.disconnect(); } catch(e2) {} return; }
     twCall = call;
   } catch(e) {
-    if (gen !== callGen) { twDialing = false; return; } // cancelled mid-connect — hangUp() already cleaned up
+    if (gen !== callGen) { return; } // cancelled mid-connect — hangUp() already cleaned up
     console.warn('twilio connect failed:', e);
     const msg = String(e && (e.message || e.name) || '');
     toast(/Permission|NotAllowed/i.test(msg) ? 'Microphone blocked — allow it in browser settings' : 'Could not start call');
@@ -2603,6 +2603,7 @@ function hangUp() {
   callGen++; // cancels a startCall() still awaiting init/token/connect
   if (twCall) twCall.disconnect();
   else if (twDevice) { twDevice.disconnectAll(); endCallUi(); }
+  else { twDialing = false; pnavAutoDialId = null; } // nothing to hang up on — this is what unwedges a stranded dialer
 }
 
 // Keypad: appends digits while idle, sends DTMF tones (phone-tree navigation)
@@ -4778,6 +4779,7 @@ function pnavKeysActive() {
 // #dial-number input's own Enter handler ever see the key (A6).
 document.addEventListener('keydown', e => {
   if (!pnavKeysActive()) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return; // never swallow OS/browser shortcuts (Cmd+F, Cmd+K, Alt+Left/Right, Cmd+W, etc.)
 
   const ae = document.activeElement;
   const inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
@@ -6056,6 +6058,8 @@ function pnavJumpNextUncalled() {
 // outcome confirm) goes through here so pnavCall is set before startCall()
 // ever runs — endCallUi (A3) reads it to suppress the CRM disposition modal.
 function pnavDial(id) {
+  const p = pnavList().find(x => x.id === id);
+  if (!p || !p.phone || twCall || twDialing) return;
   pnavCall = true;
   dialProspect(id);
 }
@@ -6197,7 +6201,7 @@ function pnavCardBodyHtml(p, idx, total) {
   const subParts = [fmtPhone(p.phone) || p.phone || '—'];
   if (p.city) subParts.push(p.city);
   if (p.niche) subParts.push(p.niche); // A8: omitted entirely when empty, not shown as a blank segment
-  const endOfList = idx === total - 1 && !pnavNextUncalled(p.id) && !pnavConfirm;
+  const endOfList = !pnavNextUncalled(p.id) && !pnavConfirm;
   return `
     <div class="focus-name">${escHtml(p.name || 'Unnamed')}</div>
     <div class="focus-sub">${escHtml(subParts.join(' · '))}</div>
