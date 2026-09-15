@@ -494,6 +494,31 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sms_user ON sms_messages(user_id, created_at);
 `);
 
+// Video sub-tab on each lead: short prospect videos published through the
+// separate rssolutionsmarketing.com Cloudflare Worker (video.rssolutionsmarketing.com).
+// This table is just the lead-scoped ledger of what got uploaded/published/
+// deleted there - the actual files and event tracking live on the Worker.
+// id is client-generated and doubles as the idempotency key for publish.
+// keys holds the JSON of R2 object keys the Worker handed out for this row,
+// so a publish call can be validated against exactly what was uploaded.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lead_videos (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'owner',
+    lead_id TEXT NOT NULL REFERENCES leads(id),
+    slug TEXT DEFAULT NULL,
+    url TEXT DEFAULT NULL,
+    business TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    has_pdf INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'pending',
+    keys TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    deleted_at INTEGER DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_lead_videos_lead ON lead_videos(lead_id);
+`);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks POST form-encoded
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1142,6 +1167,164 @@ app.post('/api/leads/:id/connections/:source/pull', auth, async (req, res) => {
     ON CONFLICT(lead_id, source_id) DO UPDATE SET status=excluded.status, data=excluded.data, detail=excluded.detail, checked_at=excluded.checked_at`)
     .run(lead.id, src.id, result.status, JSON.stringify(result.data || {}), result.detail || '', t);
   res.json({ id: src.id, status: result.status, data: result.data || {}, detail: result.detail || '', checked_at: t });
+});
+
+// ── Video sub-tab (per lead) ───────────────────────────────────
+// Short prospect videos, published through the separate Cloudflare Worker at
+// video.rssolutionsmarketing.com. This server never stores the video files
+// themselves - it hands out presigned R2 PUT URLs from the Worker, tracks the
+// row's lifecycle (pending -> published / delete_pending -> deleted), and
+// proxies the event list for the "who watched" view. Cloudflare 1010s the
+// default Node/undici User-Agent, so every outbound call sets a real one.
+const VIDEO_WORKER_URL = (process.env.VIDEO_WORKER_URL || '').replace(/\/$/, '');
+const VIDEO_PUBLISH_KEY = process.env.VIDEO_PUBLISH_KEY || '';
+const VIDEO_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+// filename/contentType pairs the Worker's /api/upload-url accepts — copied
+// exactly from cloudflare-video/worker.js's UPLOAD_KINDS.
+const VIDEO_UPLOAD_KINDS = {
+  video: 'video/mp4',
+  pdf: 'application/pdf',
+  poster: 'image/jpeg',
+};
+
+function videoWorkerConfigured() { return !!(VIDEO_WORKER_URL && VIDEO_PUBLISH_KEY); }
+
+function videoNotConfigured(res) {
+  return res.status(503).json({ error: 'Video uploads are not set up yet' });
+}
+
+async function videoWorkerFetch(path, opts = {}) {
+  return fetch(VIDEO_WORKER_URL + path, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': VIDEO_UA,
+      'Authorization': 'Bearer ' + VIDEO_PUBLISH_KEY,
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+function videoRowFor(leadId, vid, userId) {
+  return db.prepare(`SELECT lv.* FROM lead_videos lv JOIN leads l ON l.id = lv.lead_id
+    WHERE lv.id = ? AND lv.lead_id = ? AND lv.user_id = ? AND lv.deleted_at IS NULL AND l.deleted_at IS NULL`)
+    .get(vid, leadId, userId);
+}
+
+app.post('/api/leads/:id/videos/upload-url', auth, async (req, res) => {
+  if (!videoWorkerConfigured()) return videoNotConfigured(res);
+  const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const { id, business, notes, files } = req.body || {};
+  if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
+  if (!files || files.video !== VIDEO_UPLOAD_KINDS.video) return res.status(400).json({ error: 'a video file is required' });
+  for (const kind of Object.keys(files)) {
+    if (!VIDEO_UPLOAD_KINDS[kind] || files[kind] !== VIDEO_UPLOAD_KINDS[kind]) {
+      return res.status(400).json({ error: `bad content type for ${kind}` });
+    }
+  }
+  const existing = db.prepare('SELECT id FROM lead_videos WHERE id=?').get(id);
+  if (existing) return res.status(400).json({ error: 'a video with this id already exists' });
+  const t = now();
+  // Insert the row BEFORE calling the Worker so a crash mid-upload still
+  // leaves a visible "pending" trail instead of silently losing the id.
+  db.prepare(`INSERT INTO lead_videos (id, user_id, lead_id, business, notes, state, keys, created_at)
+    VALUES (?,?,?,?,?,?,?,?)`)
+    .run(id, req.userId, lead.id, business || '', notes || '', 'pending', '{}', t);
+  const keys = {};
+  const uploadUrls = {};
+  try {
+    for (const kind of Object.keys(files)) {
+      const wRes = await videoWorkerFetch('/api/upload-url', {
+        method: 'POST',
+        body: JSON.stringify({ filename: `${id}-${kind}`, contentType: files[kind], kind }),
+      });
+      if (!wRes.ok) throw new Error('worker upload-url failed: ' + wRes.status);
+      const data = await wRes.json();
+      keys[kind] = data.key;
+      uploadUrls[kind] = data.uploadUrl;
+    }
+  } catch (e) {
+    db.prepare('UPDATE lead_videos SET deleted_at=? WHERE id=?').run(now(), id); // roll back the placeholder row
+    return res.status(502).json({ error: 'Could not reach the video service' });
+  }
+  db.prepare('UPDATE lead_videos SET keys=? WHERE id=?').run(JSON.stringify(keys), id);
+  res.json({ id, uploadUrls });
+});
+
+app.post('/api/leads/:id/videos', auth, async (req, res) => {
+  if (!videoWorkerConfigured()) return videoNotConfigured(res);
+  const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const { id, business, notes } = req.body || {};
+  const row = videoRowFor(lead.id, id, req.userId);
+  if (!row) return res.status(404).json({ error: 'Video not found' });
+  if (row.slug) return res.json({ id: row.id, slug: row.slug, url: row.url }); // idempotent — never re-publish
+  let keys = {};
+  try { keys = JSON.parse(row.keys || '{}'); } catch (e) {}
+  if (!keys.video) return res.status(400).json({ error: 'no uploaded video on this row yet' });
+  const bizName = (business ?? row.business) || '';
+  const bizNotes = notes ?? row.notes;
+  let wRes;
+  try {
+    wRes = await videoWorkerFetch('/api/publish', {
+      method: 'POST',
+      body: JSON.stringify({ business: bizName, notes: bizNotes, videoKey: keys.video, pdfKey: keys.pdf || null, posterKey: keys.poster || null }),
+    });
+  } catch (e) {
+    return res.status(502).json({ error: 'Could not reach the video service' });
+  }
+  if (!wRes.ok) return res.status(502).json({ error: 'Could not publish the video' });
+  const data = await wRes.json();
+  db.prepare('UPDATE lead_videos SET state=?, slug=?, url=?, business=?, notes=?, has_pdf=? WHERE id=?')
+    .run('published', data.slug, data.url, bizName, bizNotes, keys.pdf ? 1 : 0, row.id);
+  res.json({ id: row.id, slug: data.slug, url: data.url });
+});
+
+app.get('/api/leads/:id/videos', auth, (req, res) => {
+  const lead = db.prepare('SELECT id FROM leads WHERE id=? AND user_id=? AND deleted_at IS NULL').get(req.params.id, req.userId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const rows = db.prepare(`SELECT id, slug, url, business, notes, has_pdf, state, created_at FROM lead_videos
+    WHERE lead_id=? AND user_id=? AND deleted_at IS NULL ORDER BY created_at DESC`).all(lead.id, req.userId);
+  res.json(rows);
+});
+
+app.get('/api/leads/:id/videos/:vid/events', auth, async (req, res) => {
+  if (!videoWorkerConfigured()) return videoNotConfigured(res);
+  const row = videoRowFor(req.params.id, req.params.vid, req.userId);
+  if (!row) return res.status(404).json({ error: 'Video not found' });
+  if (!row.slug) return res.json({ events: [] }); // never published, nothing to have tracked
+  const page = parseInt(req.query.page || '1', 10) || 1;
+  let wRes;
+  try {
+    wRes = await videoWorkerFetch(`/api/events?slug=${encodeURIComponent(row.slug)}&page=${page}`, { method: 'GET' });
+  } catch (e) {
+    return res.status(502).json({ error: 'Could not reach the video service' });
+  }
+  if (!wRes.ok) return res.status(502).json({ error: 'Could not load events' });
+  const data = await wRes.json();
+  res.json(data);
+});
+
+app.delete('/api/leads/:id/videos/:vid', auth, async (req, res) => {
+  if (!videoWorkerConfigured()) return videoNotConfigured(res);
+  const row = videoRowFor(req.params.id, req.params.vid, req.userId);
+  if (!row) return res.status(404).json({ error: 'Video not found' });
+  db.prepare('UPDATE lead_videos SET state=? WHERE id=?').run('delete_pending', row.id);
+  if (!row.slug) {
+    // Never published — nothing exists on the Worker side to delete.
+    db.prepare('UPDATE lead_videos SET state=?, deleted_at=? WHERE id=?').run('deleted', now(), row.id);
+    return res.json({ ok: true });
+  }
+  let wRes;
+  try {
+    wRes = await videoWorkerFetch('/api/prospect', { method: 'DELETE', body: JSON.stringify({ slug: row.slug }) });
+  } catch (e) {
+    return res.status(502).json({ error: 'Retry delete' });
+  }
+  if (!wRes.ok) return res.status(502).json({ error: 'Retry delete' });
+  db.prepare('UPDATE lead_videos SET state=?, deleted_at=? WHERE id=?').run('deleted', now(), row.id);
+  res.json({ ok: true });
 });
 
 // ── Prospect lists (Dialer tab) ──────────────────────────────

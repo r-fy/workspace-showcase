@@ -5192,11 +5192,14 @@ function updateCrmHeader() {
 }
 
 function showCrmSub(sub) {
-  ['overview', 'audit', 'followup', 'calls', 'connections'].forEach(s =>
+  ['overview', 'audit', 'followup', 'calls', 'connections', 'video'].forEach(s =>
     document.getElementById('crm-' + s + '-sub')?.classList.toggle('hidden', s !== sub));
 }
 
 function switchCrmSub(sub, preferId) {
+  // Never tear down the video sub-tab's DOM mid-upload (spec requirement) —
+  // switching away and back while an upload is in flight just leaves it be.
+  if (crmSubTab === 'video' && videoUploadInFlight && sub !== 'video') { crmSubTab = sub; updateCrmHeader(); showCrmSub(sub); return; }
   crmSubTab = sub;
   updateCrmHeader();
   showCrmSub(sub);
@@ -5206,6 +5209,7 @@ function switchCrmSub(sub, preferId) {
   if (sub === 'followup') renderCrmFollowupSub(preferId);
   if (sub === 'calls') renderCrmCallsSub();
   if (sub === 'connections') renderCrmConnectionsSub();
+  if (sub === 'video') renderCrmVideoSub();
 }
 
 function leadStatusColor(s) {
@@ -5753,6 +5757,275 @@ async function pullConnection(sourceId) {
     toast('Pull failed: ' + e.message);
   }
   drawConnections();
+}
+
+// ── Video sub-tab (per lead) ──────────────────────────────────────────────
+// Short prospect videos, uploaded straight to R2 via presigned URLs the
+// server gets from the Cloudflare Worker, then published to a shareable
+// link. History list + a new-video form + an on-demand event list per video.
+let leadVideos = [];
+let videoUploadInFlight = false; // blocks re-rendering the sub-tab DOM mid-upload
+let openVideoId = null;
+let videoEvents = [];
+let videoEventsPage = 1;
+let videoEventsHasMore = false;
+let videoEventsLastFetch = 0;
+let videoEventsTimer = null;
+
+const VIDEO_EVENT_LABELS = {
+  open: 'Opened the page',
+  play: 'Started the video',
+  p50: 'Watched half',
+  p100: 'Watched to the end',
+  cta_call: 'Tapped call',
+  cta_pdf: 'Opened the PDF',
+};
+
+function fmtPacific(ms) {
+  return new Date(ms).toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+// Same moov/mdat scan as the Worker dashboard's checkFaststart (cloudflare-video/src/pages.js)
+// — a video whose moov atom comes after mdat has to download fully before it can play,
+// so a phone on cell data just stalls. Read only the first 1MB, same as the dashboard.
+function videoLooksFaststart(buf) {
+  const view = new DataView(buf);
+  let offset = 0, sawMoov = false;
+  while (offset + 8 <= view.byteLength) {
+    let size = view.getUint32(offset);
+    const type = String.fromCharCode(view.getUint8(offset + 4), view.getUint8(offset + 5), view.getUint8(offset + 6), view.getUint8(offset + 7));
+    let headerLen = 8;
+    if (size === 1) {
+      if (offset + 16 > view.byteLength) break;
+      const hi = view.getUint32(offset + 8), lo = view.getUint32(offset + 12);
+      size = hi * 4294967296 + lo;
+      headerLen = 16;
+    } else if (size === 0) {
+      size = view.byteLength - offset;
+    }
+    if (type === 'mdat' && !sawMoov) return false;
+    if (type === 'moov') sawMoov = true;
+    if (size < headerLen) break;
+    offset += size;
+  }
+  return true;
+}
+
+async function renderCrmVideoSub() {
+  if (videoUploadInFlight) return; // never redraw out from under an active upload
+  const area = document.getElementById('lead-video-area');
+  if (!area || !currentLead) return;
+  area.innerHTML = '<div style="padding:24px;color:#666;font-size:13px;">Loading…</div>';
+  try { leadVideos = await apiCall('GET', `/leads/${currentLead.id}/videos`); }
+  catch (e) { area.innerHTML = '<div style="padding:24px;color:#c0392b;font-size:13px;">Could not load videos.</div>'; return; }
+  openVideoId = null;
+  drawVideoSub();
+}
+
+function videoStateLabel(v) {
+  if (v.state === 'delete_pending') return 'Retry delete';
+  if (v.state === 'pending') return 'Not published yet';
+  if (v.state === 'published') return 'Published';
+  return v.state;
+}
+
+function drawVideoSub() {
+  const area = document.getElementById('lead-video-area');
+  if (!area || !currentLead) return;
+  const history = leadVideos.map(v => `
+    <div class="crm-history-row" data-open-video="${v.id}">
+      <span class="lead-timeline-label">${escHtml(v.business || currentLead.business_name)} — ${videoStateLabel(v)}${v.url ? ` · <a href="${escHtml(v.url)}" target="_blank" rel="noopener">link</a>` : ''}</span>
+      <span class="lead-timeline-date">${fmtPacific(v.created_at)}</span>
+    </div>`).join('');
+  area.innerHTML = `
+    <div id="crm-video-history" class="crm-history-bar">
+      <button class="audit-add-btn" id="crm-new-video-btn">+ New video</button>
+      ${history || '<div style="color:#666;font-size:13px;padding:8px;">No videos for this lead yet.</div>'}
+    </div>
+    <div id="crm-video-detail"></div>
+  `;
+  document.getElementById('crm-new-video-btn').addEventListener('click', showNewVideoForm);
+  area.querySelectorAll('[data-open-video]').forEach(el => el.addEventListener('click', () => openVideoDetail(el.dataset.openVideo)));
+  if (openVideoId) openVideoDetail(openVideoId);
+}
+
+function showNewVideoForm() {
+  const detail = document.getElementById('crm-video-detail');
+  if (!detail) return;
+  detail.innerHTML = `
+    <div class="daily-task-form">
+      <div class="expense-field-row">
+        <label>Business name</label>
+        <input type="text" id="vid-business" value="${escHtml(currentLead.business_name || '')}">
+      </div>
+      <div class="expense-field-row">
+        <label>Notes (shown under the video)</label>
+        <textarea id="vid-notes" style="min-height:60px;"></textarea>
+      </div>
+      <div class="expense-field-row">
+        <label>Video (mp4, required)</label>
+        <input type="file" id="vid-file-video" accept="video/mp4">
+        <div id="vid-faststart-warn" class="video-faststart-warn hidden">This mp4 does not look faststart-ready. Run publish.sh on it first so it plays instantly on phones, or upload anyway if you already ran it.</div>
+      </div>
+      <div class="expense-field-row">
+        <label>Proposal PDF (optional)</label>
+        <input type="file" id="vid-file-pdf" accept="application/pdf">
+      </div>
+      <div class="expense-field-row">
+        <label>Poster image (optional)</label>
+        <input type="file" id="vid-file-poster" accept="image/jpeg">
+      </div>
+      <div id="vid-upload-progress" class="video-progress hidden"><div class="video-progress-bar" id="vid-progress-bar"></div></div>
+      <div id="vid-upload-status" class="video-upload-status"></div>
+      <div class="daily-task-form-actions">
+        <button class="save-btn" id="vid-upload-btn">Upload and create link</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('vid-file-video').addEventListener('change', async (e) => {
+    const warn = document.getElementById('vid-faststart-warn');
+    warn.classList.add('hidden');
+    const file = e.target.files[0];
+    if (!file) return;
+    const buf = await file.slice(0, 1024 * 1024).arrayBuffer();
+    if (!videoLooksFaststart(buf)) warn.classList.remove('hidden');
+  });
+  document.getElementById('vid-upload-btn').addEventListener('click', startVideoUpload);
+}
+
+function xhrPut(url, file, contentType, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Content-Type', contentType);
+    xhr.upload.addEventListener('progress', (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); });
+    xhr.addEventListener('load', () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error('upload failed (' + xhr.status + ')')); });
+    xhr.addEventListener('error', () => reject(new Error('upload failed')));
+    xhr.send(file);
+  });
+}
+
+async function startVideoUpload() {
+  const video = document.getElementById('vid-file-video').files[0];
+  const pdf = document.getElementById('vid-file-pdf').files[0];
+  const poster = document.getElementById('vid-file-poster').files[0];
+  const business = document.getElementById('vid-business').value.trim() || currentLead.business_name || 'Untitled';
+  const notes = document.getElementById('vid-notes').value;
+  const statusEl = document.getElementById('vid-upload-status');
+  const progressWrap = document.getElementById('vid-upload-progress');
+  const progressBar = document.getElementById('vid-progress-bar');
+  if (!video) { statusEl.textContent = 'A video file is required.'; return; }
+  const rowId = (crypto.randomUUID ? crypto.randomUUID() : 'vid-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  const files = { video: 'video/mp4' };
+  if (pdf) files.pdf = 'application/pdf';
+  if (poster) files.poster = 'image/jpeg';
+  videoUploadInFlight = true;
+  document.getElementById('vid-upload-btn').disabled = true;
+  statusEl.textContent = 'Getting upload link…';
+  try {
+    const { uploadUrls } = await apiCall('POST', `/leads/${currentLead.id}/videos/upload-url`, { id: rowId, business, notes, files });
+    progressWrap.classList.remove('hidden');
+    const parts = [['video', video, 'video/mp4'], ...(pdf ? [['pdf', pdf, 'application/pdf']] : []), ...(poster ? [['poster', poster, 'image/jpeg']] : [])];
+    let doneWeight = 0;
+    for (const [kind, file, ct] of parts) {
+      statusEl.textContent = 'Uploading ' + kind + '…';
+      await xhrPut(uploadUrls[kind], file, ct, (frac) => {
+        progressBar.style.width = Math.round(((doneWeight + frac) / parts.length) * 100) + '%';
+      });
+      doneWeight++;
+      progressBar.style.width = Math.round((doneWeight / parts.length) * 100) + '%';
+    }
+    statusEl.textContent = 'Creating share link…';
+    const pub = await apiCall('POST', `/leads/${currentLead.id}/videos`, { id: rowId, business, notes });
+    statusEl.innerHTML = `Link ready: <a href="${escHtml(pub.url)}" target="_blank" rel="noopener">${escHtml(pub.url)}</a> <button class="audit-add-btn" id="vid-copy-link">Copy</button>`;
+    document.getElementById('vid-copy-link')?.addEventListener('click', () => { navigator.clipboard.writeText(pub.url); toast('Link copied'); });
+    videoUploadInFlight = false;
+    openVideoId = rowId;
+    await renderCrmVideoSub();
+  } catch (e) {
+    videoUploadInFlight = false;
+    statusEl.textContent = 'Error: ' + (e.message || 'upload failed');
+    document.getElementById('vid-upload-btn').disabled = false;
+  }
+}
+
+function stopVideoEventsPoll() {
+  if (videoEventsTimer) { clearInterval(videoEventsTimer); videoEventsTimer = null; }
+}
+
+async function openVideoDetail(id) {
+  stopVideoEventsPoll();
+  openVideoId = id;
+  const v = leadVideos.find(x => x.id === id);
+  const detail = document.getElementById('crm-video-detail');
+  if (!detail || !v) return;
+  detail.innerHTML = `
+    <div class="daily-task-form">
+      <div class="video-detail-head">
+        <strong>${escHtml(v.business || '')}</strong>
+        <span>${videoStateLabel(v)}</span>
+        ${v.url ? `<a href="${escHtml(v.url)}" target="_blank" rel="noopener">${escHtml(v.url)}</a> <button class="audit-add-btn" id="vid-copy-link2">Copy</button>` : ''}
+      </div>
+      ${v.notes ? `<div class="video-detail-notes">${escHtml(v.notes)}</div>` : ''}
+      <div class="daily-task-form-actions">
+        ${v.state === 'delete_pending' ? '<button class="del-task-btn" id="vid-retry-delete-btn">Retry delete</button>' : '<button class="del-task-btn" id="vid-delete-btn">Delete video</button>'}
+      </div>
+      <div id="vid-events-list" class="video-events-list"></div>
+      <div id="vid-events-more"></div>
+    </div>
+  `;
+  document.getElementById('vid-copy-link2')?.addEventListener('click', () => { navigator.clipboard.writeText(v.url); toast('Link copied'); });
+  document.getElementById('vid-delete-btn')?.addEventListener('click', () => deleteVideo(v.id));
+  document.getElementById('vid-retry-delete-btn')?.addEventListener('click', () => deleteVideo(v.id));
+  if (!v.slug) { document.getElementById('vid-events-list').innerHTML = '<div style="color:#666;font-size:13px;">Not published yet — no activity to show.</div>'; return; }
+  videoEventsPage = 1;
+  await loadVideoEvents(v, true);
+  // Refresh at most once a minute while this video stays open — never polled per-lead.
+  videoEventsTimer = setInterval(() => { if (openVideoId === v.id) loadVideoEvents(v, true); }, 60000);
+}
+
+async function loadVideoEvents(v, reset) {
+  if (reset) { videoEvents = []; videoEventsPage = 1; }
+  const now = Date.now();
+  if (!reset && now - videoEventsLastFetch < 60000) return; // client-side floor to match the "at most once a minute" rule
+  videoEventsLastFetch = now;
+  try {
+    const data = await apiCall('GET', `/leads/${currentLead.id}/videos/${v.id}/events?page=${videoEventsPage}`);
+    if (reset) videoEvents = data.events || []; else videoEvents = videoEvents.concat(data.events || []);
+    videoEventsHasMore = (data.events || []).length >= 50;
+  } catch (e) { /* leave whatever was already shown */ }
+  drawVideoEvents();
+}
+
+function drawVideoEvents() {
+  const list = document.getElementById('vid-events-list');
+  const more = document.getElementById('vid-events-more');
+  if (!list) return;
+  list.innerHTML = videoEvents.length
+    ? videoEvents.map(e => `<div class="video-event-row"><span>${escHtml(VIDEO_EVENT_LABELS[e.event] || e.event)}</span><span class="lead-timeline-date">${fmtPacific(e.created_at)}</span></div>`).join('')
+    : '<div style="color:#666;font-size:13px;">No activity yet.</div>';
+  if (more) more.innerHTML = videoEventsHasMore ? '<button class="audit-add-btn" id="vid-load-more-btn">Load more</button>' : '';
+  document.getElementById('vid-load-more-btn')?.addEventListener('click', async () => {
+    videoEventsPage++;
+    const v = leadVideos.find(x => x.id === openVideoId);
+    if (v) await loadVideoEvents(v, false);
+  });
+}
+
+async function deleteVideo(id) {
+  if (!confirm('Delete this video? This removes the file and the share link.')) return;
+  try {
+    await apiCall('DELETE', `/leads/${currentLead.id}/videos/${id}`);
+    toast('Video deleted');
+    stopVideoEventsPoll();
+    openVideoId = null;
+    await renderCrmVideoSub();
+  } catch (e) {
+    toast('Could not delete — Retry delete');
+    await renderCrmVideoSub(); // row now shows delete_pending with a Retry delete button
+  }
 }
 
 // Standalone Dialer tab (v162): free dialing like the pre-CRM Calls tab.

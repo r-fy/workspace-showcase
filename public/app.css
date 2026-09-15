@@ -1743,6 +1743,22 @@ header {
   padding: 4px 8px; font-size: 12px; color: #e0e0e0; font-family: inherit; color-scheme: dark;
 }
 
+/* ── Video sub-tab ────────────────────────────────────────────── */
+.video-faststart-warn {
+  margin-top: 6px; padding: 8px 10px; font-size: 12px; color: #ffb347;
+  background: #2a2010; border: 1px solid #4a3a18; border-radius: 6px;
+}
+.video-progress { height: 6px; border-radius: 3px; background: #1a1a1a; overflow: hidden; margin: 8px 0; }
+.video-progress-bar { height: 100%; width: 0%; background: #5fc83b; transition: width 0.15s; }
+.video-upload-status { font-size: 13px; color: #a3a4a8; word-break: break-word; }
+.video-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: #ccc; margin-bottom: 8px; }
+.video-detail-notes { font-size: 13px; color: #999; margin-bottom: 10px; white-space: pre-wrap; }
+.video-events-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.video-event-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 10px; border: 1px solid #1e1e1e; border-radius: 6px; font-size: 12px; color: #ccc;
+}
+
 /* Persistent floating call-status bar — survives switching leads/tabs mid-call */
 .call-float-bar {
   position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
