@@ -1179,7 +1179,7 @@ app.post('/api/leads/:id/connections/:source/pull', auth, async (req, res) => {
 const VIDEO_WORKER_URL = (process.env.VIDEO_WORKER_URL || '').replace(/\/$/, '');
 const VIDEO_PUBLISH_KEY = process.env.VIDEO_PUBLISH_KEY || '';
 const VIDEO_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
-// filename/contentType pairs the Worker's /api/upload-url accepts — copied
+// filename/contentType pairs the Worker's /api/upload-url accepts - copied
 // exactly from cloudflare-video/worker.js's UPLOAD_KINDS.
 const VIDEO_UPLOAD_KINDS = {
   video: 'video/mp4',
@@ -1259,11 +1259,12 @@ app.post('/api/leads/:id/videos', auth, async (req, res) => {
   const { id, business, notes } = req.body || {};
   const row = videoRowFor(lead.id, id, req.userId);
   if (!row) return res.status(404).json({ error: 'Video not found' });
-  if (row.slug) return res.json({ id: row.id, slug: row.slug, url: row.url }); // idempotent — never re-publish
+  if (row.slug) return res.json({ id: row.id, slug: row.slug, url: row.url }); // idempotent - never re-publish
   let keys = {};
   try { keys = JSON.parse(row.keys || '{}'); } catch (e) {}
   if (!keys.video) return res.status(400).json({ error: 'no uploaded video on this row yet' });
   const bizName = (business ?? row.business) || '';
+  if (!bizName.trim()) return res.status(400).json({ error: 'Add a business name before publishing' });
   const bizNotes = notes ?? row.notes;
   let wRes;
   try {
@@ -1312,7 +1313,7 @@ app.delete('/api/leads/:id/videos/:vid', auth, async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Video not found' });
   db.prepare('UPDATE lead_videos SET state=? WHERE id=?').run('delete_pending', row.id);
   if (!row.slug) {
-    // Never published — nothing exists on the Worker side to delete.
+    // Never published - nothing exists on the Worker side to delete.
     db.prepare('UPDATE lead_videos SET state=?, deleted_at=? WHERE id=?').run('deleted', now(), row.id);
     return res.json({ ok: true });
   }

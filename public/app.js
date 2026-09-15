@@ -5197,7 +5197,7 @@ function showCrmSub(sub) {
 }
 
 function switchCrmSub(sub, preferId) {
-  // Never tear down the video sub-tab's DOM mid-upload (spec requirement) —
+  // Never tear down the video sub-tab's DOM mid-upload (spec requirement) -
   // switching away and back while an upload is in flight just leaves it be.
   if (crmSubTab === 'video' && videoUploadInFlight && sub !== 'video') { crmSubTab = sub; updateCrmHeader(); showCrmSub(sub); return; }
   crmSubTab = sub;
@@ -5788,7 +5788,7 @@ function fmtPacific(ms) {
 }
 
 // Same moov/mdat scan as the Worker dashboard's checkFaststart (cloudflare-video/src/pages.js)
-// — a video whose moov atom comes after mdat has to download fully before it can play,
+// - a video whose moov atom comes after mdat has to download fully before it can play,
 // so a phone on cell data just stalls. Read only the first 1MB, same as the dashboard.
 function videoLooksFaststart(buf) {
   const view = new DataView(buf);
@@ -5836,7 +5836,7 @@ function drawVideoSub() {
   if (!area || !currentLead) return;
   const history = leadVideos.map(v => `
     <div class="crm-history-row" data-open-video="${v.id}">
-      <span class="lead-timeline-label">${escHtml(v.business || currentLead.business_name)} — ${videoStateLabel(v)}${v.url ? ` · <a href="${escHtml(v.url)}" target="_blank" rel="noopener">link</a>` : ''}</span>
+      <span class="lead-timeline-label">${escHtml(v.business || currentLead.business_name)} - ${videoStateLabel(v)}${v.url ? ` · <a href="${escHtml(v.url)}" target="_blank" rel="noopener">link</a>` : ''}</span>
       <span class="lead-timeline-date">${fmtPacific(v.created_at)}</span>
     </div>`).join('');
   area.innerHTML = `
@@ -5858,7 +5858,7 @@ function showNewVideoForm() {
     <div class="daily-task-form">
       <div class="expense-field-row">
         <label>Business name</label>
-        <input type="text" id="vid-business" value="${escHtml(currentLead.business_name || '')}">
+        <input type="text" id="vid-business" required value="${escHtml(currentLead.business_name || '')}">
       </div>
       <div class="expense-field-row">
         <label>Notes (shown under the video)</label>
@@ -5911,11 +5911,12 @@ async function startVideoUpload() {
   const video = document.getElementById('vid-file-video').files[0];
   const pdf = document.getElementById('vid-file-pdf').files[0];
   const poster = document.getElementById('vid-file-poster').files[0];
-  const business = document.getElementById('vid-business').value.trim() || currentLead.business_name || 'Untitled';
+  const business = document.getElementById('vid-business').value.trim();
   const notes = document.getElementById('vid-notes').value;
   const statusEl = document.getElementById('vid-upload-status');
   const progressWrap = document.getElementById('vid-upload-progress');
   const progressBar = document.getElementById('vid-progress-bar');
+  if (!business) { statusEl.textContent = 'Add a business name before publishing.'; return; }
   if (!video) { statusEl.textContent = 'A video file is required.'; return; }
   const rowId = (crypto.randomUUID ? crypto.randomUUID() : 'vid-' + Date.now() + '-' + Math.random().toString(36).slice(2));
   const files = { video: 'video/mp4' };
@@ -5979,10 +5980,10 @@ async function openVideoDetail(id) {
   document.getElementById('vid-copy-link2')?.addEventListener('click', () => { navigator.clipboard.writeText(v.url); toast('Link copied'); });
   document.getElementById('vid-delete-btn')?.addEventListener('click', () => deleteVideo(v.id));
   document.getElementById('vid-retry-delete-btn')?.addEventListener('click', () => deleteVideo(v.id));
-  if (!v.slug) { document.getElementById('vid-events-list').innerHTML = '<div style="color:#666;font-size:13px;">Not published yet — no activity to show.</div>'; return; }
+  if (!v.slug) { document.getElementById('vid-events-list').innerHTML = '<div style="color:#666;font-size:13px;">Not published yet, so there is no activity to show.</div>'; return; }
   videoEventsPage = 1;
   await loadVideoEvents(v, true);
-  // Refresh at most once a minute while this video stays open — never polled per-lead.
+  // Refresh at most once a minute while this video stays open - never polled per-lead.
   videoEventsTimer = setInterval(() => { if (openVideoId === v.id) loadVideoEvents(v, true); }, 60000);
 }
 
@@ -6023,7 +6024,7 @@ async function deleteVideo(id) {
     openVideoId = null;
     await renderCrmVideoSub();
   } catch (e) {
-    toast('Could not delete — Retry delete');
+    toast('Could not delete - Retry delete');
     await renderCrmVideoSub(); // row now shows delete_pending with a Retry delete button
   }
 }
