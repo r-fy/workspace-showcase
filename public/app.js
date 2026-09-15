@@ -5197,6 +5197,7 @@ function showCrmSub(sub) {
 }
 
 function switchCrmSub(sub, preferId) {
+  if (crmSubTab === 'video' && sub !== 'video') stopVideoEventsPoll();
   // Never tear down the video sub-tab's DOM mid-upload (spec requirement) -
   // switching away and back while an upload is in flight just leaves it be.
   if (crmSubTab === 'video' && videoUploadInFlight && sub !== 'video') { crmSubTab = sub; updateCrmHeader(); showCrmSub(sub); return; }
@@ -5769,7 +5770,6 @@ let openVideoId = null;
 let videoEvents = [];
 let videoEventsPage = 1;
 let videoEventsHasMore = false;
-let videoEventsLastFetch = 0;
 let videoEventsTimer = null;
 
 const VIDEO_EVENT_LABELS = {
@@ -5989,9 +5989,6 @@ async function openVideoDetail(id) {
 
 async function loadVideoEvents(v, reset) {
   if (reset) { videoEvents = []; videoEventsPage = 1; }
-  const now = Date.now();
-  if (!reset && now - videoEventsLastFetch < 60000) return; // client-side floor to match the "at most once a minute" rule
-  videoEventsLastFetch = now;
   try {
     const data = await apiCall('GET', `/leads/${currentLead.id}/videos/${v.id}/events?page=${videoEventsPage}`);
     if (reset) videoEvents = data.events || []; else videoEvents = videoEvents.concat(data.events || []);
