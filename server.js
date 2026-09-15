@@ -1304,6 +1304,8 @@ app.get('/api/leads/:id/videos/:vid/events', auth, async (req, res) => {
   }
   if (!wRes.ok) return res.status(502).json({ error: 'Could not load events' });
   const data = await wRes.json();
+  // The Worker speaks Unix seconds for created_at, the rest of this app speaks milliseconds. Convert here, once.
+  if (Array.isArray(data.events)) data.events = data.events.map(e => ({ ...e, created_at: e.created_at * 1000 }));
   res.json(data);
 });
 
