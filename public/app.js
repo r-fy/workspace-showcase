@@ -5922,11 +5922,12 @@ async function startVideoUpload() {
   const files = { video: 'video/mp4' };
   if (pdf) files.pdf = 'application/pdf';
   if (poster) files.poster = 'image/jpeg';
+  const uploadLeadId = currentLead.id;
   videoUploadInFlight = true;
   document.getElementById('vid-upload-btn').disabled = true;
   statusEl.textContent = 'Getting upload link…';
   try {
-    const { uploadUrls } = await apiCall('POST', `/leads/${currentLead.id}/videos/upload-url`, { id: rowId, business, notes, files });
+    const { uploadUrls } = await apiCall('POST', `/leads/${uploadLeadId}/videos/upload-url`, { id: rowId, business, notes, files });
     progressWrap.classList.remove('hidden');
     const parts = [['video', video, 'video/mp4'], ...(pdf ? [['pdf', pdf, 'application/pdf']] : []), ...(poster ? [['poster', poster, 'image/jpeg']] : [])];
     let doneWeight = 0;
@@ -5939,7 +5940,7 @@ async function startVideoUpload() {
       progressBar.style.width = Math.round((doneWeight / parts.length) * 100) + '%';
     }
     statusEl.textContent = 'Creating share link…';
-    const pub = await apiCall('POST', `/leads/${currentLead.id}/videos`, { id: rowId, business, notes });
+    const pub = await apiCall('POST', `/leads/${uploadLeadId}/videos`, { id: rowId, business, notes });
     statusEl.innerHTML = `Link ready: <a href="${escHtml(pub.url)}" target="_blank" rel="noopener">${escHtml(pub.url)}</a> <button class="audit-add-btn" id="vid-copy-link">Copy</button>`;
     document.getElementById('vid-copy-link')?.addEventListener('click', () => { navigator.clipboard.writeText(pub.url); toast('Link copied'); });
     videoUploadInFlight = false;
@@ -5984,7 +5985,7 @@ async function openVideoDetail(id) {
   videoEventsPage = 1;
   await loadVideoEvents(v, true);
   // Refresh at most once a minute while this video stays open - never polled per-lead.
-  videoEventsTimer = setInterval(() => { if (openVideoId === v.id) loadVideoEvents(v, true); }, 60000);
+  videoEventsTimer = setInterval(() => { if (openVideoId === v.id && videoEventsPage <= 1) loadVideoEvents(v, true); }, 60000);
 }
 
 async function loadVideoEvents(v, reset) {
