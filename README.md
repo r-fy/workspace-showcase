@@ -2,6 +2,10 @@
 
 A self-built productivity and CRM platform — a Progressive Web App (PWA) combining notes, project management, expense tracking, calendaring, and a client relationship management (CRM) system with an integrated cold-calling dialer. Built and run as a live production application for daily business use, not a demo or portfolio sample.
 
+## Demo
+
+[Watch a video tour](demo/tour.mp4)
+
 ## What it does
 
 **Notes** — A live-preview markdown editor built on CodeMirror 6, with full-text search, tagging, inline colored text, interactive tally counters for habit tracking, and an auto-generated outline/table-of-contents panel.
