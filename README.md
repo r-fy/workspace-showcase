@@ -4,9 +4,7 @@ A self-built productivity and CRM platform — a Progressive Web App (PWA) combi
 
 ## Demo
 
-![Workspace demo](demo/tour.gif)
-
-[Full video walkthrough (download)](demo/tour.mp4)
+https://github.com/user-attachments/assets/ddc850a5-fa44-406e-8433-43cefe23b098
 
 ## What it does
 
