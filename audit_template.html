@@ -34,13 +34,18 @@
   .callout { background: {{color_callout_bg}}; border-left: 4px solid {{color_callout_border}}; padding: 14px 18px; border-radius: 4px; font-size: 15px; margin-top: 8px; white-space: pre-wrap; }
   .cta { margin-top: 36px; padding: 20px; background: {{color_accent}}; color: #fff; border-radius: 6px; font-size: 15px; text-align: center; white-space: pre-wrap; }
   .cta .fillin { color: #ffe4b3; background: rgba(255,255,255,0.12); }
+  .booking-cta { text-align: center; margin-top: 16px; }
+  .booking-btn {
+    display: inline-block; padding: 12px 28px; background: {{color_accent}}; color: #fff;
+    text-decoration: none; font-weight: 600; font-size: 15px; border-radius: 6px;
+  }
   .gsc-note { font-size: 14px; color: #5a6472; margin-top: 4px; }
   .heatmap-block { margin-bottom: 20px; }
   .heatmap-block img { width: 100%; border-radius: 6px; border: 1px solid #eee; display: block; }
   .heatmap-caption { font-size: 13px; color: #5a6472; margin-top: 6px; }
   .heatmap-caption a { color: {{color_accent}}; }
   .footer { margin-top: 32px; font-size: 12px; color: #9aa4af; text-align: center; }
-  tr, .heatmap-block, .hook, .callout, .cta, .gsc-note {
+  tr, .heatmap-block, .hook, .callout, .cta, .gsc-note, .booking-cta {
     break-inside: avoid; page-break-inside: avoid;
   }
   @media print {
@@ -90,6 +95,8 @@
     {{gsc_section}}
 
     <div class="cta">{{closing_cta}}</div>
+
+    {{booking_section}}
 
     <p class="footer">Prepared for {{business_name}} &middot; {{date}}</p>
   </div>

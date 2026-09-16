@@ -57,6 +57,15 @@ function renderEditBar(blocked) {
   </div>`;
 }
 
+// Hidden entirely (not just an empty box) when booking_url is blank or filtered out,
+// same rule the heatmap/gsc sections already follow.
+function renderBooking(CONFIG) {
+  const url = safeUrl(CONFIG.booking_url);
+  if (!url) return '';
+  const label = escape(CONFIG.booking_label || 'Book a call');
+  return `<div class="booking-cta"><a class="booking-btn" href="${escape(url)}" target="_blank" rel="noopener">${label}</a></div>`;
+}
+
 function todayStr() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 }
@@ -123,6 +132,7 @@ function renderAuditHtml(data) {
     gsc_section: renderGsc(data.gsc),
     heatmap_section: renderHeatmaps(data.heatmaps, CONFIG),
     closing_cta: highlightFillins(escape(narrative.closing_cta || CONFIG.default_closing_cta)),
+    booking_section: renderBooking(CONFIG),
     edit_bar: renderEditBar(hasUnresolvedFillins(data)),
     report_type_label: CONFIG.report_type_label || 'Local SEO Audit',
     section_1_title: CONFIG.section_1_title,
