@@ -14,3 +14,9 @@ opus5*.md
 # Bank statement exports — never commit transaction history
 *.csv
 *.CSV
+
+# Internal-only docs — kept locally, purged from public repo history
+/CLAUDE.md
+/BUILD-SPEC-mcp-server.md
+/SAAS_NOTES.md
+/scripts/pull-workspace-backups.sh
